@@ -1205,6 +1205,12 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.listen(PORT, () => {
-    console.log(`\n🚀 ResearchIQ running at http://localhost:${PORT}\n`);
-});
+if (require.main === module) {
+    // Standalone: node researchiq/server.js
+    app.listen(PORT, () => {
+        console.log(`\n🚀 ResearchIQ running at http://localhost:${PORT}\n`);
+    });
+} else {
+    // Embedded: required by root server.js — export the app
+    module.exports = app;
+}

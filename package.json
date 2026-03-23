@@ -1,12 +1,22 @@
 {
   "name": "workflowiq",
   "version": "1.0.0",
-  "description": "WorkFlowIQ monorepo — AccountingIQ + ResearchIQ",
+  "description": "WorkFlowIQ — AccountingIQ + ResearchIQ, single-server",
   "scripts": {
-    "build": "npm install --prefix accountingiq && npm run build --prefix accountingiq && npm install --prefix researchiq",
-    "start": "node start.js"
+    "build": "npm install --prefix accountingiq && npm run build --prefix accountingiq",
+    "start": "node server.js",
+    "dev": "NODE_ENV=development node server.js"
   },
   "dependencies": {
-    "concurrently": "^9.0.0"
+    "@supabase/supabase-js": "^2.99.3",
+    "axios": "^1.7.0",
+    "cors": "^2.8.6",
+    "dotenv": "^16.4.0",
+    "express": "^5.2.1",
+    "next": "16.2.1",
+    "node-machine-id": "^1.1.12",
+    "openai": "^6.22.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
   }
 }
