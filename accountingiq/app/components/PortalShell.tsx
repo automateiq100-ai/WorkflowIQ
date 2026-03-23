@@ -175,7 +175,7 @@ export default function PortalShell({
         <div className="flex gap-6 flex-wrap justify-center w-full max-w-2xl">
           {/* AccountingIQ card */}
           <button
-            onClick={() => router.push('/')}
+            onClick={() => router.push('/accountingiq')}
             className="flex-1 min-w-64 rounded-2xl border p-8 text-left transition-all group"
             style={{ background: 'var(--bg2)', borderColor: 'var(--border)', minWidth: 260 }}
             onMouseEnter={e => {
