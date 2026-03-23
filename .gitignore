@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Environment variables — NEVER commit secrets
+.env
+.env.local
+.env.*.local
+**/.env
+**/.env.local
+**/.env.*.local
+
+# Next.js build output
+.next/
+**/.next/
+out/
+
+# Node/Express
+cache/
+**/cache/
+session.json
+**/session.json
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Large sample data files (>100 MB — GitHub limit)
+accountingiq/Sample data/Real data/DayBook-001.xml

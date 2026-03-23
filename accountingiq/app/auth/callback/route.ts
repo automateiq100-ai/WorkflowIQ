@@ -1,0 +1,64 @@
+import { createServerClient } from '@supabase/ssr';
+import { createClient } from '@supabase/supabase-js';
+import { cookies } from 'next/headers';
+import { NextRequest, NextResponse } from 'next/server';
+
+export async function GET(request: NextRequest) {
+  const { searchParams, origin } = new URL(request.url);
+  const code = searchParams.get('code');
+  const token_hash = searchParams.get('token_hash');
+  const type = searchParams.get('type') as 'email' | 'recovery' | null;
+  const next = searchParams.get('next') ?? '/portal';
+
+  const cookieStore = await cookies();
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        getAll() { return cookieStore.getAll(); },
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value, options }) =>
+            cookieStore.set(name, value, options),
+          );
+        },
+      },
+    },
+  );
+
+  let user = null;
+  let error = null;
+
+  if (code) {
+    const result = await supabase.auth.exchangeCodeForSession(code);
+    user = result.data.user;
+    error = result.error;
+  } else if (token_hash && type) {
+    const result = await supabase.auth.verifyOtp({ token_hash, type });
+    user = result.data.user;
+    error = result.error;
+  }
+
+  if (!error && user) {
+    const admin = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    );
+    // Upsert user profile
+    await admin.from('user_profiles').upsert({
+      id: user.id,
+      email: user.email,
+      full_name: user.user_metadata?.full_name ?? null,
+      avatar_url: user.user_metadata?.avatar_url ?? null,
+      last_seen: new Date().toISOString(),
+    }, { onConflict: 'id' });
+    await admin.rpc('increment_login_count', { user_id: user.id });
+    // Create session record
+    await admin.from('login_sessions').insert({
+      user_id: user.id,
+      app: 'accountingiq',
+    });
+  }
+
+  return NextResponse.redirect(new URL(next, origin));
+}

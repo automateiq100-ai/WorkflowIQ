@@ -1,0 +1,2534 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ResearchIQ</title>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Outfit:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+    <style>
+        :root {
+            --bg:     #0e0f11;
+            --bg2:    #141518;
+            --bg3:    #1c1e22;
+            --bg4:    #252830;
+            --border: #2a2d35;
+            --text1:  #f0f1f3;
+            --text2:  #9aa0ad;
+            --text3:  #5c6370;
+            --teal:   #0fd4a0;
+            --amber:  #f5a623;
+            --red:    #f04848;
+            --blue:   #4a9eff;
+            --green:  #4caf79;
+            --radius: 12px;
+            --radius-lg: 16px;
+            --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+            /* Legacy aliases so existing styles keep working */
+            --bg-primary:    var(--bg);
+            --bg-secondary:  var(--bg2);
+            --bg-card:       var(--bg3);
+            --bg-card-hover: var(--bg4);
+            --bg-input:      var(--bg2);
+            --border-active: var(--teal);
+            --text-primary:  var(--text1);
+            --text-secondary: var(--text2);
+            --text-muted:    var(--text3);
+            --accent:        var(--teal);
+            --accent-glow:   rgba(15, 212, 160, 0.25);
+            --accent-gradient: linear-gradient(135deg, #0fd4a0 0%, #4a9eff 100%);
+            --success: var(--green);
+            --warning: var(--amber);
+            --danger:  var(--red);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Outfit', system-ui, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+
+        /* ─── Header ─── */
+        .header {
+            padding: 20px 40px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            background: var(--bg-secondary);
+        }
+
+        .brand-icon {
+            width: 40px;
+            height: 40px;
+            background: var(--accent-gradient);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            box-shadow: 0 4px 16px var(--accent-glow);
+        }
+
+        .brand h1 {
+            font-size: 20px;
+            font-family: 'DM Serif Display', serif;
+            font-weight: 400;
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .brand-sub {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+        }
+
+        .header-right {
+            margin-left: auto;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .model-selector {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 6px 12px;
+        }
+
+        .model-selector label {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            white-space: nowrap;
+        }
+
+        .model-selector select {
+            background: var(--bg-input);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 5px 10px;
+            font-size: 13px;
+            font-family: 'Inter', sans-serif;
+            cursor: pointer;
+            outline: none;
+        }
+
+        .model-selector select:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px var(--accent-glow);
+        }
+
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: var(--text-secondary);
+            padding: 6px 14px;
+            border-radius: 20px;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--border);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--success);
+        }
+
+        /* ─── Container ─── */
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        /* ─── Step Header ─── */
+        .step-header {
+            padding: 40px 0 24px;
+        }
+
+        .step-header h2 {
+            font-size: 22px;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+
+        .step-header p {
+            color: var(--text-secondary);
+            font-size: 14px;
+            margin-bottom: 0;
+        }
+
+        /* ─── Step Indicator ─── */
+        .step-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0;
+            margin-bottom: 32px;
+        }
+
+        .step-dot {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+
+        .step-dot .dot {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            border: 2px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 700;
+            transition: all 0.3s;
+        }
+
+        .step-dot.active .dot {
+            background: var(--accent-gradient);
+            border-color: transparent;
+            color: white;
+            box-shadow: 0 0 12px var(--accent-glow);
+        }
+
+        .step-dot.done .dot {
+            background: var(--success);
+            border-color: transparent;
+            color: white;
+        }
+
+        .step-dot.active {
+            color: var(--accent);
+        }
+
+        .step-dot.done {
+            color: var(--success);
+        }
+
+        .step-line {
+            flex: 1;
+            height: 2px;
+            background: var(--border);
+            margin: 0 12px;
+            transition: background 0.3s;
+        }
+
+        .step-line.done {
+            background: var(--success);
+        }
+
+        /* ─── Input Group ─── */
+        .input-group label {
+            display: block;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+
+        .input-group input,
+        .input-group textarea,
+        .input-group select {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1px solid var(--border);
+            background: var(--bg-input);
+            color: var(--text-primary);
+            border-radius: var(--radius);
+            font-size: 14px;
+            font-family: inherit;
+            transition: all 0.2s;
+        }
+
+        .input-group textarea {
+            resize: vertical;
+            min-height: 110px;
+            line-height: 1.6;
+        }
+
+        .input-group input:focus,
+        .input-group textarea:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+
+        /* ─── Keyword Chips ─── */
+        .keyword-chips-wrapper {
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 10px 12px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+            min-height: 54px;
+            transition: border-color 0.2s;
+            cursor: text;
+        }
+
+        .keyword-chips-wrapper:focus-within {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+
+        .keyword-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 10px 5px 12px;
+            background: rgba(79, 110, 247, 0.15);
+            border: 1px solid rgba(79, 110, 247, 0.35);
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 500;
+            color: #a0b4ff;
+            animation: fadeInUp 0.2s ease;
+        }
+
+        .keyword-chip .chip-remove {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(79, 110, 247, 0.3);
+            cursor: pointer;
+            font-size: 12px;
+            line-height: 1;
+            transition: background 0.15s;
+        }
+
+        .keyword-chip .chip-remove:hover {
+            background: var(--danger);
+            color: white;
+        }
+
+
+        .keyword-chip-input {
+            border: none;
+            background: transparent;
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 13px;
+            outline: none;
+            flex: 1;
+            min-width: 120px;
+            padding: 3px 0;
+        }
+
+        .chip-hint {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 6px;
+        }
+
+        /* ─── Keyword Loading state ─── */
+        .keyword-loading {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 16px;
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
+
+        /* ─── Filters Section ─── */
+        .question-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 20px;
+            margin-bottom: 16px;
+            animation: fadeInUp 0.3s ease;
+        }
+
+        .question-card .q-text {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 14px;
+            line-height: 1.4;
+        }
+
+        .q-options {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .q-option {
+            position: relative;
+        }
+
+        .q-option input[type="checkbox"] {
+            position: absolute;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .q-option label {
+            display: inline-block;
+            padding: 8px 16px;
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: var(--text-secondary);
+            background: var(--bg-input);
+        }
+
+        .q-option label:hover {
+            border-color: var(--accent);
+            color: var(--text-primary);
+        }
+
+        .q-option input[type="checkbox"]:checked+label {
+            border-color: var(--accent);
+            background: rgba(79, 110, 247, 0.15);
+            color: var(--accent);
+            font-weight: 600;
+        }
+
+        .filter-loading {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 0;
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
+
+        /* ─── Buttons ─── */
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: var(--radius);
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            font-family: inherit;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: var(--accent-gradient);
+            color: white;
+            box-shadow: 0 4px 12px var(--accent-glow);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 20px var(--accent-glow);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-secondary {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .btn-sm {
+            padding: 8px 14px;
+            font-size: 12px;
+        }
+
+        .action-row {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            margin-top: 24px;
+        }
+
+        /* ─── Progress ─── */
+        .progress-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 24px;
+            text-align: center;
+        }
+
+        .progress-bar-wrapper {
+            height: 6px;
+            background: var(--border);
+            border-radius: 3px;
+            margin: 16px 0;
+            overflow: hidden;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            background: var(--accent-gradient);
+            border-radius: 3px;
+            transition: width 0.5s ease;
+            width: 0%;
+        }
+
+        .progress-status {
+            font-size: 14px;
+            color: var(--text-secondary);
+            min-height: 20px;
+        }
+
+        .progress-step {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--text-muted);
+            padding: 4px 0;
+        }
+
+        .progress-step.active {
+            color: var(--accent);
+        }
+
+        .progress-step.done {
+            color: var(--success);
+        }
+
+        .progress-steps {
+            text-align: left;
+            margin-top: 16px;
+        }
+
+        /* ─── Results ─── */
+        .results-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+
+        .results-header h2 {
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        .results-count {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .recommendation-box {
+            background: linear-gradient(135deg, rgba(79, 110, 247, 0.08), rgba(168, 85, 247, 0.08));
+            border: 1px solid rgba(79, 110, 247, 0.25);
+            border-radius: var(--radius);
+            padding: 16px;
+            margin-bottom: 24px;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .recommendation-box .label {
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--accent);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 6px;
+        }
+
+        /* ─── Warning Box ─── */
+        .warning-box {
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            border-radius: var(--radius);
+            padding: 16px;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+        }
+
+        .warning-icon {
+            font-size: 24px;
+            color: var(--warning);
+            flex-shrink: 0;
+        }
+
+        .warning-content h4 {
+            margin: 0 0 8px 0;
+            color: var(--warning);
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .warning-content p {
+            margin: 0 0 12px 0;
+            color: var(--text-secondary);
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .ranking-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .ranking-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 18px;
+            display: grid;
+            grid-template-columns: 60px 1fr auto;
+            gap: 16px;
+            align-items: start;
+            transition: all 0.2s;
+        }
+
+        .ranking-card:hover {
+            border-color: var(--accent);
+            background: var(--bg-card-hover);
+        }
+
+        .score-circle {
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            font-weight: 800;
+            position: relative;
+        }
+
+        .score-circle::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: 50%;
+            border: 3px solid var(--border);
+        }
+
+        .score-circle.high {
+            color: var(--success);
+        }
+
+        .score-circle.high::before {
+            border-color: var(--success);
+        }
+
+        .score-circle.mid {
+            color: var(--warning);
+        }
+
+        .score-circle.mid::before {
+            border-color: var(--warning);
+        }
+
+        .score-circle.low {
+            color: var(--text-muted);
+        }
+
+        .score-circle.low::before {
+            border-color: var(--text-muted);
+        }
+
+        .ranking-info h3 {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 4px;
+            line-height: 1.4;
+        }
+
+        .ranking-meta {
+            display: flex;
+            gap: 12px;
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+        }
+
+        .ranking-meta span {
+            display: flex;
+            align-items: center;
+            gap: 3px;
+        }
+
+        .score-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+
+        .score-badge.high {
+            background: rgba(34, 197, 94, 0.15);
+            color: var(--success);
+            border: 1px solid rgba(34, 197, 94, 0.3);
+        }
+
+        .score-badge.mid {
+            background: rgba(245, 158, 11, 0.15);
+            color: var(--warning);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+        }
+
+        .score-badge.low {
+            background: rgba(90, 101, 128, 0.15);
+            color: var(--text-muted);
+            border: 1px solid rgba(90, 101, 128, 0.3);
+        }
+
+        .ranking-reason {
+            font-size: 13px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+            border-top: 1px solid var(--border);
+            padding-top: 8px;
+            margin-top: 4px;
+        }
+
+        .ranking-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            min-width: 90px;
+        }
+
+        .case-summary-content {
+            display: none;
+            grid-column: 1 / -1;
+            background: rgba(79, 110, 247, 0.05);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+            margin-top: 8px;
+            font-size: 13px;
+            line-height: 1.7;
+            color: var(--text-secondary);
+            white-space: pre-wrap;
+            animation: fadeInUp 0.2s ease;
+        }
+
+        .case-summary-content.open {
+            display: block;
+        }
+
+        .case-summary-content .summary-label {
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--accent);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+
+        /* ─── Chat ─── */
+        .chat-section {
+            padding: 0 0 40px;
+        }
+
+        .chat-section h3 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+
+        .chat-messages {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 20px;
+            max-height: 400px;
+            overflow-y: auto;
+            margin-bottom: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .msg {
+            max-width: 80%;
+            animation: fadeInUp 0.3s ease;
+        }
+
+        .msg.user {
+            align-self: flex-end;
+        }
+
+        .msg.ai {
+            align-self: flex-start;
+        }
+
+        .msg-bubble {
+            padding: 12px 16px;
+            border-radius: 14px;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .msg.user .msg-bubble {
+            background: linear-gradient(135deg, #1e3a5f, #1a3360);
+            border: 1px solid #2d4a7a;
+            border-bottom-right-radius: 4px;
+        }
+
+        .msg.ai .msg-bubble {
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-bottom-left-radius: 4px;
+        }
+
+        .msg-label {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .chat-input-row {
+            display: flex;
+            gap: 10px;
+        }
+
+        .chat-input-row input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 1px solid var(--border);
+            background: var(--bg-input);
+            color: var(--text-primary);
+            border-radius: var(--radius);
+            font-size: 14px;
+            font-family: inherit;
+        }
+
+        .chat-input-row input:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+
+        .send-btn {
+            width: 44px;
+            height: 44px;
+            border: none;
+            background: var(--accent-gradient);
+            color: white;
+            border-radius: var(--radius);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 12px var(--accent-glow);
+        }
+
+        .send-btn:hover {
+            transform: translateY(-1px);
+        }
+
+        .send-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* ─── Modal ─── */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(4px);
+            z-index: 100;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-overlay.open {
+            display: flex;
+        }
+
+        .modal {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            width: 90%;
+            max-width: 900px;
+            max-height: 85vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .modal-header {
+            padding: 16px 24px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-header h3 {
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 24px;
+            display: flex;
+        }
+
+        .modal-close:hover {
+            color: var(--text-primary);
+        }
+
+        .modal-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px;
+        }
+
+        .case-preview-content {
+            font-family: 'Times New Roman', serif;
+            font-size: 14px;
+            line-height: 1.8;
+        }
+
+        /* ─── Misc ─── */
+        .section {
+            display: none;
+            padding-bottom: 40px;
+        }
+
+        .section.visible {
+            display: block;
+        }
+
+        .spinner {
+            width: 18px;
+            height: 18px;
+            border: 2px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            display: inline-block;
+            flex-shrink: 0;
+        }
+
+        .input-row-2col {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(8px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        .pulsing {
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 3px;
+        }
+
+        /* ── TOAST NOTIFICATION ── */
+        .toast-container {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .toast {
+            background: linear-gradient(135deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.95));
+            border: 1px solid var(--border);
+            border-left: 4px solid var(--primary);
+            border-radius: 8px;
+            padding: 16px;
+            color: var(--text);
+            width: 320px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+            transform: translateX(120%);
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            backdrop-filter: blur(8px);
+            font-size: 0.9em;
+        }
+
+        .toast.show {
+            transform: translateX(0);
+        }
+
+        .toast-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .toast-title {
+            font-weight: 600;
+            color: white;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .toast-score {
+            background: rgba(139, 92, 246, 0.2);
+            color: var(--primary-light);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.85em;
+            font-weight: 600;
+        }
+
+        .toast-body {
+            color: var(--text-muted);
+            line-height: 1.4;
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+</head>
+
+<body>
+    <!-- Header -->
+    <!-- ── Auth Overlay ── -->
+    <div id="auth-overlay" style="display:none; position:fixed; inset:0; z-index:1000;
+         background:var(--bg); align-items:center; justify-content:center;">
+        <div style="max-width:360px; width:100%; margin:0 16px; border-radius:16px;
+             border:1px solid var(--border); background:var(--bg2); padding:36px;">
+            <div style="text-align:center; margin-bottom:24px;">
+                <div style="font-family:'DM Serif Display',serif; font-size:22px;
+                     color:var(--text1); margin-bottom:4px;">ResearchIQ</div>
+                <div style="font-size:12px; color:var(--text3);">AI-Powered Legal Research</div>
+            </div>
+            <p style="font-size:13px; color:var(--text2); text-align:center; margin-bottom:20px;">
+                Sign in to access the research dashboard
+            </p>
+            <button id="google-signin-btn" style="width:100%; display:flex; align-items:center;
+                justify-content:center; gap:10px; padding:11px; border-radius:10px;
+                background:var(--bg4); border:1px solid var(--border); color:var(--text1);
+                font-family:'Outfit',sans-serif; font-size:13px; font-weight:600;
+                cursor:pointer; transition:opacity .2s;"
+                onmouseover="this.style.opacity='.8'" onmouseout="this.style.opacity='1'">
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+                    <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4"/>
+                    <path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z" fill="#34A853"/>
+                    <path d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z" fill="#FBBC05"/>
+                    <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335"/>
+                </svg>
+                Sign in with Google
+            </button>
+        </div>
+    </div>
+
+    <div class="header">
+        <div class="brand-icon">⚡</div>
+        <div>
+            <div class="brand">
+                <h1>ResearchIQ</h1>
+            </div>
+            <div class="brand-sub">AI-Powered Legal Research</div>
+        </div>
+        <div class="header-right">
+            <div class="model-selector">
+                <label>Model</label>
+                <select id="modelSelect">
+                    <option value="gpt-4o">GPT-4o</option>
+                    <option value="gpt-4o-mini" selected>GPT-4o Mini</option>
+                    <option value="gpt-4-turbo">GPT-4 Turbo</option>
+                    <option value="o1-mini">o1-mini</option>
+                    <option value="o3-mini">o3-mini</option>
+                </select>
+            </div>
+            <div class="status-badge">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">Ready</span>
+            </div>
+            <div id="user-info" style="display:none; align-items:center; gap:8px; margin-left:8px;">
+                <img id="user-avatar" width="28" height="28"
+                     style="border-radius:50%; object-fit:cover; display:none;" src="" alt="">
+                <span id="user-name" style="font-size:12px; color:var(--text2);"></span>
+                <button id="sign-out-btn" style="font-size:11px; color:var(--text3); background:none;
+                    border:none; cursor:pointer; padding:4px 8px; border-radius:6px;
+                    font-family:'Outfit',sans-serif; transition:color .2s;"
+                    onmouseover="this.style.color='var(--red)'"
+                    onmouseout="this.style.color='var(--text3)'">
+                    Sign out
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+
+        <!-- ── Step Indicator ── -->
+        <div style="padding-top:28px" id="stepIndicatorWrap">
+            <div class="step-indicator">
+                <div class="step-dot active" id="si-1">
+                    <div class="dot">1</div>
+                    <span>Research</span>
+                </div>
+                <div class="step-line" id="sl-1"></div>
+                <div class="step-dot" id="si-2">
+                    <div class="dot">2</div>
+                    <span>Results</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ══ STEP 1: Narrative Input ══ -->
+        <div class="section visible" id="s-narrative">
+            <div class="step-header">
+                <h2>📝 Describe Your Research</h2>
+                <p>Write your legal argument or research objective in plain language. The AI will generate search
+                    keywords automatically.</p>
+            </div>
+
+            <div style="margin-bottom:16px">
+                <div class="input-group">
+                    <label>Research Narrative</label>
+                    <textarea id="narrative" rows="5"
+                        placeholder="e.g. The taxpayer is entitled to interest on the refund of pre-deposit paid during GST appeal where the appellate authority decided in favour of the taxpayer. The department is disputing the payment of such interest claiming it is not mandated under the CGST Act."></textarea>
+                </div>
+            </div>
+
+            <div class="input-row-2col" style="grid-template-columns: 1fr 1fr;">
+                <div class="input-group">
+                    <label style="display: flex; justify-content: space-between; align-items: center;">
+                        <span>Cases to Analyze</span>
+                        <span id="caseCountVal" style="color: var(--primary-light); font-weight: 600;">200 cases</span>
+                    </label>
+                    <input type="range" id="caseCount" min="50" max="5000" step="50" value="200"
+                        oninput="document.getElementById('caseCountVal').textContent = this.value + ' cases'"
+                        style="width: 100%; margin-top: 8px; accent-color: var(--primary);">
+                    <div style="display:flex;justify-content:space-between;font-size:0.78em;color:var(--text-muted);margin-top:4px;">
+                        <span>50</span><span>5,000</span>
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label style="display: flex; justify-content: space-between; align-items: center;">
+                        <span>Early Result Flash Threshold</span>
+                        <span id="thresholdVal" style="color: var(--primary-light); font-weight: 600;">70</span>
+                    </label>
+                    <input type="range" id="relevancyThreshold" min="50" max="100" value="70"
+                        oninput="document.getElementById('thresholdVal').textContent = this.value"
+                        style="width: 100%; margin-top: 8px; accent-color: var(--primary);">
+                    <div style="font-size: 0.8em; color: var(--text-muted); margin-top: 6px;">
+                        Notifies you instantly when a case scores above this during analysis.
+                    </div>
+                </div>
+            </div>
+
+            <div class="action-row" style="margin-top:24px">
+                <button class="btn btn-primary" id="generateKwBtn" onclick="startKeywordGeneration()">
+                    <span class="material-icons-round" style="font-size:18px">auto_awesome</span>
+                    Generate Keywords &rarr;
+                </button>
+                <button class="btn btn-secondary btn-sm" onclick="openPromptEditor()"
+                    title="View or edit the AI scoring prompt" style="margin-left:auto">
+                    <span class="material-icons-round" style="font-size:15px">tune</span>
+                    Scoring Prompt
+                </button>
+            </div>
+        </div>
+
+        <!-- ══ STEP 2: Keywords & Filters (merged) ══ -->
+        <div class="section" id="s-keywords-filters" style="display:none">
+            <div class="step-header" style="margin-top:12px;padding-top:20px;border-top:1px solid var(--border);">
+                <h2>🔍 Keywords &amp; Filters</h2>
+            </div>
+
+            <!-- Section A: OR Keywords -->
+            <div class="input-group" style="margin-bottom:4px">
+                <label>
+                    <span style="background:rgba(79,110,247,0.18);color:#7c9ef7;border:1px solid rgba(79,110,247,0.3);font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;letter-spacing:.4px;margin-right:6px;">OR</span>
+                    Any of these keywords
+                    <span style="text-transform:none;font-weight:400;color:var(--text-muted);margin-left:4px;">— results match at least one</span>
+                </label>
+                <div class="keyword-chips-wrapper" id="chipsWrapper" onclick="document.getElementById('chipInput').focus()">
+                    <div class="keyword-loading" id="kwLoading">
+                        <div class="spinner"></div>
+                        <span>AI is generating keywords from your narrative…</span>
+                    </div>
+                    <input type="text" id="chipInput" class="keyword-chip-input" style="display:none"
+                        placeholder="Type a keyword and press Enter…" onkeydown="handleChipInput(event)">
+                </div>
+            </div>
+            <div class="chip-hint">💡 Press <kbd style="background:var(--bg-card);border:1px solid var(--border);padding:1px 5px;border-radius:4px;font-size:11px">Enter</kbd> to add · Click × to remove</div>
+
+            <!-- Suggested keywords row -->
+            <div id="suggestedKwRow" style="display:none;margin-top:10px;">
+                <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);margin-bottom:6px;">AI Suggestions — click to add</div>
+                <div id="suggestedKwChips" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+            </div>
+
+            <!-- AND Keywords box -->
+            <div class="input-group" style="margin-top:16px;margin-bottom:4px;">
+                <label>
+                    <span style="background:rgba(245,158,11,0.18);color:#f59e0b;border:1px solid rgba(245,158,11,0.35);font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;letter-spacing:.4px;margin-right:6px;">AND</span>
+                    Search each phrase separately
+                    <span style="text-transform:none;font-weight:400;color:var(--text-muted);margin-left:4px;">— results from each phrase are combined</span>
+                </label>
+                <div class="keyword-chips-wrapper" id="andChipsWrapper" onclick="document.getElementById('andChipInput').focus()" style="min-height:44px;">
+                    <input type="text" id="andChipInput" class="keyword-chip-input"
+                        placeholder="Type a required keyword and press Enter…" onkeydown="handleAndChipInput(event)">
+                </div>
+            </div>
+            <!-- Per-phrase count summary (shown below chips once preview loads) -->
+            <div id="andCountSummary" style="display:none;margin-top:8px;padding:10px 14px;background:var(--bg-card);border:1px solid var(--border);border-radius:8px;font-size:13px;"></div>
+            <div class="chip-hint" id="andChipHint">💡 Each phrase is searched independently — add multiple phrases to expand your results pool</div>
+            <!-- Info banner: shown when 2+ AND chips are active -->
+            <div id="andUnionBanner" style="display:none;margin-top:10px;padding:10px 14px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);border-radius:8px;font-size:13px;color:#f59e0b;line-height:1.5;"></div>
+
+            <!-- AND suggested keywords row -->
+            <div id="suggestedAndKwRow" style="display:none;margin-top:8px;">
+                <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#f59e0b;opacity:0.8;margin-bottom:6px;">AI Suggests (AND) — click to add</div>
+                <div id="suggestedAndKwChips" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+            </div>
+
+            <!-- Section B: Filters -->
+            <div style="margin-top:24px;">
+                <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);margin-bottom:12px;">Search Filters</div>
+                <div id="filterQuestions"></div>
+            </div>
+
+            <!-- Section C: Search count preview -->
+            <div id="searchPreviewBox" style="margin-top:20px;padding:14px 18px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);display:none;">
+                <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+                    <span class="material-icons-round" style="color:var(--primary-light);font-size:20px">search</span>
+                    <div id="searchPreviewText" style="flex:1;font-size:14px;color:var(--text-secondary);">Checking search results…</div>
+                    <div id="searchPreviewCount" style="font-size:22px;font-weight:800;color:var(--accent);min-width:80px;text-align:right;"></div>
+                </div>
+                <!-- Per-phrase breakdown (shown when 2+ AND phrases) -->
+                <div id="searchPreviewBreakdown" style="display:none;margin-top:10px;border-top:1px solid var(--border);padding-top:10px;font-size:13px;"></div>
+                <div id="searchPreviewWarning" style="display:none;margin-top:8px;font-size:13px;color:var(--warning);"></div>
+            </div>
+
+            <div class="action-row" style="margin-top:20px;">
+                <button class="btn btn-primary" id="analyzeBtn" onclick="proceedToAnalysis()" disabled>
+                    <span class="material-icons-round" style="font-size:18px">psychology</span>
+                    <span id="analyzeBtnLabel">Analyze Cases</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Toast container (fixed position, outside flow) -->
+        <div id="toastContainer" style="position:fixed;bottom:24px;right:24px;z-index:9999;display:flex;flex-direction:column;gap:10px;pointer-events:none;"></div>
+
+        <!-- ══ STEP 3: Progress ══ -->
+        <div class="section" id="s-progress">
+            <div class="progress-card" style="margin-top:32px">
+                <h3 style="margin-bottom:4px" id="progressTitle">Analyzing…</h3>
+                <div class="progress-status" id="progressStatus">Starting…</div>
+                <div class="progress-bar-wrapper">
+                    <div class="progress-bar-fill" id="progressBar"></div>
+                </div>
+                <div class="progress-steps" id="progressSteps"></div>
+            </div>
+
+            <!-- How it works info box -->
+            <div style="margin-top:24px;padding:16px 20px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);font-size:13px;color:var(--text-secondary);line-height:1.7;">
+                <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);margin-bottom:10px;">How the analysis works</div>
+                <div style="display:flex;flex-direction:column;gap:8px;">
+                    <div><strong style="color:var(--primary-light)">① Search</strong> — Fetches up to N case headnotes (short summaries) matching your keywords. These come free with every search result — no extra downloading.</div>
+                    <div><strong style="color:var(--primary-light)">② Pre-screen</strong> — All N headnotes are sent to the AI in a single call. It reads them all at once and picks the ~20 most relevant case IDs. Fast: one LLM call regardless of pool size.</div>
+                    <div><strong style="color:var(--primary-light)">③ Deep score</strong> — Only for those ~20 cases: the full case text is fetched (from cache if available, otherwise downloaded), then scored 0–100 across: legal issue match, factual similarity, statutory overlap, and citeability. 5 cases run in parallel.</div>
+                    <div><strong style="color:var(--primary-light)">④ Synthesis</strong> — The AI writes an executive memo based on the top 5 highest-scored cases.</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ══ STEP 4: Results ══ -->
+        <div class="section" id="s-results">
+            <div class="results-header" style="margin-top:32px">
+                <h2>📊 Relevancy Rankings</h2>
+                <span class="results-count" id="resultsCount"></span>
+            </div>
+            <!-- Score Filter Bar -->
+            <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:14px 18px;margin-bottom:20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+                <span style="font-size:12px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap;">Min Score</span>
+                <input type="range" id="scoreFilter" min="0" max="100" value="0"
+                    oninput="applyScoreFilter(this.value)"
+                    style="flex:1;min-width:140px;accent-color:var(--accent);cursor:pointer;">
+                <span id="scoreFilterLabel" style="min-width:52px;text-align:right;font-size:20px;font-weight:800;color:var(--accent);">0+</span>
+            </div>
+            <div id="recommendationBox"></div>
+            <div class="ranking-grid" id="rankingGrid"></div>
+
+            <div id="expandSection" style="display:none;margin-top:20px;text-align:center;">
+                <div id="expandStatus" style="margin-bottom:12px;font-size:14px;color:var(--text-secondary);"></div>
+                <button class="btn btn-primary" id="expandBtn" onclick="expandSearch()">
+                    <span class="material-icons-round" style="font-size:16px">expand_more</span>
+                    Expand Search (+500 cases)
+                </button>
+            </div>
+
+            <div style="margin-top:32px; text-align:center">
+                <button class="btn btn-secondary" onclick="newSearch()">
+                    <span class="material-icons-round" style="font-size:16px">restart_alt</span>
+                    New Research
+                </button>
+            </div>
+        </div>
+
+        <!-- ══ Chat Follow-up ══ -->
+        <div class="section" id="s-chat">
+            <h3>💬 Follow-up Questions</h3>
+            <div class="chat-messages" id="chatMessages"></div>
+            <div class="chat-input-row">
+                <input type="text" id="chatInput" placeholder="Ask a follow-up question…"
+                    onkeydown="if(event.key==='Enter')sendFollowup()" />
+                <button class="send-btn" id="sendBtn" onclick="sendFollowup()">
+                    <span class="material-icons-round">send</span>
+                </button>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Preview Modal -->
+    <div class="modal-overlay" id="previewModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="previewTitle">Case Preview</h3>
+                <button class="modal-close" onclick="document.getElementById('previewModal').classList.remove('open')">
+                    <span class="material-icons-round">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="case-preview-content" id="previewContent">Loading…</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Prompt Editor Modal -->
+    <div class="modal-overlay" id="promptModal">
+        <div class="modal" style="max-width:720px">
+            <div class="modal-header">
+                <h3>⚖️ Relevancy Scoring Prompt</h3>
+                <button class="modal-close" onclick="document.getElementById('promptModal').classList.remove('open')">
+                    <span class="material-icons-round">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p style="font-size:13px;color:var(--text-secondary);margin-bottom:14px;line-height:1.5">
+                    This is the system prompt used by the AI to evaluate and score how well each case matches your
+                    research narrative.
+                    Edit it to adjust scoring behaviour, tone, or criteria. Changes apply to the next analysis run.
+                </p>
+                <div class="input-group">
+                    <label>System Prompt</label>
+                    <textarea id="promptEditorArea" rows="18"
+                        style="font-family:monospace;font-size:12px;line-height:1.6;min-height:340px"></textarea>
+                </div>
+                <div style="display:flex;gap:10px;margin-top:16px">
+                    <button class="btn btn-primary" onclick="savePrompt()">
+                        <span class="material-icons-round" style="font-size:16px">check</span> Save &amp; Close
+                    </button>
+                    <button class="btn btn-secondary" onclick="resetPrompt()">
+                        <span class="material-icons-round" style="font-size:16px">restart_alt</span> Reset to Default
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API = '';
+
+        // ── Default relevancy scoring system prompt ──
+        const DEFAULT_RELEVANCY_PROMPT = `You are acting as an impartial constitutional court evaluating whether a precedent meaningfully supports a legal argument. You must be neutral, analytical, and independent. Do not favour the narrative. Assess legal alignment objectively.
+
+You will receive a Research Narrative and multiple Case Summaries. For EACH case, perform the following analysis:
+- Compare the legal issues in the case summary with the research narrative.
+- Identify:
+  - Legal issue overlap
+  - Factual similarity
+  - Statutory similarity
+  - Contextual similarity (tax type, procedural stage, etc.)
+- Determine whether the case:
+  - Directly supports
+  - Partially supports
+  - Is distinguishable
+  - Is adverse
+- Assign a Relevancy Score from 0 to 100 based on:
+  - 90–100: Direct precedent, highly similar facts & issue
+  - 70–89: Strong persuasive support
+  - 50–69: Moderate relevance, distinguishable facts
+  - 30–49: Weak support
+  - 0–29: Not relevant or adverse
+
+Respond in this exact JSON format (no markdown, just raw JSON):
+{
+  "rankings": [
+    {
+      "case_number": 1,
+      "id": "case_id",
+      "filename": "filename.pdf",
+      "score": 85,
+      "category": "Direct / Strong / Moderate / Weak / Not Relevant / Adverse",
+      "reason": "Brief judicial analysis: issue alignment, factual alignment, statutory alignment, distinguishing factors, and why it supports or does not support the narrative"
+    }
+  ],
+  "recommendation": "Brief overall recommendation for the user's case"
+}
+
+Sort rankings by score descending (most relevant first). Return ALL cases. Do not inflate scores.`;
+
+        let customRelevancyPrompt = null; // null = use server default
+
+        function openPromptEditor() {
+            document.getElementById('promptEditorArea').value = customRelevancyPrompt || DEFAULT_RELEVANCY_PROMPT;
+            document.getElementById('promptModal').classList.add('open');
+        }
+
+        function savePrompt() {
+            const val = document.getElementById('promptEditorArea').value.trim();
+            customRelevancyPrompt = val === DEFAULT_RELEVANCY_PROMPT.trim() ? null : (val || null);
+            document.getElementById('promptModal').classList.remove('open');
+        }
+
+        function resetPrompt() {
+            customRelevancyPrompt = null;
+            document.getElementById('promptEditorArea').value = DEFAULT_RELEVANCY_PROMPT;
+        }
+
+        const FILTER_CONFIG = [
+            {
+                id: 'module',
+                label: 'Tax module',
+                options: ['GST', 'Customs', 'Excise & Service Tax', 'Foreign Trade Policy']
+            },
+            {
+                id: 'docType',
+                label: 'Document type',
+                options: ['Case Laws', 'Notifications', 'Acts', 'Rules']
+            },
+            {
+                id: 'court',
+                label: 'Court level',
+                options: ['Supreme Court', 'High Court', 'Tribunal', 'Advance Ruling']
+            },
+            {
+                id: 'yearList',
+                label: 'Year',
+                options: ['2026', '2025', '2024', '2023', '2022', '2021', '2020', '2019', '2018', '2017', '2016', '2015']
+            }
+        ];
+
+        // ── App State ──
+        let currentNarrative = '';
+        let currentKeywords = '';
+        let currentCount = 200;
+        let currentFilters = {};
+        let chips = [];
+        let andChips = [];
+        let currentAndKeywords = '';
+        let andPhraseCounts = {};     // { phrase: totalCount } — populated by search preview
+        let andPhraseLoading = false; // true while preview fetch is in-flight
+        let andCombinedCount = null; // combined unique count after dedup
+        let searchPreviewTimer = null;
+
+        // ── Expansion State ──
+        let analyzedIds = [];
+        let analyzedCount = 0;
+        let nextPage = 1;
+        let canExpand = false;
+        let maxAnalyzed = 5000;
+        let totalCount = 0;
+        const EXPAND_BATCH = 500;
+
+        // ── Step Navigation ──
+        const STEPS = ['s-narrative', 's-keywords-filters', 's-progress', 's-results', 's-chat'];
+
+        function goTo(sectionId, stepNum) {
+            STEPS.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    el.classList.remove('visible');
+                    // For s-keywords-filters we also clear the inline display set by startKeywordGeneration
+                    if (id === 's-keywords-filters') el.style.display = 'none';
+                }
+            });
+            const target = document.getElementById(sectionId);
+            if (target) {
+                target.classList.add('visible');
+                // s-narrative also needs to stay visible alongside keywords section (handled by startKeywordGeneration)
+            }
+
+            if (sectionId === 's-results') {
+                document.getElementById('s-chat').classList.add('visible');
+                document.getElementById('stepIndicatorWrap').style.display = 'none';
+            } else if (sectionId === 's-progress') {
+                document.getElementById('stepIndicatorWrap').style.display = 'none';
+            } else {
+                document.getElementById('stepIndicatorWrap').style.display = 'block';
+            }
+
+            // Update step dots 1–2
+            for (let i = 1; i <= 2; i++) {
+                const dot = document.getElementById('si-' + i);
+                const line = document.getElementById('sl-' + i);
+                if (!dot) continue;
+                dot.classList.remove('active', 'done');
+                if (i < stepNum) { dot.classList.add('done'); if (line) line.classList.add('done'); }
+                else if (i === stepNum) { dot.classList.add('active'); if (line) line.classList.remove('done'); }
+                else { if (line) line.classList.remove('done'); }
+            }
+
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        // ══ STEP 1: Generate Keywords ══
+        async function startKeywordGeneration() {
+            currentNarrative = document.getElementById('narrative').value.trim();
+            currentCount = parseInt(document.getElementById('caseCount').value);
+
+            if (!currentNarrative) { alert('Please describe your research narrative first.'); return; }
+
+            // Reveal keywords section on same page (no screen switch)
+            const kwSection = document.getElementById('s-keywords-filters');
+            kwSection.style.display = 'block';
+            setTimeout(() => kwSection.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+            setStatus('loading', 'Generating keywords…');
+
+            // Reset chip area + filters
+            chips = []; andChips = [];
+            document.getElementById('chipsWrapper').innerHTML =
+                `<div class="keyword-loading" id="kwLoading"><div class="spinner"></div><span>AI is generating keywords from your narrative…</span></div>
+                 <input type="text" id="chipInput" class="keyword-chip-input" style="display:none" placeholder="Type a keyword and press Enter…" onkeydown="handleChipInput(event)">`;
+            document.getElementById('analyzeBtn').disabled = true;
+            document.getElementById('suggestedKwRow').style.display = 'none';
+            document.getElementById('suggestedAndKwRow').style.display = 'none';
+            document.getElementById('searchPreviewBox').style.display = 'none';
+            document.getElementById('filterQuestions').innerHTML = '';
+
+            try {
+                const res = await fetch(API + '/api/keywords', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                    body: JSON.stringify({ narrative: currentNarrative, model: document.getElementById('modelSelect').value })
+                });
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+
+                chips = data.keywordList || [];
+                renderChips();
+                renderAndChips();
+
+                // Render suggested keywords row
+                renderSuggestedKeywords(data.suggestedKeywords || []);
+                renderSuggestedAndKeywords(data.suggestedAndKeywords || []);
+
+                // Render filters — show AI hints but do NOT pre-check anything
+                renderFilterCheckboxes(data.suggestedFilters || {}, false);
+
+                // Auto-trigger search count preview (small delay so session settles)
+                setTimeout(triggerSearchPreview, 500);
+
+                setStatus('ready', 'Review keywords & filters');
+            } catch (err) {
+                console.error('Keywords error:', err);
+                chips = [];
+                renderChips();
+                renderAndChips();
+                renderFilterCheckboxes({});
+                setStatus('ready', 'Enter keywords manually');
+            }
+        }
+
+        // ─── OR Chip rendering & interaction ───
+        function renderChips() {
+            const wrapper = document.getElementById('chipsWrapper');
+            wrapper.innerHTML = chips.map((kw, i) =>
+                `<span class="keyword-chip">
+                    ${esc(kw)}
+                    <span class="chip-remove" onclick="removeChip(${i})">✕</span>
+                </span>`
+            ).join('') +
+                `<input type="text" id="chipInput" class="keyword-chip-input"
+                placeholder="${chips.length === 0 ? 'Type a keyword and press Enter…' : 'Add more…'}"
+                onkeydown="handleChipInput(event)">`;
+
+            document.getElementById('analyzeBtn').disabled = chips.length === 0 && andChips.length === 0;
+        }
+
+        // ─── AND Chip rendering & interaction ───
+        function renderAndChips() {
+            const wrapper = document.getElementById('andChipsWrapper');
+            wrapper.innerHTML = andChips.map((kw, i) => {
+                const cnt = andPhraseCounts[kw];
+                const badge = cnt != null
+                    ? `<span style="background:rgba(245,158,11,0.25);color:#f59e0b;font-size:11px;font-weight:700;padding:1px 6px;border-radius:10px;margin-left:5px;">${cnt.toLocaleString()} cases</span>`
+                    : andPhraseLoading
+                        ? `<span style="background:rgba(245,158,11,0.12);color:#f59e0b;font-size:11px;padding:1px 6px;border-radius:10px;margin-left:5px;opacity:0.6;">…</span>`
+                        : '';
+                return `<span class="keyword-chip" style="background:rgba(245,158,11,0.12);border-color:rgba(245,158,11,0.3);color:#f59e0b;">
+                    ${esc(kw)}${badge}
+                    <span class="chip-remove" onclick="removeAndChip(${i})">✕</span>
+                </span>`;
+            }).join('') +
+                `<input type="text" id="andChipInput" class="keyword-chip-input"
+                placeholder="${andChips.length === 0 ? 'Type a phrase and press Enter…' : 'Add another phrase…'}"
+                onkeydown="handleAndChipInput(event)">`;
+
+            // Per-phrase count summary panel
+            const summaryEl = document.getElementById('andCountSummary');
+            if (summaryEl) {
+                const hasAnyCounts = andChips.some(kw => andPhraseCounts[kw] != null);
+                if (andChips.length >= 1 && hasAnyCounts) {
+                    summaryEl.style.display = 'block';
+                    const rows = andChips.filter(kw => andPhraseCounts[kw] != null).map(kw =>
+                        `<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;color:var(--text-secondary);">
+                            <span style="color:#f59e0b;">"${esc(kw)}"</span>
+                            <span style="font-weight:600;color:var(--text-primary);">${andPhraseCounts[kw].toLocaleString()} cases</span>
+                        </div>`
+                    ).join('');
+                    const totalLine = andCombinedCount != null
+                        ? `<div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;padding-top:8px;border-top:1px solid var(--border);">
+                               <span style="font-weight:600;color:var(--text-secondary);">Cases to analyze</span>
+                               <span style="font-weight:800;font-size:16px;color:var(--accent);">${andCombinedCount <= currentCount ? andCombinedCount.toLocaleString() + ' (all)' : currentCount.toLocaleString() + ' (top ' + currentCount + ')'}</span>
+                           </div>`
+                        : '';
+                    summaryEl.innerHTML = rows + totalLine;
+                } else {
+                    summaryEl.style.display = 'none';
+                }
+            }
+
+            // Show/hide the 2+ chip info banner
+            const banner = document.getElementById('andUnionBanner');
+            if (banner) {
+                if (andChips.length >= 2) {
+                    banner.style.display = 'block';
+                    banner.innerHTML = `ℹ️ <strong>${andChips.length} phrases</strong> — each will be searched independently and results combined (duplicates removed). If combined results ≤ ${currentCount}, all will be analyzed. Otherwise, the top ${currentCount} cases will be selected.`;
+                } else {
+                    banner.style.display = 'none';
+                }
+            }
+        }
+
+        function removeAndChip(index) {
+            const removed = andChips[index];
+            andChips.splice(index, 1);
+            delete andPhraseCounts[removed];
+            andCombinedCount = null;
+            renderAndChips();
+            schedulSearchPreview();
+        }
+
+        function handleAndChipInput(e) {
+            const input = e.target;
+            if (e.key === 'Enter' || e.key === ',') {
+                e.preventDefault();
+                const val = input.value.trim();
+                if (val && !andChips.includes(val)) {
+                    andChips.push(val);
+                    andCombinedCount = null;
+                    renderAndChips();
+                    schedulSearchPreview();
+                    setTimeout(() => document.getElementById('andChipInput')?.focus(), 0);
+                } else {
+                    input.value = '';
+                }
+            } else if (e.key === 'Backspace' && input.value === '' && andChips.length > 0) {
+                andChips.pop();
+                renderAndChips();
+                schedulSearchPreview();
+                setTimeout(() => document.getElementById('andChipInput')?.focus(), 0);
+            }
+        }
+
+        function collectKeywords() {
+            return {
+                orKeywords: chips,
+                andKeywords: andChips
+            };
+        }
+
+        function renderSuggestedKeywords(suggested) {
+            const row = document.getElementById('suggestedKwRow');
+            const container = document.getElementById('suggestedKwChips');
+            if (!suggested || suggested.length === 0) { row.style.display = 'none'; return; }
+            // Only show ones not already in active chips
+            const available = suggested.filter(kw => !chips.includes(kw));
+            if (available.length === 0) { row.style.display = 'none'; return; }
+            container.innerHTML = available.map(kw =>
+                `<span class="keyword-chip" style="opacity:0.6;cursor:pointer;border-style:dashed;" onclick="addSuggestedKeyword('${esc(kw)}', this)">
+                    + ${esc(kw)}
+                </span>`
+            ).join('');
+            row.style.display = 'block';
+        }
+
+        function addSuggestedKeyword(kw, el) {
+            if (!chips.includes(kw)) {
+                chips.push(kw);
+                renderChips();
+                el.remove();
+                const container = document.getElementById('suggestedKwChips');
+                if (container.children.length === 0) document.getElementById('suggestedKwRow').style.display = 'none';
+                schedulSearchPreview();
+            }
+        }
+
+        function renderSuggestedAndKeywords(suggested) {
+            const row = document.getElementById('suggestedAndKwRow');
+            const container = document.getElementById('suggestedAndKwChips');
+            if (!suggested || suggested.length === 0) { row.style.display = 'none'; return; }
+            const available = suggested.filter(kw => !andChips.includes(kw));
+            if (available.length === 0) { row.style.display = 'none'; return; }
+            container.innerHTML = available.map(kw =>
+                `<span class="keyword-chip" style="opacity:0.7;cursor:pointer;border-style:dashed;background:rgba(245,158,11,0.08);border-color:rgba(245,158,11,0.3);color:#f59e0b;"
+                    onclick="addSuggestedAndKeyword('${esc(kw)}', this)">
+                    + ${esc(kw)}
+                </span>`
+            ).join('');
+            row.style.display = 'block';
+        }
+
+        function addSuggestedAndKeyword(kw, el) {
+            if (!andChips.includes(kw)) {
+                andChips.push(kw);
+                andCombinedCount = null;
+                renderAndChips();
+                el.remove();
+                const container = document.getElementById('suggestedAndKwChips');
+                if (container.children.length === 0) document.getElementById('suggestedAndKwRow').style.display = 'none';
+                schedulSearchPreview();
+            }
+        }
+
+        function removeChip(index) {
+            chips.splice(index, 1);
+            renderChips();
+            schedulSearchPreview();
+        }
+
+        function handleChipInput(e) {
+            const input = e.target;
+            if (e.key === 'Enter' || e.key === ',') {
+                e.preventDefault();
+                addChipFromInput(input);
+            } else if (e.key === 'Backspace' && input.value === '' && chips.length > 0) {
+                chips.pop();
+                renderChips();
+                schedulSearchPreview();
+                setTimeout(() => document.getElementById('chipInput')?.focus(), 0);
+            }
+        }
+
+        function addChipFromInput(input) {
+            const val = input.value.trim();
+            if (val && !chips.includes(val)) {
+                chips.push(val);
+                renderChips();
+                schedulSearchPreview();
+                setTimeout(() => document.getElementById('chipInput')?.focus(), 0);
+            } else {
+                input.value = '';
+            }
+        }
+
+        // ─── Filter rendering ───
+        function renderFilterCheckboxes(suggested = {}, preCheck = false) {
+            const container = document.getElementById('filterQuestions');
+            container.innerHTML = FILTER_CONFIG.map(f => {
+                const suggestedVals = suggested[f.id] || [];
+                const hasSuggestion = suggestedVals.length > 0;
+                const opts = f.options.map((opt, j) => {
+                    // Only pre-check if preCheck=true (currently always false — user selects manually)
+                    const checked = (preCheck && suggestedVals.includes(opt)) ? 'checked' : '';
+                    const isSuggested = suggestedVals.includes(opt);
+                    return `<div class="q-option">
+                        <input type="checkbox" name="f_${f.id}" id="f_${f.id}_${j}" value="${esc(opt)}" ${checked} onchange="schedulSearchPreview()">
+                        <label for="f_${f.id}_${j}">${esc(opt)}${isSuggested ? ' <span style="font-size:10px;color:var(--primary-light);font-weight:600;opacity:0.8;">← AI</span>' : ''}</label>
+                    </div>`;
+                }).join('');
+                return `<div class="question-card">
+                    <div class="q-text">${esc(f.label)}${hasSuggestion ? ' <span style="font-size:10px;background:rgba(79,110,247,0.15);color:var(--primary-light);padding:2px 6px;border-radius:10px;font-weight:600;">AI hint</span>' : ''}</div>
+                    <div class="q-options">${opts}</div>
+                </div>`;
+            }).join('');
+        }
+
+        // ─── Search count preview ───
+        function schedulSearchPreview() {
+            clearTimeout(searchPreviewTimer);
+            searchPreviewTimer = setTimeout(triggerSearchPreview, 800);
+        }
+
+        async function triggerSearchPreview() {
+            // Clear stale counts when chips have changed
+            const validPhrases = new Set(andChips);
+            for (const k of Object.keys(andPhraseCounts)) {
+                if (!validPhrases.has(k)) delete andPhraseCounts[k];
+            }
+            if (chips.length === 0 && andChips.length === 0) {
+                document.getElementById('searchPreviewBox').style.display = 'none';
+                andCombinedCount = null;
+                renderAndChips();
+                return;
+            }
+            if (chips.length === 0) { document.getElementById('searchPreviewBox').style.display = 'none'; return; }
+
+            const previewBox = document.getElementById('searchPreviewBox');
+            const previewText = document.getElementById('searchPreviewText');
+            const previewCount = document.getElementById('searchPreviewCount');
+            const previewWarning = document.getElementById('searchPreviewWarning');
+
+            previewBox.style.display = 'block';
+            previewText.textContent = 'Checking search results…';
+            previewCount.innerHTML = '<div class="spinner" style="width:16px;height:16px;border-width:2px;display:inline-block;"></div>';
+            andPhraseLoading = true;
+            renderAndChips(); // show "…" loading badges
+            previewWarning.style.display = 'none';
+
+            // Collect current filters and keywords (split by AND/OR logic)
+            const previewFilters = collectFilters();
+            const { orKeywords, andKeywords } = collectKeywords();
+            const keywords = orKeywords.join(' ');
+
+            const breakdownEl = document.getElementById('searchPreviewBreakdown');
+
+            try {
+                const res = await fetch(API + '/api/search-preview', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                    body: JSON.stringify({ keywords, andKeywords, filters: previewFilters })
+                });
+                if (!res.ok) throw new Error(`Server returned ${res.status} — please restart the server`);
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+
+                const count = data.totalCount || 0;
+                const perPhrase = data.perPhraseCounts || [];
+
+                // Store per-phrase counts and re-render chips with badges
+                andPhraseLoading = false;
+                if (perPhrase.length > 0) {
+                    perPhrase.forEach(p => { andPhraseCounts[p.phrase] = p.count; });
+                    // Display total = simple sum of per-phrase counts (not deduplicated)
+                    andCombinedCount = perPhrase.reduce((s, p) => s + p.count, 0);
+                } else {
+                    andCombinedCount = null;
+                }
+                renderAndChips();
+
+                // Search preview box — show sum total when AND phrases are active
+                if (breakdownEl) breakdownEl.style.display = 'none';
+                const displayCount = andCombinedCount != null ? andCombinedCount : count;
+                previewCount.textContent = displayCount.toLocaleString();
+                previewText.textContent = displayCount === 0
+                    ? 'No cases found with these keywords + filters'
+                    : perPhrase.length > 0
+                        ? `total cases across ${perPhrase.length} phrase search${perPhrase.length > 1 ? 'es' : ''}`
+                        : 'cases match with current keywords & filters';
+
+                if (displayCount === 0) {
+                    previewWarning.style.display = 'block';
+                    previewWarning.textContent = '⚠️ No results — try broader keywords or remove some filters.';
+                } else if (displayCount > 10000 && andChips.length === 0) {
+                    previewWarning.style.display = 'block';
+                    previewWarning.textContent = `⚠️ ${displayCount.toLocaleString()} is a lot — add more keywords or filters to narrow it down before analyzing.`;
+                }
+            } catch (err) {
+                andPhraseLoading = false;
+                renderAndChips();
+                if (breakdownEl) breakdownEl.style.display = 'none';
+                previewCount.textContent = '—';
+                previewText.textContent = 'Could not fetch result count';
+                previewWarning.style.display = 'block';
+                previewWarning.textContent = `⚠️ ${err.message} — you can still proceed to analyze.`;
+            }
+        }
+
+        function collectFilters() {
+            const filters = {};
+            document.querySelectorAll('#filterQuestions .question-card').forEach(card => {
+                card.querySelectorAll('input:checked').forEach(inp => {
+                    const id = inp.name.replace('f_', '');
+                    if (!filters[id]) filters[id] = [];
+                    filters[id].push(inp.value);
+                });
+            });
+            return filters;
+        }
+
+        // ══ STEP 2 → STEP 3: Proceed to Analysis ══
+        function proceedToAnalysis() {
+            if (chips.length === 0 && andChips.length === 0) { alert('Please add at least one keyword.'); return; }
+            const { orKeywords, andKeywords } = collectKeywords();
+            currentKeywords = orKeywords.join(' ');
+            currentAndKeywords = andKeywords; // keep as array
+            currentFilters = collectFilters();
+            runAnalysis();
+        }
+
+        async function runAnalysis() {
+            goTo('s-progress', 2);
+            document.getElementById('progressSteps').innerHTML = '';
+            document.getElementById('progressBar').style.width = '0%';
+            setStatus('loading', 'Analyzing…');
+
+            try {
+                const response = await fetch(API + '/api/analyze', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                    body: JSON.stringify({
+                        keywords: currentKeywords,
+                        andKeywords: Array.isArray(currentAndKeywords) ? currentAndKeywords : [],
+                        context: currentNarrative,
+                        count: currentCount,
+                        filters: currentFilters,
+                        customPrompt: customRelevancyPrompt || undefined,
+                        model: document.getElementById('modelSelect').value,
+                        relevancyThreshold: parseInt(document.getElementById('relevancyThreshold').value, 10)
+                    })
+                });
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let totalCases = currentCount;
+                let resultData = null;
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop();
+
+                    for (const line of lines) {
+                        if (!line.trim()) continue;
+                        let msg = null;
+                        try { msg = JSON.parse(line); } catch { continue; }
+                        if (!msg) continue;
+
+                        if (msg.step === 'high_relevancy') {
+                            showHighRelevancyToast(msg);
+                            continue; // Don't pass to handleProgress
+                        }
+
+                        if (msg.step === 'refine_needed') {
+                            updateProgress('error', msg.message, 0);
+                            setStatus('error', 'Too many results — refine your search');
+                            break;
+                        }
+
+                        handleProgress(msg, totalCases);
+                        if (msg.total != null) totalCases = msg.total;
+                        if (msg.step === 'done') {
+                            resultData = msg.data;
+                            resultData._totalAnalyzed = msg.totalAnalyzed;
+                            analyzedCount = msg.analyzedCount || 0;
+                            nextPage = msg.nextPage || 1;
+                            canExpand = msg.canExpand || false;
+                            maxAnalyzed = msg.maxAnalyzed || 5000;
+                            totalCount = msg.totalCount || 0;
+                            analyzedIds = resultData.rankings.map(r => r.id);
+                        }
+                        if (msg.step === 'error') throw new Error(msg.message);
+                    }
+                }
+
+                if (resultData) showResults(resultData);
+            } catch (err) {
+                updateProgress('error', '❌ ' + err.message, 0);
+                setStatus('error', 'Error');
+            }
+        }
+
+        // --- Toast System ---
+        function showHighRelevancyToast(msg) {
+            const container = document.getElementById('toastContainer');
+            if (!container) return;
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+
+            toast.innerHTML = `
+                <div class="toast-header">
+                    <div class="toast-title">
+                        <span class="material-icons-round" style="color:var(--primary-light);font-size:18px">gavel</span>
+                        High Match Found
+                    </div>
+                    <div class="toast-score">${msg.score}/100</div>
+                </div>
+                <div class="toast-body" title="${msg.heading}">
+                    <strong>${msg.heading.substring(0, 60)}${msg.heading.length > 60 ? '...' : ''}</strong><br>
+                    <span style="font-size:0.9em; opacity:0.8; margin-top:4px; display:block;">
+                        ${msg.reason.substring(0, 100)}${msg.reason.length > 100 ? '...' : ''}
+                    </span>
+                </div>
+            `;
+
+            container.appendChild(toast);
+
+            // Trigger animation
+            setTimeout(() => toast.classList.add('show'), 50);
+
+            // Auto hide
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => toast.remove(), 300);
+            }, 6000);
+        }
+
+        function handleProgress(msg, totalCases) {
+            const steps = document.getElementById('progressSteps');
+            switch (msg.step) {
+                case 'search':
+                    updateProgress('search', msg.message, 5);
+                    addStep(steps, '① Search — Fetching cases…', 'active'); break;
+                case 'search_done': {
+                    const andPhrases = Array.isArray(currentAndKeywords) ? currentAndKeywords : [];
+                    const foundLabel = andPhrases.length > 1
+                        ? `Combined ${msg.total ?? '?'} unique cases across ${andPhrases.length} phrase searches`
+                        : `Found ${msg.totalCount != null ? msg.totalCount.toLocaleString() : '?'} total results`;
+                    updateProgress('search_done', `${foundLabel}. Selecting top cases for deep analysis…`, 12);
+                    markStepDone(steps);
+                    addStep(steps, `✅ ${foundLabel} — narrowing to top ${msg.total ?? '?'}`, 'done'); break;
+                }
+                case 'narrowing':
+                    updateProgress('narrowing', `② Pre-screen — AI evaluating ${msg.total ?? totalCases} headnotes in one pass…`, 18);
+                    addStep(steps, '② Pre-screen — AI reading all headnotes to find top matches…', 'active'); break;
+                case 'narrowing_done':
+                    updateProgress('narrowing_done', msg.message, 28);
+                    markStepDone(steps);
+                    addStep(steps, `✅ Pre-screen done — selected top cases for full-text analysis`, 'done'); break;
+                case 'score_start':
+                    updateProgress('score_start', '③ Deep score — fetching full case texts and scoring against your narrative…', 30);
+                    addStep(steps, '③ Deep score — reading full texts, scoring 0–100 on 4 dimensions…', 'active'); break;
+                case 'score_progress':
+                    const pct = msg.pct || (30 + (msg.progress / (msg.total || totalCases) * 50));
+                    updateProgress('score_progress', `Evaluating case ${msg.progress} of ${msg.total} — scoring relevance…`, pct); break;
+                case 'score_done':
+                    updateProgress('score_done', msg.message, 82);
+                    markStepDone(steps);
+                    addStep(steps, `✅ Scoring complete — top case scored ${msg.message.match(/\d+/)?.[0] ?? '?'}/100`, 'done'); break;
+                case 'synthesis':
+                    updateProgress('synthesis', '④ Synthesis — AI writing executive memo from top 5 cases…', 86);
+                    addStep(steps, '④ Synthesis — generating AI memo from top cases…', 'active'); break;
+                case 'synthesis_done':
+                    updateProgress('synthesis_done', msg.message, 95);
+                    markStepDone(steps);
+                    addStep(steps, '✅ Synthesis memo ready', 'done'); break;
+                case 'done':
+                    updateProgress('done', '✅ Analysis complete!', 100);
+                    markStepDone(steps);
+                    addStep(steps, '✅ Results ready', 'done'); break;
+            }
+        }
+
+        function updateProgress(step, message, pct) {
+            document.getElementById('progressStatus').textContent = message;
+            document.getElementById('progressBar').style.width = pct + '%';
+            const el = document.getElementById('progressStatus');
+            if (step === 'done') el.classList.remove('pulsing');
+            else el.classList.add('pulsing');
+        }
+
+        function addStep(container, text, cls) {
+            const el = document.createElement('div');
+            el.className = 'progress-step ' + cls;
+            el.textContent = text;
+            container.appendChild(el);
+        }
+
+        function markStepDone(container) {
+            const active = container.querySelector('.active');
+            if (active) { active.classList.remove('active'); active.classList.add('done'); }
+        }
+
+        // ══ Show Results ══
+        let allRankings = [];
+
+        function applyScoreFilter(minScore) {
+            minScore = parseInt(minScore, 10);
+            document.getElementById('scoreFilterLabel').textContent = minScore + '+';
+            const filtered = allRankings.filter(r => (r.score || 0) >= minScore);
+            const visible = filtered.slice(0, 50); // cap for DOM perf
+            const totalAnalyzed = allRankings._totalAnalyzed || allRankings.length;
+            document.getElementById('resultsCount').textContent =
+                `Showing ${visible.length} of ${totalAnalyzed} analyzed${minScore > 0 ? ` (score ≥ ${minScore})` : ''}`;
+            const grid = document.getElementById('rankingGrid');
+            if (visible.length === 0) {
+                grid.innerHTML = `<div style="text-align:center;padding:40px;color:var(--text-muted);">No cases meet this score threshold. Try lowering the filter.</div>`;
+                return;
+            }
+            grid.innerHTML = visible.map((r, i) => {
+                const sc = r.score >= 70 ? 'high' : r.score >= 40 ? 'mid' : 'low';
+                const categoryLabel = r.category || (r.score >= 90 ? 'Direct' : r.score >= 70 ? 'Strong' : r.score >= 50 ? 'Moderate' : r.score >= 30 ? 'Weak' : 'Not Relevant');
+                return `<div class="ranking-card">
+                    <div class="score-circle ${sc}">${r.score}</div>
+                    <div class="ranking-info">
+                        <h3>${esc(stripSource(r.heading || r.filename || 'Case ' + (i + 1)))}</h3>
+                        <div class="ranking-meta">
+                            ${r.court ? `<span>🏛 ${esc(r.court)}</span>` : ''}
+                            ${r.date ? `<span>📅 ${r.date.split('T')[0]}</span>` : ''}
+                            <span><span class="score-badge ${sc}">${esc(categoryLabel)}</span></span>
+                        </div>
+                        <div class="ranking-reason">💡 ${esc(r.reason || '')}</div>
+                    </div>
+                    <div class="ranking-actions">
+                        <button class="btn btn-secondary btn-sm" onclick="previewCase('${r.id}', '${esc(r.heading || '')}')">
+                            <span class="material-icons-round" style="font-size:14px">visibility</span> Preview
+                        </button>
+                        <button class="btn btn-primary btn-sm" onclick="downloadOne(this, '${r.id}', '${esc(r.heading || '')}')">
+                            <span class="material-icons-round" style="font-size:14px">download</span> PDF
+                        </button>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        function showResults(data) {
+            goTo('s-results', 2);
+            setStatus('ready', 'Analysis complete');
+
+            allRankings = data.rankings || [];
+            allRankings._totalAnalyzed = data._totalAnalyzed || allRankings.length;
+
+            // Reset filter slider to 0
+            const slider = document.getElementById('scoreFilter');
+            if (slider) slider.value = 0;
+
+            let topHTML = '';
+            
+            // Render Synthesis Memo if it exists
+            if (data.synthesisMemo) {
+                topHTML += `
+                    <div class="recommendation-box" style="background: linear-gradient(135deg, rgba(79, 110, 247, 0.05), rgba(79, 110, 247, 0.02)); border-color: rgba(79, 110, 247, 0.4); margin-bottom: 30px;">
+                        <div class="label" style="font-size: 13px; margin-bottom: 12px;">
+                            <span class="material-icons-round" style="font-size:16px; vertical-align:middle; margin-right:4px;">psychology</span>
+                            AI Synthesis Memo
+                        </div>
+                        <div style="font-size: 14px; line-height: 1.7; color: var(--text-primary);">
+                            ${formatSummary(data.synthesisMemo)}
+                        </div>
+                    </div>`;
+            }
+
+            if (data.recommendation && !data.synthesisMemo) {
+                topHTML += `
+                    <div class="recommendation-box">
+                        <div class="label">🎯 AI Recommendation</div>
+                        ${esc(data.recommendation)}
+                    </div>`;
+            }
+
+            document.getElementById('recommendationBox').innerHTML = topHTML;
+
+            applyScoreFilter(0);
+
+            // Show expand section if applicable
+            const expandSection = document.getElementById('expandSection');
+            const expandBtn = document.getElementById('expandBtn');
+            const expandStatus = document.getElementById('expandStatus');
+            if (canExpand) {
+                expandStatus.textContent = `Analyzed ${analyzedCount} of ${totalCount} cases. Max allowed: ${maxAnalyzed}.`;
+                expandBtn.textContent = `Expand Search (+${EXPAND_BATCH} cases)`;
+                expandSection.style.display = 'block';
+            } else {
+                expandSection.style.display = 'none';
+            }
+        }
+
+        // ── Expand Search ──
+
+        async function expandSearch() {
+            const expandBtn = document.getElementById('expandBtn');
+            const expandStatus = document.getElementById('expandStatus');
+            expandBtn.disabled = true;
+            expandBtn.innerHTML = '<div class="spinner"></div> Expanding...';
+
+            try {
+                const res = await fetch(API + '/api/expand', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                    body: JSON.stringify({
+                        keywords: currentKeywords,
+                        context: currentNarrative,
+                        filters: currentFilters,
+                        page: nextPage,
+                        totalCount,
+                        analyzedIds,
+                        analyzedCount
+                    })
+                });
+
+                const data = await res.json();
+
+                if (data.step === 'refine_needed') {
+                    alert(data.message);
+                    goTo('s-narrative', 1);
+                    const kwSection = document.getElementById('s-keywords-filters');
+                    kwSection.style.display = 'block';
+                    setTimeout(() => kwSection.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+                    return;
+                }
+
+                if (data.step === 'expand_done') {
+                    // Merge new results
+                    const newRankings = data.scoredResults || [];
+                    allRankings = [...allRankings, ...newRankings];
+                    allRankings.sort((a, b) => (b.score || 0) - (a.score || 0)); // Re-sort
+
+                    // Update state
+                    analyzedCount = data.analyzedCount || analyzedCount;
+                    nextPage = data.nextPage || nextPage;
+                    canExpand = data.canExpand || false;
+                    analyzedIds = allRankings.map(r => r.id);
+
+                    // Update UI
+                    applyScoreFilter(document.getElementById('scoreFilter').value);
+                    if (canExpand) {
+                        expandStatus.textContent = `Analyzed ${analyzedCount} of ${totalCount} cases. Max allowed: ${maxAnalyzed}.`;
+                        expandBtn.textContent = `Expand Search (+${EXPAND_BATCH} cases)`;
+                        expandBtn.disabled = false;
+                    } else {
+                        expandSection.style.display = 'none';
+                    }
+
+                    // Show toast or update status
+                    setStatus('ready', `Expanded to ${analyzedCount} cases`);
+                }
+            } catch (err) {
+                console.error('Expand error:', err);
+                alert('Expansion failed: ' + err.message);
+            } finally {
+                expandBtn.disabled = false;
+                expandBtn.innerHTML = `Expand Search (+${EXPAND_BATCH} cases)`;
+            }
+        }
+
+        // ── Preview / Download ──
+
+        async function previewCase(id, title) {
+            document.getElementById('previewTitle').textContent = title || 'Case Preview';
+            document.getElementById('previewContent').innerHTML = '<div class="spinner" style="margin:20px auto"></div>';
+            document.getElementById('previewModal').classList.add('open');
+            try {
+                const res = await fetch(API + `/api/case/${id}/preview`, { headers: getAuthHeaders() });
+                const data = await res.json();
+                document.getElementById('previewContent').innerHTML = stripSource(data.html);
+            } catch (err) {
+                document.getElementById('previewContent').innerHTML = `<p style="color:var(--danger)">Error: ${err.message}</p>`;
+            }
+        }
+
+        async function downloadOne(btn, id, title) {
+            btn.disabled = true;
+            btn.innerHTML = '<div class="spinner"></div>';
+            try {
+                const res = await fetch(API + '/api/case/' + id + '/preview', { headers: getAuthHeaders() });
+                const data = await res.json();
+                if (!res.ok || !data.html) throw new Error(data.error || 'Failed to fetch document');
+
+                const wrapper = document.createElement('div');
+                wrapper.style.cssText = 'width:750px;font-family:Verdana;font-size:10pt;padding:0;box-sizing:border-box;';
+                wrapper.innerHTML =
+                    // Inject overrides: single-column layout, hide copy buttons, remove link styling, fix fonts
+                    `<style>
+                        * { font-family: Verdana, sans-serif !important; box-sizing: border-box; }
+                        .copy-citation-action, [id*="copyCitation"], [class*="copy-citation"] { display: none !important; }
+                        a { color: #000 !important; text-decoration: none !important; }
+                        table { width: 100% !important; table-layout: fixed; word-wrap: break-word; }
+                        td { vertical-align: top; }
+                        img { display: none !important; }
+                        .footprint { display: none !important; }
+                        body, div, p, span, td { font-size: 10pt !important; line-height: 1.5 !important; }
+                        .title_text_copy_row, .h1, [style*="font-weight: bold"] { font-weight: bold; }
+                    </style>` +
+                    stripSource(data.html);
+
+                const safeTitle = (title || id).replace(/[^a-zA-Z0-9\s().-]/g, '').trim().substring(0, 80);
+                await html2pdf()
+                    .set({
+                        margin: [12, 12, 12, 12],
+                        filename: safeTitle + '.pdf',
+                        html2canvas: { scale: 2, useCORS: true, windowWidth: 794 },
+                        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+                        pagebreak: { mode: ['css', 'legacy'] }
+                    })
+                    .from(wrapper)
+                    .save();
+
+                btn.innerHTML = '<span class="material-icons-round" style="font-size:14px">check</span> Done';
+                btn.style.borderColor = 'var(--success)'; btn.style.color = 'var(--success)'; btn.style.background = 'transparent';
+            } catch (err) {
+                console.error('Download error:', err.message);
+                btn.innerHTML = 'Error'; btn.disabled = false;
+            }
+        }
+
+        // ── Chat ──
+        async function sendFollowup() {
+            const input = document.getElementById('chatInput');
+            const msg = input.value.trim();
+            if (!msg) return;
+            addChatMsg('user', msg);
+            input.value = '';
+            document.getElementById('sendBtn').disabled = true;
+            const lid = addChatMsg('ai', '<div class="spinner"></div>', true);
+            try {
+                const res = await fetch(API + '/api/chat/message', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                    body: JSON.stringify({ message: msg })
+                });
+                const data = await res.json();
+                removeMsg(lid);
+                addChatMsg('ai', data.data || data.error || 'No response');
+            } catch (err) { removeMsg(lid); addChatMsg('ai', '❌ ' + err.message); }
+            document.getElementById('sendBtn').disabled = false;
+        }
+
+        let chatMsgId = 0;
+        function addChatMsg(role, content, isHtml = false) {
+            const id = 'chat-' + (++chatMsgId);
+            const container = document.getElementById('chatMessages');
+            const div = document.createElement('div');
+            div.className = `msg ${role}`; div.id = id;
+            div.innerHTML = `<div class="msg-label">${role === 'user' ? 'You' : 'ResearchIQ'}</div>
+                <div class="msg-bubble">${isHtml ? content : esc(content).replace(/\n/g, '<br>')}</div>`;
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+            return id;
+        }
+
+        function removeMsg(id) { document.getElementById(id)?.remove(); }
+
+        // ── Utils ──
+        function setStatus(type, text) {
+            document.getElementById('statusText').textContent = text;
+            document.getElementById('statusDot').style.background =
+                type === 'ready' ? 'var(--success)' : type === 'loading' ? 'var(--warning)' : 'var(--danger)';
+        }
+
+        function esc(str) {
+            if (!str) return '';
+            const d = document.createElement('div'); d.textContent = str; return d.innerHTML;
+        }
+
+        function stripSource(str) {
+            return (str || '')
+                .replace(/\bcentax\b/gi, '')
+                .replace(/centaxonline\.com/gi, '')
+                .replace(/cdn\.centaxonline\.com[^\s"']*/gi, '')
+                .replace(/\s{2,}/g, ' ')
+                .trim();
+        }
+
+        function formatSummary(str) {
+            if (!str) return '';
+            let html = esc(str);
+            html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+            html = html.replace(/^- /gm, '• ');
+            html = html.replace(/\n/g, '<br>');
+            return html;
+        }
+
+        function newSearch() {
+            chips = []; andChips = []; currentNarrative = ''; currentKeywords = ''; currentAndKeywords = ''; currentFilters = {};
+            document.getElementById('narrative').value = '';
+            document.getElementById('rankingGrid').innerHTML = '';
+            document.getElementById('recommendationBox').innerHTML = '';
+            document.getElementById('chatMessages').innerHTML = '';
+            document.getElementById('filterQuestions').innerHTML = '';
+            document.getElementById('suggestedKwRow').style.display = 'none';
+            document.getElementById('searchPreviewBox').style.display = 'none';
+            document.getElementById('stepIndicatorWrap').style.display = 'block';
+            document.getElementById('s-keywords-filters').style.display = 'none';
+            goTo('s-narrative', 1);
+            setStatus('ready', 'Ready');
+        }
+
+        // Enter on narrative to proceed
+        document.getElementById('narrative').addEventListener('keydown', e => {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault(); startKeywordGeneration();
+            }
+        });
+    </script>
+
+    <!-- ── Supabase Auth ── -->
+    <script>
+        let supabaseClient = null;
+        let currentSession = null;
+        let currentSessionId = null;
+        let heartbeatInterval = null;
+
+        function getAuthHeaders() {
+            if (!currentSession) return {};
+            return { 'Authorization': 'Bearer ' + currentSession.access_token };
+        }
+
+        function handleSession(session) {
+            currentSession = session;
+            const overlay = document.getElementById('auth-overlay');
+            const userInfo = document.getElementById('user-info');
+            if (session) {
+                overlay.style.display = 'none';
+                userInfo.style.display = 'flex';
+                const meta = session.user.user_metadata || {};
+                document.getElementById('user-name').textContent = meta.full_name || session.user.email;
+                const avatarEl = document.getElementById('user-avatar');
+                if (meta.avatar_url) { avatarEl.src = meta.avatar_url; avatarEl.style.display = 'block'; }
+            } else {
+                overlay.style.display = 'flex';
+                userInfo.style.display = 'none';
+                if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+            }
+        }
+
+        async function initAuth() {
+            const cfg = await fetch('/config').then(r => r.json());
+            supabaseClient = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
+
+            const { data: { session } } = await supabaseClient.auth.getSession();
+            handleSession(session);
+
+            supabaseClient.auth.onAuthStateChange(async (event, session) => {
+                handleSession(session);
+                if (event === 'SIGNED_IN' && session) {
+                    currentSessionId = crypto.randomUUID();
+                    // Record login + upsert user profile
+                    fetch(API + '/api/auth/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                        body: JSON.stringify({ sessionId: currentSessionId }),
+                    }).catch(() => {});
+                    // Start heartbeat every 30s
+                    heartbeatInterval = setInterval(() => {
+                        if (currentSessionId) {
+                            fetch(API + '/api/auth/heartbeat', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                                body: JSON.stringify({ sessionId: currentSessionId }),
+                            }).catch(() => {});
+                        }
+                    }, 30000);
+                }
+            });
+        }
+
+        document.getElementById('google-signin-btn').addEventListener('click', () => {
+            supabaseClient.auth.signInWithOAuth({
+                provider: 'google',
+                options: { redirectTo: window.location.origin },
+            });
+        });
+
+        document.getElementById('sign-out-btn').addEventListener('click', async () => {
+            if (currentSessionId) {
+                await fetch(API + '/api/auth/logout', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+                    body: JSON.stringify({ sessionId: currentSessionId }),
+                }).catch(() => {});
+                currentSessionId = null;
+            }
+            await supabaseClient.auth.signOut();
+        });
+
+        initAuth();
+    </script>
+</body>
+
+</html>

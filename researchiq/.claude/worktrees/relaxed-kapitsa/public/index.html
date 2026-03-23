@@ -1,0 +1,2076 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WorkflowIQ Casebot</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+        rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0a0e1a;
+            --bg-secondary: #111827;
+            --bg-card: #1a2035;
+            --bg-card-hover: #1f2847;
+            --bg-input: #0f1629;
+            --border: #2a3555;
+            --border-active: #4f6ef7;
+            --text-primary: #e8ecf4;
+            --text-secondary: #8892a8;
+            --text-muted: #5a6580;
+            --accent: #4f6ef7;
+            --accent-glow: rgba(79, 110, 247, 0.3);
+            --accent-gradient: linear-gradient(135deg, #4f6ef7 0%, #7c5cfc 50%, #a855f7 100%);
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --radius: 12px;
+            --radius-lg: 16px;
+            --shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', system-ui, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+
+        /* ─── Header ─── */
+        .header {
+            padding: 20px 40px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            background: var(--bg-secondary);
+        }
+
+        .brand-icon {
+            width: 40px;
+            height: 40px;
+            background: var(--accent-gradient);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            box-shadow: 0 4px 16px var(--accent-glow);
+        }
+
+        .brand h1 {
+            font-size: 20px;
+            font-weight: 700;
+            background: var(--accent-gradient);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .brand-sub {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+        }
+
+        .header-right {
+            margin-left: auto;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .model-selector {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 6px 12px;
+        }
+
+        .model-selector label {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            white-space: nowrap;
+        }
+
+        .model-selector select {
+            background: var(--bg-input);
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 5px 10px;
+            font-size: 13px;
+            font-family: 'Inter', sans-serif;
+            cursor: pointer;
+            outline: none;
+        }
+
+        .model-selector select:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px var(--accent-glow);
+        }
+
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: var(--text-secondary);
+            padding: 6px 14px;
+            border-radius: 20px;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid var(--border);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--success);
+        }
+
+        /* ─── Container ─── */
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        /* ─── Step Header ─── */
+        .step-header {
+            padding: 40px 0 24px;
+        }
+
+        .step-header h2 {
+            font-size: 22px;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+
+        .step-header p {
+            color: var(--text-secondary);
+            font-size: 14px;
+            margin-bottom: 0;
+        }
+
+        /* ─── Step Indicator ─── */
+        .step-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0;
+            margin-bottom: 32px;
+        }
+
+        .step-dot {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+
+        .step-dot .dot {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            border: 2px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 700;
+            transition: all 0.3s;
+        }
+
+        .step-dot.active .dot {
+            background: var(--accent-gradient);
+            border-color: transparent;
+            color: white;
+            box-shadow: 0 0 12px var(--accent-glow);
+        }
+
+        .step-dot.done .dot {
+            background: var(--success);
+            border-color: transparent;
+            color: white;
+        }
+
+        .step-dot.active {
+            color: var(--accent);
+        }
+
+        .step-dot.done {
+            color: var(--success);
+        }
+
+        .step-line {
+            flex: 1;
+            height: 2px;
+            background: var(--border);
+            margin: 0 12px;
+            transition: background 0.3s;
+        }
+
+        .step-line.done {
+            background: var(--success);
+        }
+
+        /* ─── Input Group ─── */
+        .input-group label {
+            display: block;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+
+        .input-group input,
+        .input-group textarea,
+        .input-group select {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1px solid var(--border);
+            background: var(--bg-input);
+            color: var(--text-primary);
+            border-radius: var(--radius);
+            font-size: 14px;
+            font-family: inherit;
+            transition: all 0.2s;
+        }
+
+        .input-group textarea {
+            resize: vertical;
+            min-height: 110px;
+            line-height: 1.6;
+        }
+
+        .input-group input:focus,
+        .input-group textarea:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+
+        /* ─── Keyword Chips ─── */
+        .keyword-chips-wrapper {
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 10px 12px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+            min-height: 54px;
+            transition: border-color 0.2s;
+            cursor: text;
+        }
+
+        .keyword-chips-wrapper:focus-within {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+
+        .keyword-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 10px 5px 12px;
+            background: rgba(79, 110, 247, 0.15);
+            border: 1px solid rgba(79, 110, 247, 0.35);
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 500;
+            color: #a0b4ff;
+            animation: fadeInUp 0.2s ease;
+        }
+
+        .keyword-chip .chip-remove {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(79, 110, 247, 0.3);
+            cursor: pointer;
+            font-size: 12px;
+            line-height: 1;
+            transition: background 0.15s;
+        }
+
+        .keyword-chip .chip-remove:hover {
+            background: var(--danger);
+            color: white;
+        }
+
+        .keyword-chip-input {
+            border: none;
+            background: transparent;
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 13px;
+            outline: none;
+            flex: 1;
+            min-width: 120px;
+            padding: 3px 0;
+        }
+
+        .chip-hint {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 6px;
+        }
+
+        /* ─── Keyword Loading state ─── */
+        .keyword-loading {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 16px;
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
+
+        /* ─── Filters Section ─── */
+        .question-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 20px;
+            margin-bottom: 16px;
+            animation: fadeInUp 0.3s ease;
+        }
+
+        .question-card .q-text {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 14px;
+            line-height: 1.4;
+        }
+
+        .q-options {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .q-option {
+            position: relative;
+        }
+
+        .q-option input[type="checkbox"] {
+            position: absolute;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .q-option label {
+            display: inline-block;
+            padding: 8px 16px;
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: var(--text-secondary);
+            background: var(--bg-input);
+        }
+
+        .q-option label:hover {
+            border-color: var(--accent);
+            color: var(--text-primary);
+        }
+
+        .q-option input[type="checkbox"]:checked+label {
+            border-color: var(--accent);
+            background: rgba(79, 110, 247, 0.15);
+            color: var(--accent);
+            font-weight: 600;
+        }
+
+        .filter-loading {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 0;
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
+
+        /* ─── Buttons ─── */
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: var(--radius);
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            font-family: inherit;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: var(--accent-gradient);
+            color: white;
+            box-shadow: 0 4px 12px var(--accent-glow);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 20px var(--accent-glow);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-secondary {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        .btn-sm {
+            padding: 8px 14px;
+            font-size: 12px;
+        }
+
+        .action-row {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            margin-top: 24px;
+        }
+
+        /* ─── Progress ─── */
+        .progress-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 24px;
+            text-align: center;
+        }
+
+        .progress-bar-wrapper {
+            height: 6px;
+            background: var(--border);
+            border-radius: 3px;
+            margin: 16px 0;
+            overflow: hidden;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            background: var(--accent-gradient);
+            border-radius: 3px;
+            transition: width 0.5s ease;
+            width: 0%;
+        }
+
+        .progress-status {
+            font-size: 14px;
+            color: var(--text-secondary);
+            min-height: 20px;
+        }
+
+        .progress-step {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--text-muted);
+            padding: 4px 0;
+        }
+
+        .progress-step.active {
+            color: var(--accent);
+        }
+
+        .progress-step.done {
+            color: var(--success);
+        }
+
+        .progress-steps {
+            text-align: left;
+            margin-top: 16px;
+        }
+
+        /* ─── Results ─── */
+        .results-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+        }
+
+        .results-header h2 {
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        .results-count {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .recommendation-box {
+            background: linear-gradient(135deg, rgba(79, 110, 247, 0.08), rgba(168, 85, 247, 0.08));
+            border: 1px solid rgba(79, 110, 247, 0.25);
+            border-radius: var(--radius);
+            padding: 16px;
+            margin-bottom: 24px;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .recommendation-box .label {
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--accent);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 6px;
+        }
+
+        .ranking-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .ranking-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 18px;
+            display: grid;
+            grid-template-columns: 60px 1fr auto;
+            gap: 16px;
+            align-items: start;
+            transition: all 0.2s;
+        }
+
+        .ranking-card:hover {
+            border-color: var(--accent);
+            background: var(--bg-card-hover);
+        }
+
+        .score-circle {
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            font-weight: 800;
+            position: relative;
+        }
+
+        .score-circle::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: 50%;
+            border: 3px solid var(--border);
+        }
+
+        .score-circle.high {
+            color: var(--success);
+        }
+
+        .score-circle.high::before {
+            border-color: var(--success);
+        }
+
+        .score-circle.mid {
+            color: var(--warning);
+        }
+
+        .score-circle.mid::before {
+            border-color: var(--warning);
+        }
+
+        .score-circle.low {
+            color: var(--text-muted);
+        }
+
+        .score-circle.low::before {
+            border-color: var(--text-muted);
+        }
+
+        .ranking-info h3 {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 4px;
+            line-height: 1.4;
+        }
+
+        .ranking-citation {
+            font-size: 11px;
+            color: var(--text-muted, #6b7280);
+            font-style: italic;
+            margin-bottom: 6px;
+            letter-spacing: 0.01em;
+        }
+
+        .ranking-meta {
+            display: flex;
+            gap: 12px;
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+        }
+
+        .ranking-meta span {
+            display: flex;
+            align-items: center;
+            gap: 3px;
+        }
+
+        .score-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+
+        .score-badge.high {
+            background: rgba(34, 197, 94, 0.15);
+            color: var(--success);
+            border: 1px solid rgba(34, 197, 94, 0.3);
+        }
+
+        .score-badge.mid {
+            background: rgba(245, 158, 11, 0.15);
+            color: var(--warning);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+        }
+
+        .score-badge.low {
+            background: rgba(90, 101, 128, 0.15);
+            color: var(--text-muted);
+            border: 1px solid rgba(90, 101, 128, 0.3);
+        }
+
+        .ranking-reason {
+            font-size: 13px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+            border-top: 1px solid var(--border);
+            padding-top: 8px;
+            margin-top: 4px;
+        }
+
+        .ranking-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            min-width: 90px;
+        }
+
+        .case-summary-content {
+            display: none;
+            grid-column: 1 / -1;
+            background: rgba(79, 110, 247, 0.05);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+            margin-top: 8px;
+            font-size: 13px;
+            line-height: 1.7;
+            color: var(--text-secondary);
+            white-space: pre-wrap;
+            animation: fadeInUp 0.2s ease;
+        }
+
+        .case-summary-content.open {
+            display: block;
+        }
+
+        .case-summary-content .summary-label {
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--accent);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+
+        /* ─── Chat ─── */
+        .chat-section {
+            padding: 0 0 40px;
+        }
+
+        .chat-section h3 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+
+        .chat-messages {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 20px;
+            max-height: 400px;
+            overflow-y: auto;
+            margin-bottom: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .msg {
+            max-width: 80%;
+            animation: fadeInUp 0.3s ease;
+        }
+
+        .msg.user {
+            align-self: flex-end;
+        }
+
+        .msg.ai {
+            align-self: flex-start;
+        }
+
+        .msg-bubble {
+            padding: 12px 16px;
+            border-radius: 14px;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .msg.user .msg-bubble {
+            background: linear-gradient(135deg, #1e3a5f, #1a3360);
+            border: 1px solid #2d4a7a;
+            border-bottom-right-radius: 4px;
+        }
+
+        .msg.ai .msg-bubble {
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-bottom-left-radius: 4px;
+        }
+
+        .msg-label {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .chat-input-row {
+            display: flex;
+            gap: 10px;
+        }
+
+        .chat-input-row input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 1px solid var(--border);
+            background: var(--bg-input);
+            color: var(--text-primary);
+            border-radius: var(--radius);
+            font-size: 14px;
+            font-family: inherit;
+        }
+
+        .chat-input-row input:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+
+        .send-btn {
+            width: 44px;
+            height: 44px;
+            border: none;
+            background: var(--accent-gradient);
+            color: white;
+            border-radius: var(--radius);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 12px var(--accent-glow);
+        }
+
+        .send-btn:hover {
+            transform: translateY(-1px);
+        }
+
+        .send-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* ─── Modal ─── */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(4px);
+            z-index: 100;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-overlay.open {
+            display: flex;
+        }
+
+        .modal {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            width: 90%;
+            max-width: 900px;
+            max-height: 85vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .modal-header {
+            padding: 16px 24px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-header h3 {
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 24px;
+            display: flex;
+        }
+
+        .modal-close:hover {
+            color: var(--text-primary);
+        }
+
+        .modal-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px;
+        }
+
+        .case-preview-content {
+            font-family: 'Times New Roman', serif;
+            font-size: 14px;
+            line-height: 1.8;
+        }
+
+        /* ─── Misc ─── */
+        .section {
+            display: none;
+            padding-bottom: 40px;
+        }
+
+        .section.visible {
+            display: block;
+        }
+
+        .spinner {
+            width: 18px;
+            height: 18px;
+            border: 2px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            display: inline-block;
+            flex-shrink: 0;
+        }
+
+        .input-row-2col {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 16px;
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(8px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        .pulsing {
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 3px;
+        }
+
+        /* ── TOAST NOTIFICATION ── */
+        .toast-container {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .toast {
+            background: linear-gradient(135deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.95));
+            border: 1px solid var(--border);
+            border-left: 4px solid var(--primary);
+            border-radius: 8px;
+            padding: 16px;
+            color: var(--text);
+            width: 320px;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5);
+            transform: translateX(120%);
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            backdrop-filter: blur(8px);
+            font-size: 0.9em;
+        }
+
+        .toast.show {
+            transform: translateX(0);
+        }
+
+        .toast-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .toast-title {
+            font-weight: 600;
+            color: white;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .toast-score {
+            background: rgba(139, 92, 246, 0.2);
+            color: var(--primary-light);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.85em;
+            font-weight: 600;
+        }
+
+        .toast-body {
+            color: var(--text-muted);
+            line-height: 1.4;
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Header -->
+    <div class="header">
+        <div class="brand-icon">⚡</div>
+        <div>
+            <div class="brand">
+                <h1>WorkflowIQ Casebot</h1>
+            </div>
+            <div class="brand-sub">AI-Powered Legal Research</div>
+        </div>
+        <div class="header-right">
+            <div class="model-selector">
+                <label>Model</label>
+                <select id="modelSelect">
+                    <option value="gpt-4o">GPT-4o</option>
+                    <option value="gpt-4o-mini" selected>GPT-4o Mini</option>
+                    <option value="gpt-4-turbo">GPT-4 Turbo</option>
+                    <option value="o1-mini">o1-mini</option>
+                    <option value="o3-mini">o3-mini</option>
+                </select>
+            </div>
+            <div class="status-badge">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">Ready</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+
+        <!-- ── Step Indicator ── -->
+        <div style="padding-top:28px" id="stepIndicatorWrap">
+            <div class="step-indicator">
+                <div class="step-dot active" id="si-1">
+                    <div class="dot">1</div>
+                    <span>Narrative</span>
+                </div>
+                <div class="step-line" id="sl-1"></div>
+                <div class="step-dot" id="si-2">
+                    <div class="dot">2</div>
+                    <span>Keywords</span>
+                </div>
+                <div class="step-line" id="sl-2"></div>
+                <div class="step-dot" id="si-3">
+                    <div class="dot">3</div>
+                    <span>Filters</span>
+                </div>
+                <div class="step-line" id="sl-3"></div>
+                <div class="step-dot" id="si-4">
+                    <div class="dot">4</div>
+                    <span>Results</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- ══ STEP 1: Narrative Input ══ -->
+        <div class="section visible" id="s-narrative">
+            <div class="step-header">
+                <h2>📝 Describe Your Research</h2>
+                <p>Write your legal argument or research objective in plain language. The AI will generate search
+                    keywords automatically.</p>
+            </div>
+
+            <div style="margin-bottom:16px">
+                <div class="input-group">
+                    <label>Research Narrative</label>
+                    <textarea id="narrative" rows="5"
+                        placeholder="e.g. The taxpayer is entitled to interest on the refund of pre-deposit paid during GST appeal where the appellate authority decided in favour of the taxpayer. The department is disputing the payment of such interest claiming it is not mandated under the CGST Act."></textarea>
+                </div>
+            </div>
+
+            <div class="input-row-2col">
+                <div class="input-group">
+                    <label>Number of Cases to Analyze</label>
+                    <select id="caseCount">
+                        <option value="10">10 cases (~30 sec)</option>
+                        <option value="20">20 cases (~1 min)</option>
+                        <option value="30">30 cases (~2 min)</option>
+                        <option value="50">50 cases (~3 min)</option>
+                        <option value="75">75 cases (~4 min)</option>
+                        <option value="100">100 cases (~6 min)</option>
+                        <option value="200">200 cases (~12 min)</option>
+                        <option value="300">300 cases (~18 min)</option>
+                        <option value="500" selected>500 cases (~30 min)</option>
+                    </select>
+                </div>
+                <div class="input-group">
+                    <label style="display: flex; justify-content: space-between; align-items: center;">
+                        <span>Minimum Relevancy Score</span>
+                        <span id="thresholdVal" style="color: var(--primary-light); font-weight: 600;">90</span>
+                    </label>
+                    <input type="range" id="relevancyThreshold" min="0" max="100" value="90"
+                        oninput="document.getElementById('thresholdVal').textContent = this.value"
+                        style="width: 100%; margin-top: 8px; accent-color: var(--primary);">
+                    <div style="font-size: 0.8em; color: var(--text-muted); margin-top: 6px;">
+                        Only cases scoring at or above this threshold will appear in results.
+                    </div>
+                </div>
+            </div>
+
+            <div class="action-row" style="margin-top:24px">
+                <button class="btn btn-primary" id="generateKwBtn" onclick="startKeywordGeneration()">
+                    <span class="material-icons-round" style="font-size:18px">auto_awesome</span>
+                    Generate Keywords &rarr;
+                </button>
+                <button class="btn btn-secondary btn-sm" onclick="openPromptEditor()"
+                    title="View or edit the AI scoring prompt" style="margin-left:auto">
+                    <span class="material-icons-round" style="font-size:15px">tune</span>
+                    Scoring Prompt
+                </button>
+            </div>
+        </div>
+
+        <!-- ══ STEP 2: Keyword Review ══ -->
+        <div class="section" id="s-keywords">
+            <div class="step-header">
+                <h2>🔍 Review Search Keywords</h2>
+                <p>These keywords were generated from your narrative. Edit, remove, or add terms before searching.</p>
+            </div>
+
+            <div class="input-group" style="margin-bottom:6px">
+                <label>Search Keywords <span
+                        style="text-transform:none;font-weight:400;color:var(--text-muted)">(editable)</span></label>
+                <div class="keyword-chips-wrapper" id="chipsWrapper"
+                    onclick="document.getElementById('chipInput').focus()">
+                    <div class="keyword-loading" id="kwLoading">
+                        <div class="spinner"></div>
+                        <span>AI is generating keywords from your narrative…</span>
+                    </div>
+                    <input type="text" id="chipInput" class="keyword-chip-input" style="display:none"
+                        placeholder="Type a keyword and press Enter…" onkeydown="handleChipInput(event)">
+                </div>
+            </div>
+            <div id="exactPhraseContainer" style="display:none;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap"></div>
+
+            <div class="chip-hint">💡 Press <kbd
+                    style="background:var(--bg-card);border:1px solid var(--border);padding:1px 5px;border-radius:4px;font-size:11px">Enter</kbd>
+                or <kbd
+                    style="background:var(--bg-card);border:1px solid var(--border);padding:1px 5px;border-radius:4px;font-size:11px">Space</kbd>
+                to add a keyword · Click × to remove</div>
+
+            <div class="action-row">
+                <button class="btn btn-primary" id="proceedFiltersBtn" onclick="proceedToFilters()" disabled>
+                    <span class="material-icons-round" style="font-size:18px">tune</span>
+                    Set Filters →
+                </button>
+                <button class="btn btn-secondary" onclick="goTo('s-narrative', 1)">
+                    <span class="material-icons-round" style="font-size:18px">arrow_back</span>
+                    Back
+                </button>
+            </div>
+        </div>
+
+        <!-- ══ STEP 3: Filters ══ -->
+        <div class="section" id="s-filters">
+            <div class="step-header">
+                <h2>🎯 Refine Your Search</h2>
+                <p>Filters have been pre-selected based on your narrative. Adjust as needed.</p>
+            </div>
+
+            <div id="filterLoading" class="filter-loading">
+                <div class="spinner"></div>
+                <span>AI is selecting best filters for your narrative…</span>
+            </div>
+            <div id="filterQuestions"></div>
+
+            <!-- Static: In Favour Of filter -->
+            <div class="question-card" id="infavourCard" style="display:none">
+                <div class="q-text">⚖️ Ruling in favour of</div>
+                <div class="q-options">
+                    <div class="q-opt">
+                        <input type="radio" id="infavour_any" name="infavourOf" value="any" checked>
+                        <label for="infavour_any">Any</label>
+                    </div>
+                    <div class="q-opt">
+                        <input type="radio" id="infavour_taxpayer" name="infavourOf" value="taxpayer">
+                        <label for="infavour_taxpayer">Taxpayer</label>
+                    </div>
+                    <div class="q-opt">
+                        <input type="radio" id="infavour_department" name="infavourOf" value="department">
+                        <label for="infavour_department">Department</label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="action-row" id="filterActions" style="display:none">
+                <button class="btn btn-primary" onclick="submitFilters()">
+                    <span class="material-icons-round" style="font-size:18px">psychology</span>
+                    Analyze Cases
+                </button>
+                <button class="btn btn-secondary" onclick="submitFilters(true)">
+                    <span class="material-icons-round" style="font-size:18px">skip_next</span>
+                    Skip &amp; Search All
+                </button>
+                <button class="btn btn-secondary" onclick="goTo('s-keywords', 2)">
+                    <span class="material-icons-round" style="font-size:18px">arrow_back</span>
+                    Back
+                </button>
+            </div>
+        </div>
+
+        <!-- Toast container for high-relevancy alerts -->
+        <div id="toastContainer" style="position:fixed;top:20px;right:20px;z-index:1000;display:flex;flex-direction:column;gap:10px;pointer-events:none"></div>
+
+        <!-- ══ STEP 4: Progress ══ -->
+        <div class="section" id="s-progress">
+            <div class="progress-card" style="margin-top:32px">
+                <h3 style="margin-bottom:4px" id="progressTitle">Analyzing…</h3>
+                <div class="progress-status" id="progressStatus">Starting…</div>
+                <div class="progress-bar-wrapper">
+                    <div class="progress-bar-fill" id="progressBar"></div>
+                </div>
+                <div class="progress-steps" id="progressSteps"></div>
+            </div>
+        </div>
+
+        <!-- ══ STEP 4: Results ══ -->
+        <div class="section" id="s-results">
+            <div class="results-header" style="margin-top:32px">
+                <h2>📊 Relevancy Rankings</h2>
+                <span class="results-count" id="resultsCount"></span>
+            </div>
+            <div id="recommendationBox"></div>
+            <div class="ranking-grid" id="rankingGrid"></div>
+
+            <div style="margin-top:32px; text-align:center">
+                <button class="btn btn-secondary" onclick="newSearch()">
+                    <span class="material-icons-round" style="font-size:16px">restart_alt</span>
+                    New Research
+                </button>
+            </div>
+        </div>
+
+        <!-- ══ Chat Follow-up ══ -->
+        <div class="section" id="s-chat">
+            <h3>💬 Follow-up Questions</h3>
+            <div class="chat-messages" id="chatMessages"></div>
+            <div class="chat-input-row">
+                <input type="text" id="chatInput" placeholder="Ask a follow-up question…"
+                    onkeydown="if(event.key==='Enter')sendFollowup()" />
+                <button class="send-btn" id="sendBtn" onclick="sendFollowup()">
+                    <span class="material-icons-round">send</span>
+                </button>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Preview Modal -->
+    <div class="modal-overlay" id="previewModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 id="previewTitle">Case Preview</h3>
+                <button class="modal-close" onclick="document.getElementById('previewModal').classList.remove('open')">
+                    <span class="material-icons-round">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="case-preview-content" id="previewContent">Loading…</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Prompt Editor Modal -->
+    <div class="modal-overlay" id="promptModal">
+        <div class="modal" style="max-width:720px">
+            <div class="modal-header">
+                <h3>⚖️ Relevancy Scoring Prompt</h3>
+                <button class="modal-close" onclick="document.getElementById('promptModal').classList.remove('open')">
+                    <span class="material-icons-round">close</span>
+                </button>
+            </div>
+            <div class="modal-body">
+                <p style="font-size:13px;color:var(--text-secondary);margin-bottom:14px;line-height:1.5">
+                    This is the system prompt used by the AI to evaluate and score how well each case matches your
+                    research narrative.
+                    Edit it to adjust scoring behaviour, tone, or criteria. Changes apply to the next analysis run.
+                </p>
+                <div class="input-group">
+                    <label>System Prompt</label>
+                    <textarea id="promptEditorArea" rows="18"
+                        style="font-family:monospace;font-size:12px;line-height:1.6;min-height:340px"></textarea>
+                </div>
+                <div style="display:flex;gap:10px;margin-top:16px">
+                    <button class="btn btn-primary" onclick="savePrompt()">
+                        <span class="material-icons-round" style="font-size:16px">check</span> Save &amp; Close
+                    </button>
+                    <button class="btn btn-secondary" onclick="resetPrompt()">
+                        <span class="material-icons-round" style="font-size:16px">restart_alt</span> Reset to Default
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API = '';
+
+        // ── Default relevancy scoring system prompt ──
+        const DEFAULT_RELEVANCY_PROMPT = `You are acting as an impartial constitutional court evaluating whether a precedent meaningfully supports a legal argument. You must be neutral, analytical, and independent. Do not favour the narrative. Assess legal alignment objectively.
+
+You will receive a Research Narrative and multiple Case Summaries. For EACH case, perform the following analysis:
+- Compare the legal issues in the case summary with the research narrative.
+- Identify:
+  - Legal issue overlap
+  - Factual similarity
+  - Statutory similarity
+  - Contextual similarity (tax type, procedural stage, etc.)
+- Determine whether the case:
+  - Directly supports
+  - Partially supports
+  - Is distinguishable
+  - Is adverse
+- Assign a Relevancy Score from 0 to 100 based on:
+  - 90–100: Direct precedent, highly similar facts & issue
+  - 70–89: Strong persuasive support
+  - 50–69: Moderate relevance, distinguishable facts
+  - 30–49: Weak support
+  - 0–29: Not relevant or adverse
+
+Respond in this exact JSON format (no markdown, just raw JSON):
+{
+  "rankings": [
+    {
+      "case_number": 1,
+      "id": "case_id",
+      "filename": "filename.pdf",
+      "score": 85,
+      "category": "Direct / Strong / Moderate / Weak / Not Relevant / Adverse",
+      "reason": "Brief judicial analysis: issue alignment, factual alignment, statutory alignment, distinguishing factors, and why it supports or does not support the narrative"
+    }
+  ],
+  "recommendation": "Brief overall recommendation for the user's case"
+}
+
+Sort rankings by score descending (most relevant first). Return ALL cases. Do not inflate scores.`;
+
+        let customRelevancyPrompt = null; // null = use server default
+
+        function openPromptEditor() {
+            document.getElementById('promptEditorArea').value = customRelevancyPrompt || DEFAULT_RELEVANCY_PROMPT;
+            document.getElementById('promptModal').classList.add('open');
+        }
+
+        function savePrompt() {
+            const val = document.getElementById('promptEditorArea').value.trim();
+            customRelevancyPrompt = val === DEFAULT_RELEVANCY_PROMPT.trim() ? null : (val || null);
+            document.getElementById('promptModal').classList.remove('open');
+        }
+
+        function resetPrompt() {
+            customRelevancyPrompt = null;
+            document.getElementById('promptEditorArea').value = DEFAULT_RELEVANCY_PROMPT;
+        }
+
+        const FILTER_CONFIG = [
+            {
+                id: 'module',
+                label: 'Tax module',
+                options: ['GST', 'Customs', 'Excise & Service Tax', 'Foreign Trade Policy']
+            },
+            {
+                id: 'docType',
+                label: 'Document type',
+                options: ['Case Laws', 'Notifications', 'Acts', 'Rules']
+            },
+            {
+                id: 'court',
+                label: 'Court level',
+                options: ['Supreme Court', 'High Court', 'Tribunal', 'Advance Ruling']
+            },
+            {
+                id: 'yearList',
+                label: 'Year',
+                options: ['2026', '2025', '2024', '2023', '2022', '2021', '2020', '2019', '2018', '2017', '2016', '2015']
+            }
+        ];
+
+        // ── App State ──
+        let currentNarrative = '';
+        let currentKeywords = '';
+        let currentCount = 50;
+        let currentFilters = {};
+        let chips = [];
+        let currentExactPhrase = null;
+
+        // ── Step Navigation ──
+        const STEPS = ['s-narrative', 's-keywords', 's-filters', 's-progress', 's-results', 's-chat'];
+
+        function goTo(sectionId, stepNum) {
+            STEPS.forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.classList.remove('visible');
+            });
+            const target = document.getElementById(sectionId);
+            if (target) target.classList.add('visible');
+
+            if (sectionId === 's-results') {
+                document.getElementById('s-chat').classList.add('visible');
+                document.getElementById('stepIndicatorWrap').style.display = 'none';
+            } else if (sectionId === 's-progress') {
+                document.getElementById('stepIndicatorWrap').style.display = 'none';
+            } else {
+                document.getElementById('stepIndicatorWrap').style.display = 'block';
+            }
+
+            // Update step dots 1–3
+            for (let i = 1; i <= 3; i++) {
+                const dot = document.getElementById('si-' + i);
+                const line = document.getElementById('sl-' + i);
+                if (!dot) continue;
+                dot.classList.remove('active', 'done');
+                if (i < stepNum) { dot.classList.add('done'); if (line) line.classList.add('done'); }
+                else if (i === stepNum) { dot.classList.add('active'); if (line) line.classList.remove('done'); }
+                else { if (line) line.classList.remove('done'); }
+            }
+
+            // Step 4 indicator for results
+            const si4 = document.getElementById('si-4');
+            if (si4) {
+                si4.classList.remove('active', 'done');
+                if (sectionId === 's-results') si4.classList.add('active');
+            }
+
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        // ══ STEP 1: Generate Keywords ══
+        async function startKeywordGeneration() {
+            currentNarrative = document.getElementById('narrative').value.trim();
+            currentCount = parseInt(document.getElementById('caseCount').value);
+
+            if (!currentNarrative) { alert('Please describe your research narrative first.'); return; }
+
+            goTo('s-keywords', 2);
+            setStatus('loading', 'Generating keywords…');
+
+            // Reset chip area
+            chips = [];
+            document.getElementById('chipsWrapper').innerHTML =
+                `<div class="keyword-loading" id="kwLoading"><div class="spinner"></div><span>AI is generating keywords from your narrative…</span></div>
+                 <input type="text" id="chipInput" class="keyword-chip-input" style="display:none" placeholder="Type a keyword and press Enter…" onkeydown="handleChipInput(event)">`;
+            document.getElementById('proceedFiltersBtn').disabled = true;
+
+            try {
+                const res = await fetch(API + '/api/keywords', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ narrative: currentNarrative, model: document.getElementById('modelSelect').value })
+                });
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+
+                chips = data.keywordList || [];
+                currentExactPhrase = data.exactPhrase || null;
+                renderChips();
+                renderExactPhrase();
+                setStatus('ready', 'Keywords ready — edit if needed');
+            } catch (err) {
+                console.error('Keywords error:', err);
+                // Fallback: empty chip input so user can type manually
+                chips = [];
+                currentExactPhrase = null;
+                renderChips();
+                renderExactPhrase();
+                setStatus('ready', 'Enter keywords manually');
+            }
+        }
+
+        // ─── Exact Phrase display & interaction ───
+        function renderExactPhrase() {
+            const container = document.getElementById('exactPhraseContainer');
+            if (!container) return;
+            if (!currentExactPhrase) {
+                container.style.display = 'none';
+                container.innerHTML = '';
+                return;
+            }
+            container.style.display = 'flex';
+            container.innerHTML = `
+                <span style="color:var(--text-muted);font-size:12px;white-space:nowrap">Exact phrase:</span>
+                <span class="keyword-chip" style="background:var(--accent-glow);border:1px solid var(--accent)">
+                    "${esc(currentExactPhrase)}"
+                    <span class="chip-remove" onclick="clearExactPhrase()" title="Remove exact phrase">✕</span>
+                </span>
+            `;
+        }
+
+        function clearExactPhrase() {
+            currentExactPhrase = null;
+            renderExactPhrase();
+        }
+
+        // ─── Chip rendering & interaction ───
+        function renderChips() {
+            const wrapper = document.getElementById('chipsWrapper');
+            wrapper.innerHTML = chips.map((kw, i) =>
+                `<span class="keyword-chip">
+                    ${esc(kw)}
+                    <span class="chip-remove" onclick="removeChip(${i})">✕</span>
+                </span>`
+            ).join('') +
+                `<input type="text" id="chipInput" class="keyword-chip-input"
+                placeholder="${chips.length === 0 ? 'Type a keyword and press Enter…' : 'Add more…'}"
+                onkeydown="handleChipInput(event)">`;
+
+            document.getElementById('proceedFiltersBtn').disabled = chips.length === 0;
+        }
+
+        function removeChip(index) {
+            chips.splice(index, 1);
+            renderChips();
+        }
+
+        function handleChipInput(e) {
+            const input = e.target;
+            if (e.key === 'Enter' || e.key === ',') {
+                e.preventDefault();
+                addChipFromInput(input);
+            } else if (e.key === 'Backspace' && input.value === '' && chips.length > 0) {
+                chips.pop();
+                renderChips();
+                setTimeout(() => document.getElementById('chipInput')?.focus(), 0);
+            }
+        }
+
+        function addChipFromInput(input) {
+            const val = input.value.trim();
+            if (val && !chips.includes(val)) {
+                chips.push(val);
+                renderChips();
+                setTimeout(() => document.getElementById('chipInput')?.focus(), 0);
+            } else {
+                input.value = '';
+            }
+        }
+
+        // ══ STEP 2 → STEP 3: Load Filters ══
+        async function proceedToFilters() {
+            if (chips.length === 0) { alert('Please add at least one keyword.'); return; }
+            currentKeywords = chips.join(' ');
+
+            goTo('s-filters', 3);
+
+            // Instantly render blank filters
+            document.getElementById('filterLoading').style.display = 'none';
+            document.getElementById('filterActions').style.display = 'flex';
+            renderFilterCheckboxes({});
+
+            setStatus('ready', 'Adjust filters and analyze');
+        }
+
+        function renderFilterCheckboxes(suggested = {}) {
+            document.getElementById('infavourCard').style.display = '';
+            const container = document.getElementById('filterQuestions');
+            container.innerHTML = FILTER_CONFIG.map(f => {
+                const suggestedVals = suggested[f.id] || [];
+                const opts = f.options.map((opt, j) => {
+                    const checked = suggestedVals.includes(opt) ? 'checked' : '';
+                    return `<div class="q-option">
+                        <input type="checkbox" name="f_${f.id}" id="f_${f.id}_${j}" value="${esc(opt)}" ${checked}>
+                        <label for="f_${f.id}_${j}">${esc(opt)}</label>
+                    </div>`;
+                }).join('');
+                return `<div class="question-card">
+                    <div class="q-text">${esc(f.label)}</div>
+                    <div class="q-options">${opts}</div>
+                </div>`;
+            }).join('');
+        }
+
+        // ══ STEP 3 → STEP 4: Run Analysis ══
+        function submitFilters(skipFilters = false) {
+            if (!skipFilters) {
+                currentFilters = {};
+                document.querySelectorAll('#filterQuestions .question-card').forEach(card => {
+                    card.querySelectorAll('input:checked').forEach(inp => {
+                        const id = inp.name.replace('f_', '');
+                        if (!currentFilters[id]) currentFilters[id] = [];
+                        currentFilters[id].push(inp.value);
+                    });
+                });
+                // Read "In favour of" radio
+                const infavourVal = document.querySelector('input[name="infavourOf"]:checked')?.value || 'any';
+                if (infavourVal !== 'any') currentFilters.infavourOf = infavourVal;
+            } else {
+                currentFilters = {};
+            }
+            runAnalysis();
+        }
+
+        async function runAnalysis() {
+            goTo('s-progress', 4);
+            document.getElementById('progressSteps').innerHTML = '';
+            document.getElementById('progressBar').style.width = '0%';
+            setStatus('loading', 'Analyzing…');
+
+            try {
+                const response = await fetch(API + '/api/analyze', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        keywords: currentKeywords,
+                        context: currentNarrative,
+                        count: currentCount,
+                        filters: currentFilters,
+                        customPrompt: customRelevancyPrompt || undefined,
+                        model: document.getElementById('modelSelect').value,
+                        relevancyThreshold: parseInt(document.getElementById('relevancyThreshold').value, 10),
+                        exactPhrase: currentExactPhrase || undefined
+                    })
+                });
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let totalCases = currentCount;
+                let resultData = null;
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop();
+
+                    for (const line of lines) {
+                        if (!line.trim()) continue;
+                        let msg = null;
+                        try { msg = JSON.parse(line); } catch { continue; }
+                        if (!msg) continue;
+
+                        if (msg.step === 'high_relevancy') {
+                            showHighRelevancyToast(msg);
+                            continue; // Don't pass to handleProgress
+                        }
+
+                        if (msg.step === 'no_relevant_case_law') {
+                            updateProgress('no_relevant_case_law', 'Search complete — no strong precedent found.', 100);
+                            markStepDone(document.getElementById('progressSteps'));
+                            addStep(document.getElementById('progressSteps'), 'No strongly relevant case law found after all strategies', 'done');
+                            setStatus('ready', 'No strong precedent');
+                            showNoRelevantCaseLaw(msg);
+                            return;
+                        }
+
+                        handleProgress(msg, totalCases);
+                        if (msg.total != null) totalCases = msg.total;
+                        if (msg.step === 'done') {
+                            resultData = msg.data;
+                            resultData._totalAnalyzed = msg.totalAnalyzed;
+                        }
+                        if (msg.step === 'no_results') return; // Clean exit — no results found
+                        if (msg.step === 'error') throw new Error(msg.message);
+                    }
+                }
+
+                if (resultData) showResults(resultData);
+            } catch (err) {
+                updateProgress('error', '❌ ' + err.message, 0);
+                setStatus('error', 'Error');
+            }
+        }
+
+        // --- Toast System ---
+        function showHighRelevancyToast(msg) {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+
+            toast.innerHTML = `
+                <div class="toast-header">
+                    <div class="toast-title">
+                        <span class="material-icons-round" style="color:var(--primary-light);font-size:18px">gavel</span>
+                        High Match Found
+                    </div>
+                    <div class="toast-score">${msg.score}/100</div>
+                </div>
+                <div class="toast-body" title="${msg.heading}">
+                    <strong>${msg.heading.substring(0, 60)}${msg.heading.length > 60 ? '...' : ''}</strong><br>
+                    <span style="font-size:0.9em; opacity:0.8; margin-top:4px; display:block;">
+                        ${msg.reason.substring(0, 100)}${msg.reason.length > 100 ? '...' : ''}
+                    </span>
+                </div>
+            `;
+
+            container.appendChild(toast);
+
+            // Trigger animation
+            setTimeout(() => toast.classList.add('show'), 50);
+
+            // Auto hide
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => toast.remove(), 300);
+            }, 6000);
+        }
+
+        function handleProgress(msg, totalCases) {
+            const steps = document.getElementById('progressSteps');
+            switch (msg.step) {
+                case 'search':
+                    updateProgress('search', msg.message, 5);
+                    addStep(steps, '🔍 Searching…', 'active'); break;
+                case 'search_done':
+                    updateProgress('search_done', msg.message, 10);
+                    markStepDone(steps);
+                    addStep(steps, `✅ ${msg.totalCount != null ? msg.totalCount + ' results found. ' : ''}Analyzing ${msg.total ?? '?'} cases`, 'done'); break;
+                case 'prefilter':
+                    updateProgress('prefilter', msg.message, 12);
+                    addStep(steps, '🔎 Checking headnote relevance…', 'active'); break;
+                case 'prefilter_done':
+                    updateProgress('prefilter_done', msg.message, 18);
+                    markStepDone(steps);
+                    addStep(steps, `✅ Pre-filter: ${msg.kept ?? '?'}/${msg.total ?? '?'} cases passed`, 'done'); break;
+                case 'no_results':
+                    updateProgress('no_results', msg.message, 100);
+                    markStepDone(steps);
+                    addStep(steps, '⚠️ ' + msg.message, 'done');
+                    setStatus('ready', 'No results');
+                    break;
+                case 'score_start':
+                    updateProgress('score_start', msg.message, 10);
+                    addStep(steps, '⚡ Fetching & scoring cases…', 'active'); break;
+                case 'score_progress':
+                    const pct = msg.pct || (10 + (msg.progress / (msg.total || totalCases) * 70));
+                    updateProgress('score_progress', msg.message, pct); break;
+                case 'score_done':
+                    updateProgress('score_done', msg.message, 82);
+                    markStepDone(steps);
+                    addStep(steps, '✅ All cases scored', 'done'); break;
+                case 'summarize':
+                    updateProgress('summarize', msg.message, 85);
+                    addStep(steps, '📝 Generating summaries for top cases…', 'active'); break;
+                case 'summarize_done':
+                    updateProgress('summarize_done', msg.message, 92);
+                    markStepDone(steps);
+                    addStep(steps, '✅ Summaries ready', 'done'); break;
+                case 'auto_refine':
+                    if (msg.attemptNumber) {
+                        markStepDone(steps);
+                        addStep(steps, `🔄 Strategy ${msg.attemptNumber}/3: ${msg.message}`, 'active');
+                    }
+                    updateProgress('auto_refine', msg.message, 88); break;
+                case 'done':
+                    updateProgress('done', '✅ Analysis complete!', 100);
+                    markStepDone(steps);
+                    addStep(steps, '✅ Rankings ready', 'done'); break;
+            }
+        }
+
+        function updateProgress(step, message, pct) {
+            document.getElementById('progressStatus').textContent = message;
+            document.getElementById('progressBar').style.width = pct + '%';
+            const el = document.getElementById('progressStatus');
+            if (step === 'done') el.classList.remove('pulsing');
+            else el.classList.add('pulsing');
+        }
+
+        function addStep(container, text, cls) {
+            const el = document.createElement('div');
+            el.className = 'progress-step ' + cls;
+            el.textContent = text;
+            container.appendChild(el);
+        }
+
+        function markStepDone(container) {
+            const active = container.querySelector('.active');
+            if (active) { active.classList.remove('active'); active.classList.add('done'); }
+        }
+
+        // ══ Show Results ══
+        function showResults(data) {
+            goTo('s-results', 4);
+            setStatus('ready', 'Analysis complete');
+
+            const rankings = data.rankings || [];
+            const top20 = rankings.slice(0, 20);
+            const totalAnalyzed = data._totalAnalyzed || rankings.length;
+            document.getElementById('resultsCount').textContent = `Showing top ${top20.length} of ${totalAnalyzed} analyzed`;
+
+            if (data.recommendation) {
+                document.getElementById('recommendationBox').innerHTML = `
+                    <div class="recommendation-box">
+                        <div class="label">🎯 AI Recommendation</div>
+                        ${esc(data.recommendation)}
+                    </div>`;
+            }
+
+            const grid = document.getElementById('rankingGrid');
+            grid.innerHTML = top20.map((r, i) => {
+                const sc = r.score >= 70 ? 'high' : r.score >= 40 ? 'mid' : 'low';
+                const categoryLabel = r.category || (r.score >= 90 ? 'Direct' : r.score >= 70 ? 'Strong' : r.score >= 50 ? 'Moderate' : r.score >= 30 ? 'Weak' : 'Not Relevant');
+                return `<div class="ranking-card">
+                    <div class="score-circle ${sc}">${r.score}</div>
+                    <div class="ranking-info">
+                        <h3>${esc(r.heading || r.filename || 'Case ' + (i + 1))}</h3>
+                        ${r.citation ? `<div class="ranking-citation">${esc(r.citation)}</div>` : ''}
+                        <div class="ranking-meta">
+                            ${r.court ? `<span>🏛 ${esc(r.court)}</span>` : ''}
+                            ${r.date ? `<span>📅 ${r.date.split('T')[0]}</span>` : ''}
+                            ${r.infavourOf ? `<span>⚖️ ${esc(r.infavourOf)}</span>` : ''}
+                            <span><span class="score-badge ${sc}">${esc(categoryLabel)}</span></span>
+                        </div>
+                        <div class="ranking-reason">💡 ${esc(r.reason || '')}</div>
+                    </div>
+                    <div class="ranking-actions">
+                        <button class="btn btn-secondary btn-sm" onclick="previewCase('${r.id}', '${esc(r.heading || '')}')">
+                            <span class="material-icons-round" style="font-size:14px">visibility</span> Preview
+                        </button>
+                        <button class="btn btn-primary btn-sm" onclick="downloadOne(this, '${r.id}', '${esc(r.heading || '')}')">
+                            <span class="material-icons-round" style="font-size:14px">download</span> PDF
+                        </button>
+                        ${r.summary ? `<button class="btn btn-secondary btn-sm" onclick="toggleSummary('summary_${i}')">
+                            <span class="material-icons-round" style="font-size:14px">description</span> Summary
+                        </button>` : ''}
+                    </div>
+                    ${r.summary ? `<div class="case-summary-content" id="summary_${i}">
+                        <div class="summary-label">📋 AI Case Summary</div>
+                        ${formatSummary(r.summary)}
+                    </div>` : ''}
+                </div>`;
+            }).join('');
+        }
+
+        // ── No Relevant Case Law ──
+        function showNoRelevantCaseLaw(msg) {
+            goTo('s-results', 4);
+            setStatus('ready', 'No strong precedent');
+
+            document.getElementById('recommendationBox').innerHTML = `
+                <div style="
+                    background: linear-gradient(135deg, rgba(245,158,11,0.08), rgba(239,68,68,0.05));
+                    border: 1px solid rgba(245,158,11,0.3);
+                    border-left: 4px solid var(--warning, #f59e0b);
+                    border-radius: var(--radius, 8px);
+                    padding: 20px 20px 16px;
+                    margin-bottom: 24px;
+                ">
+                    <div style="font-size:11px;font-weight:700;color:var(--warning,#f59e0b);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;display:flex;align-items:center;gap:6px;">
+                        <span class="material-icons-round" style="font-size:15px">info</span>
+                        No Strong Precedent Found
+                    </div>
+                    <div style="font-size:14px;line-height:1.6;color:var(--text-primary,#e2e8f0);margin-bottom:${msg.bestScore > 0 ? '10px' : '0'}">
+                        ${esc(msg.message)}
+                    </div>
+                    ${msg.bestScore > 0 ? `
+                    <div style="font-size:12px;color:var(--text-secondary,#94a3b8);margin-top:8px;padding-top:8px;border-top:1px solid rgba(245,158,11,0.15);">
+                        Best match found: <strong style="color:var(--warning,#f59e0b)">${msg.bestScore}/100</strong> relevancy score.
+                        ${msg.attemptsExhausted ? `Searched using ${msg.attemptsExhausted} different strategies.` : ''}
+                        The cases below are the closest matches — they may offer partial support or analogical reasoning.
+                    </div>` : ''}
+                </div>`;
+
+            if (msg.data && msg.data.rankings && msg.data.rankings.length > 0) {
+                const top20 = msg.data.rankings.slice(0, 20);
+                document.getElementById('resultsCount').textContent =
+                    `Showing ${top20.length} closest match${top20.length !== 1 ? 'es' : ''} (none met relevancy threshold)`;
+
+                document.getElementById('rankingGrid').innerHTML = top20.map((r, i) => {
+                    const sc = r.score >= 70 ? 'high' : r.score >= 40 ? 'mid' : 'low';
+                    const categoryLabel = r.category || (r.score >= 50 ? 'Moderate' : r.score >= 30 ? 'Weak' : 'Not Relevant');
+                    return `<div class="ranking-card" style="opacity:0.85">
+                        <div class="score-circle ${sc}">${r.score}</div>
+                        <div class="ranking-info">
+                            <h3>${esc(r.heading || r.filename || 'Case ' + (i + 1))}</h3>
+                            ${r.citation ? `<div class="ranking-citation">${esc(r.citation)}</div>` : ''}
+                            <div class="ranking-meta">
+                                ${r.court ? `<span>🏛 ${esc(r.court)}</span>` : ''}
+                                ${r.date ? `<span>📅 ${r.date.split('T')[0]}</span>` : ''}
+                                <span><span class="score-badge ${sc}">${esc(categoryLabel)}</span></span>
+                            </div>
+                            <div class="ranking-reason">💡 ${esc(r.reason || '')}</div>
+                        </div>
+                        <div class="ranking-actions">
+                            <button class="btn btn-secondary btn-sm" onclick="previewCase('${r.id}', '${esc(r.heading || '')}')">
+                                <span class="material-icons-round" style="font-size:14px">visibility</span> Preview
+                            </button>
+                            <button class="btn btn-primary btn-sm" onclick="downloadOne(this, '${r.id}', '${esc(r.heading || '')}')">
+                                <span class="material-icons-round" style="font-size:14px">download</span> PDF
+                            </button>
+                            ${r.summary ? `<button class="btn btn-secondary btn-sm" onclick="toggleSummary('ncl_summary_${i}')">
+                                <span class="material-icons-round" style="font-size:14px">description</span> Summary
+                            </button>` : ''}
+                        </div>
+                        ${r.summary ? `<div class="case-summary-content" id="ncl_summary_${i}">
+                            <div class="summary-label">📋 AI Case Summary</div>
+                            ${formatSummary(r.summary)}
+                        </div>` : ''}
+                    </div>`;
+                }).join('');
+            } else {
+                document.getElementById('resultsCount').textContent = '';
+                document.getElementById('rankingGrid').innerHTML = `
+                    <div style="text-align:center;padding:48px 24px;color:var(--text-muted,#64748b);border:1px dashed var(--border,#334155);border-radius:var(--radius-lg,12px);">
+                        <div style="font-size:40px;margin-bottom:16px;">⚖️</div>
+                        <div style="font-size:16px;font-weight:600;margin-bottom:8px;color:var(--text-secondary,#94a3b8);">No Case Law Located</div>
+                        <div style="font-size:13px;line-height:1.6;max-width:400px;margin:0 auto;">
+                            This legal question may not yet have been adjudicated, or the issue may be too novel to have established precedent.
+                            Consider consulting primary legislation or seeking a legal opinion directly.
+                        </div>
+                        <div style="margin-top:24px">
+                            <button class="btn btn-secondary" onclick="newSearch()">
+                                <span class="material-icons-round" style="font-size:16px">restart_alt</span>
+                                Try Different Keywords
+                            </button>
+                        </div>
+                    </div>`;
+            }
+        }
+
+        // ── Preview / Download ──
+        function toggleSummary(id) { document.getElementById(id)?.classList.toggle('open'); }
+
+        async function previewCase(id, title) {
+            document.getElementById('previewTitle').textContent = title || 'Case Preview';
+            document.getElementById('previewContent').innerHTML = '<div class="spinner" style="margin:20px auto"></div>';
+            document.getElementById('previewModal').classList.add('open');
+            try {
+                const res = await fetch(API + `/api/case/${id}/preview`);
+                const data = await res.json();
+                document.getElementById('previewContent').innerHTML = data.html;
+            } catch (err) {
+                document.getElementById('previewContent').innerHTML = `<p style="color:var(--danger)">Error: ${err.message}</p>`;
+            }
+        }
+
+        async function downloadOne(btn, id, title) {
+            btn.disabled = true;
+            btn.innerHTML = '<div class="spinner"></div>';
+            try {
+                const res = await fetch(API + '/api/download', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ caseId: id, title })
+                });
+                if (!res.ok) throw new Error(await res.text());
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `Case_${id}_${(title || id).replace(/[^a-zA-Z0-9\s().-]/g, '').replace(/\s+/g, '_').substring(0, 80)}.pdf`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                btn.innerHTML = '<span class="material-icons-round" style="font-size:14px">check</span> Done';
+                btn.style.borderColor = 'var(--success)'; btn.style.color = 'var(--success)'; btn.style.background = 'transparent';
+            } catch (err) { btn.innerHTML = 'Error'; btn.disabled = false; console.error('Download error:', err); }
+        }
+
+        // ── Chat ──
+        async function sendFollowup() {
+            const input = document.getElementById('chatInput');
+            const msg = input.value.trim();
+            if (!msg) return;
+            addChatMsg('user', msg);
+            input.value = '';
+            document.getElementById('sendBtn').disabled = true;
+            const lid = addChatMsg('ai', '<div class="spinner"></div>', true);
+            try {
+                const res = await fetch(API + '/api/chat/message', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: msg })
+                });
+                const data = await res.json();
+                removeMsg(lid);
+                addChatMsg('ai', data.data || data.error || 'No response');
+            } catch (err) { removeMsg(lid); addChatMsg('ai', '❌ ' + err.message); }
+            document.getElementById('sendBtn').disabled = false;
+        }
+
+        let chatMsgId = 0;
+        function addChatMsg(role, content, isHtml = false) {
+            const id = 'chat-' + (++chatMsgId);
+            const container = document.getElementById('chatMessages');
+            const div = document.createElement('div');
+            div.className = `msg ${role}`; div.id = id;
+            div.innerHTML = `<div class="msg-label">${role === 'user' ? 'You' : 'Casebot'}</div>
+                <div class="msg-bubble">${isHtml ? content : esc(content).replace(/\n/g, '<br>')}</div>`;
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+            return id;
+        }
+
+        function removeMsg(id) { document.getElementById(id)?.remove(); }
+
+        // ── Utils ──
+        function setStatus(type, text) {
+            document.getElementById('statusText').textContent = text;
+            document.getElementById('statusDot').style.background =
+                type === 'ready' ? 'var(--success)' : type === 'loading' ? 'var(--warning)' : 'var(--danger)';
+        }
+
+        function esc(str) {
+            if (!str) return '';
+            const d = document.createElement('div'); d.textContent = str; return d.innerHTML;
+        }
+
+        function formatSummary(str) {
+            if (!str) return '';
+            let html = esc(str);
+            html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+            html = html.replace(/^- /gm, '• ');
+            html = html.replace(/\n/g, '<br>');
+            return html;
+        }
+
+        function newSearch() {
+            chips = []; currentNarrative = ''; currentKeywords = ''; currentFilters = {};
+            document.getElementById('narrative').value = '';
+            document.getElementById('rankingGrid').innerHTML = '';
+            document.getElementById('recommendationBox').innerHTML = '';
+            document.getElementById('chatMessages').innerHTML = '';
+            document.getElementById('stepIndicatorWrap').style.display = 'block';
+            goTo('s-narrative', 1);
+            setStatus('ready', 'Ready');
+        }
+
+        // Enter on narrative to proceed
+        document.getElementById('narrative').addEventListener('keydown', e => {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault(); startKeywordGeneration();
+            }
+        });
+    </script>
+</body>
+
+</html>

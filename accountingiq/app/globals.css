@@ -1,0 +1,89 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #0e0f11;
+  --bg2: #141518;
+  --bg3: #1c1e22;
+  --bg4: #252830;
+  --border: #2a2d35;
+  --text1: #f0f1f3;
+  --text2: #9aa0ad;
+  --text3: #5c6370;
+  --teal: #0fd4a0;
+  --amber: #f5a623;
+  --red: #f04848;
+  --blue: #4a9eff;
+  --green: #4caf79;
+  --purple: #9b7fe8;
+  --coral: #f26b5b;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-bg2: var(--bg2);
+  --color-bg3: var(--bg3);
+  --color-bg4: var(--bg4);
+  --color-border: var(--border);
+  --color-text1: var(--text1);
+  --color-text2: var(--text2);
+  --color-text3: var(--text3);
+  --color-teal: var(--teal);
+  --color-amber: var(--amber);
+  --color-danger: var(--red);
+  --color-blue: var(--blue);
+  --color-green: var(--green);
+  --color-purple: var(--purple);
+  --color-coral: var(--coral);
+  --font-sans: var(--font-outfit);
+  --font-serif: var(--font-dm-serif);
+  --font-mono: var(--font-dm-mono);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text1);
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: var(--bg2); }
+::-webkit-scrollbar-thumb { background: var(--bg4); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text3); }
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes ringDraw {
+  from { stroke-dashoffset: 339.3; }
+}
+
+.animate-fade-in { animation: fadeIn 0.25s ease both; }
+.animate-ring    { animation: ringDraw 1s cubic-bezier(0.4,0,0.2,1) both; }
+
+/* Status badge variants */
+.badge-pass      { color: var(--green);  background: rgba(76,175,121,0.12); }
+.badge-partial   { color: var(--amber);  background: rgba(245,166,35,0.12); }
+.badge-fail      { color: var(--red);    background: rgba(240,72,72,0.12); }
+.badge-missing   { color: var(--text2);  background: rgba(154,160,173,0.1); }
+.badge-uncertain { color: var(--blue);   background: rgba(74,158,255,0.12); }
+.badge-na        { color: var(--text3);  background: rgba(92,99,112,0.1); }
+
+.badge-critical  { color: var(--red);    background: rgba(240,72,72,0.15); }
+.badge-high      { color: var(--coral);  background: rgba(242,107,91,0.15); }
+.badge-medium    { color: var(--amber);  background: rgba(245,166,35,0.15); }
+.badge-positive  { color: var(--teal);   background: rgba(15,212,160,0.15); }
+
+@media print {
+  :root {
+    --bg: #fff; --bg2: #f8f8f8; --bg3: #f0f0f0; --bg4: #e8e8e8;
+    --border: #ddd;
+    --text1: #111; --text2: #444; --text3: #777;
+  }
+  .print\:hidden { display: none !important; }
+  aside { display: none !important; }
+  body  { background: #fff !important; }
+}

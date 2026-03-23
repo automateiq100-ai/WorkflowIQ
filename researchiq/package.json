@@ -1,0 +1,32 @@
+{
+    "name": "researchiq",
+    "version": "1.0.0",
+    "description": "ResearchIQ — AI-powered legal case research and analysis",
+    "main": "index.js",
+    "scripts": {
+        "start": "node server.js",
+        "cli": "node index.js",
+        "search": "node index.js search",
+        "download": "node index.js download"
+    },
+    "keywords": [
+        "centax",
+        "legal",
+        "cases",
+        "pdf",
+        "downloader"
+    ],
+    "license": "MIT",
+    "dependencies": {
+        "@supabase/supabase-js": "^2.99.3",
+        "axios": "^1.7.0",
+        "cors": "^2.8.6",
+        "dotenv": "^16.4.0",
+        "express": "^5.2.1",
+        "node-machine-id": "^1.1.12",
+        "openai": "^6.22.0"
+    },
+    "devDependencies": {
+        "pg": "^8.19.0"
+    }
+}
