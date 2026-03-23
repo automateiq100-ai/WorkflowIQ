@@ -35,6 +35,11 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(new URL('/login', request.url));
   }
 
+  // Root → portal (tool selection page)
+  if (pathname === '/') {
+    return NextResponse.redirect(new URL('/portal', request.url));
+  }
+
   return supabaseResponse;
 }
 
