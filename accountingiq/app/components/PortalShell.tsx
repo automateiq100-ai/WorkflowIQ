@@ -105,24 +105,14 @@ export default function PortalShell({
                 }}
               />
               {error && <p className="text-xs" style={{ color: 'var(--red)' }}>{error}</p>}
-              <div className="flex gap-2">
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="flex-1 py-2.5 rounded-lg text-sm font-semibold transition-opacity"
-                  style={{ background: 'var(--teal)', color: '#000', opacity: saving ? 0.6 : 1 }}
-                >
-                  {saving ? 'Saving…' : 'Continue'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowModal(false)}
-                  className="px-4 py-2.5 rounded-lg text-sm transition-colors"
-                  style={{ background: 'var(--bg4)', color: 'var(--text3)', border: '1px solid var(--border)' }}
-                >
-                  Skip
-                </button>
-              </div>
+              <button
+                type="submit"
+                disabled={saving}
+                className="w-full py-2.5 rounded-lg text-sm font-semibold transition-opacity"
+                style={{ background: 'var(--teal)', color: '#000', opacity: saving ? 0.6 : 1 }}
+              >
+                {saving ? 'Saving…' : 'Continue'}
+              </button>
             </form>
           </div>
         </div>
