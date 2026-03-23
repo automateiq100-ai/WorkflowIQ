@@ -1,12 +1,15 @@
 'use strict';
-require('dotenv').config();
+const path = require('path');
+
+// Load env vars from both app subdirectories
+require('dotenv').config({ path: path.join(__dirname, 'accountingiq', '.env.local') });
+require('dotenv').config({ path: path.join(__dirname, 'researchiq', '.env') });
 
 // Env var aliases — ResearchIQ uses different names than AccountingIQ
 process.env.SUPABASE_URL         = process.env.SUPABASE_URL         || process.env.NEXT_PUBLIC_SUPABASE_URL;
 process.env.SUPABASE_ANON_KEY    = process.env.SUPABASE_ANON_KEY    || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 process.env.SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-const path    = require('path');
 const next    = require('next');
 const express = require('express');
 const cors    = require('cors');
@@ -34,7 +37,7 @@ nextApp.prepare().then(() => {
   server.use('/researchiq', researchiqApp);
 
   // Everything else → Next.js (portal, login, AccountingIQ)
-  server.all('*', (req, res) => handle(req, res));
+  server.all(/(.*)/, (req, res) => handle(req, res));
 
   server.listen(port, () => {
     console.log(`\n🚀 WorkFlowIQ running on http://localhost:${port}\n`);
