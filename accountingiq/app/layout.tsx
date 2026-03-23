@@ -21,8 +21,8 @@ const dmMono = DM_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AccountingIQ — Accounting Health Analysis",
-  description: "Tally XML analysis engine. 59 checks across 8 dimensions. Score 0–100.",
+  title: "WorkFlowIQ — Your AI-Powered Workspace",
+  description: "AI-powered workspace with AccountingIQ and ResearchIQ.",
 };
 
 export default function RootLayout({
