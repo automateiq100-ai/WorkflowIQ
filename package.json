@@ -1,0 +1,12 @@
+{
+  "name": "workflowiq",
+  "version": "1.0.0",
+  "description": "WorkFlowIQ monorepo — AccountingIQ + ResearchIQ",
+  "scripts": {
+    "build": "npm install --prefix accountingiq && npm run build --prefix accountingiq && npm install --prefix researchiq",
+    "start": "node start.js"
+  },
+  "dependencies": {
+    "concurrently": "^9.0.0"
+  }
+}

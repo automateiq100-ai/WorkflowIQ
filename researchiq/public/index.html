@@ -1429,7 +1429,8 @@
     </div>
 
     <script>
-        const API = '';
+        // When served via Next.js proxy at /researchiq, prefix all API calls accordingly
+        const API = window.location.pathname.startsWith('/researchiq') ? '/researchiq' : '';
 
         // ── Default relevancy scoring system prompt ──
         const DEFAULT_RELEVANCY_PROMPT = `You are acting as an impartial constitutional court evaluating whether a precedent meaningfully supports a legal argument. You must be neutral, analytical, and independent. Do not favour the narrative. Assess legal alignment objectively.
@@ -2478,7 +2479,7 @@ Sort rankings by score descending (most relevant first). Return ALL cases. Do no
         }
 
         async function initAuth() {
-            const cfg = await fetch('/config').then(r => r.json());
+            const cfg = await fetch(API + '/config').then(r => r.json());
             supabaseClient = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
 
             const { data: { session } } = await supabaseClient.auth.getSession();

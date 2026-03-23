@@ -49,7 +49,6 @@ export default function PortalShell({
     const supabase = createClient();
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) return;
-    const researchiqUrl = process.env.NEXT_PUBLIC_RESEARCHIQ_URL ?? 'http://localhost:3000';
     const hash = [
       `access_token=${session.access_token}`,
       `refresh_token=${session.refresh_token}`,
@@ -57,7 +56,8 @@ export default function PortalShell({
       `token_type=bearer`,
       `type=bearer`,
     ].join('&');
-    window.open(`${researchiqUrl}/#${hash}`, '_blank');
+    // ResearchIQ is served at /researchiq on the same origin via Next.js proxy
+    window.location.href = `/researchiq#${hash}`;
   }
 
   async function handleSignOut() {
