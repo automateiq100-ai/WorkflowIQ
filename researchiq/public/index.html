@@ -2323,30 +2323,30 @@ Sort rankings by score descending (most relevant first). Return ALL cases. Do no
                 if (!res.ok || !data.html) throw new Error(data.error || 'Failed to fetch document');
 
                 const wrapper = document.createElement('div');
-                wrapper.style.cssText = 'width:680px;font-family:Times New Roman,serif;font-size:12pt;line-height:1.8;padding:0 20px;box-sizing:border-box;background:#fff;color:#000;';
+                wrapper.style.cssText = 'width:660px;font-family:Times New Roman,serif;font-size:12pt;line-height:1.8;background:#fff;color:#1a1a1a;position:relative;overflow:hidden;';
                 wrapper.innerHTML =
-                    // Match preview styling: Times New Roman, 12pt, 1.8 line-height
                     `<style>
-                        * { font-family: 'Times New Roman', Times, serif !important; box-sizing: border-box; color: #000 !important; background: #fff !important; }
+                        * { font-family: 'Times New Roman', Times, serif !important; box-sizing: border-box; background: #fff !important; }
                         .copy-citation-action, [id*="copyCitation"], [class*="copy-citation"] { display: none !important; }
                         .footprint, [class*="footprint"] { display: none !important; }
-                        a { color: #000 !important; text-decoration: none !important; }
+                        a { color: #1a237e !important; text-decoration: none !important; }
+                        b, strong { color: #111 !important; }
                         table { width: 100% !important; table-layout: fixed; word-wrap: break-word; border-collapse: collapse; }
                         td, th { vertical-align: top; padding: 4px 6px; font-size: 11pt !important; }
                         img { max-width: 100% !important; height: auto !important; }
-                        body, div, p, span, td, li, blockquote { font-size: 12pt !important; line-height: 1.8 !important; }
-                        h1, h2, h3, h4, .title_text_copy_row, .h1 { font-size: 13pt !important; font-weight: bold !important; line-height: 1.5 !important; margin: 12pt 0 6pt 0; }
+                        body, div, p, span, td, li { font-size: 12pt !important; line-height: 1.8 !important; color: #1a1a1a; }
+                        h1, h2, h3, h4, .title_text_copy_row, .h1 { font-size: 13pt !important; font-weight: bold !important; color: #1a237e !important; line-height: 1.5 !important; margin: 12pt 0 6pt 0; }
                         p { margin: 0 0 8pt 0; }
-                        blockquote { margin: 8pt 24pt; padding-left: 12pt; border-left: 3px solid #ccc; }
+                        blockquote { margin: 8pt 24pt; padding-left: 12pt; border-left: 3px solid #1a237e; color: #333 !important; }
                     </style>` +
                     stripSource(data.html);
 
                 const safeTitle = (title || id).replace(/[^a-zA-Z0-9\s().-]/g, '').trim().substring(0, 80);
                 await html2pdf()
                     .set({
-                        margin: [15, 15, 15, 15],
+                        margin: [15, 18, 15, 22],
                         filename: safeTitle + '.pdf',
-                        html2canvas: { scale: 2, useCORS: true, windowWidth: 720, logging: false },
+                        html2canvas: { scale: 2, useCORS: true, windowWidth: 660, logging: false },
                         jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
                         pagebreak: { mode: ['css', 'legacy'], avoid: ['tr', 'td', 'h1', 'h2', 'h3'] }
                     })
