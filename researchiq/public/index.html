@@ -2420,10 +2420,39 @@ Sort rankings by score descending (most relevant first). Return ALL cases. Do no
 
         function formatSummary(str) {
             if (!str) return '';
-            let html = esc(str);
-            html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-            html = html.replace(/^- /gm, '• ');
-            html = html.replace(/\n/g, '<br>');
+            const lines = str.split('\n');
+            let html = '';
+            let inList = false;
+
+            function inline(text) {
+                return esc(text)
+                    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                    .replace(/\*(.+?)\*/g, '<em style="font-style:italic">$1</em>');
+            }
+
+            for (const raw of lines) {
+                const line = raw.trim();
+                if (line.startsWith('### ')) {
+                    if (inList) { html += '</ul>'; inList = false; }
+                    html += `<h4 style="font-size:13px;font-weight:700;color:var(--primary-light);margin:14px 0 4px 0">${inline(line.slice(4))}</h4>`;
+                } else if (line.startsWith('## ')) {
+                    if (inList) { html += '</ul>'; inList = false; }
+                    html += `<h3 style="font-size:14px;font-weight:700;color:var(--primary-light);margin:18px 0 6px 0;padding-bottom:4px;border-bottom:1px solid rgba(79,110,247,0.25)">${inline(line.slice(3))}</h3>`;
+                } else if (line.startsWith('# ')) {
+                    if (inList) { html += '</ul>'; inList = false; }
+                    html += `<h2 style="font-size:16px;font-weight:700;color:var(--text-primary);margin:0 0 14px 0">${inline(line.slice(2))}</h2>`;
+                } else if (line.startsWith('- ') || line.startsWith('* ')) {
+                    if (!inList) { html += '<ul style="margin:6px 0 8px 18px;padding:0;list-style:disc">'; inList = true; }
+                    html += `<li style="margin-bottom:4px;line-height:1.6">${inline(line.slice(2))}</li>`;
+                } else if (line === '') {
+                    if (inList) { html += '</ul>'; inList = false; }
+                    // skip extra blank lines
+                } else {
+                    if (inList) { html += '</ul>'; inList = false; }
+                    html += `<p style="margin:0 0 10px 0;line-height:1.7">${inline(line)}</p>`;
+                }
+            }
+            if (inList) html += '</ul>';
             return html;
         }
 
