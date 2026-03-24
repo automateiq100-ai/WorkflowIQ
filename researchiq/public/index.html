@@ -2171,7 +2171,7 @@ Sort rankings by score descending (most relevant first). Return ALL cases. Do no
                         <button class="btn btn-secondary btn-sm" onclick="previewCase('${r.id}', '${esc(r.heading || '')}')">
                             <span class="material-icons-round" style="font-size:14px">visibility</span> Preview
                         </button>
-                        <button class="btn btn-primary btn-sm" onclick="downloadOne(this, '${r.id}', '${esc(r.heading || '')}')">
+                        <button class="btn btn-primary btn-sm" style="display:none" onclick="downloadOne(this, '${r.id}', '${esc(r.heading || '')}')">
                             <span class="material-icons-round" style="font-size:14px">download</span> PDF
                         </button>
                     </div>
