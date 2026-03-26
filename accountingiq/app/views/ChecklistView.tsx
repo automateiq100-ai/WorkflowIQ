@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useApp } from '@/lib/state';
-import { DIM_LABELS, DIM_COLORS } from '@/lib/constants';
+import { DIM_LABELS, DIM_COLORS, DIM_WEIGHTS } from '@/lib/constants';
 import StatusBadge from '@/app/components/StatusBadge';
 import type { DimKey, FilterMode, Check } from '@/lib/types';
 
@@ -22,6 +22,37 @@ function matchesFilter(check: Check, mode: FilterMode): boolean {
     case 'passed':  return check.status === 'pass';
     default:        return true;
   }
+}
+
+function exportDimCSV(checks: Check[], dim: DimKey) {
+  const rows = checks.filter(c => c.dim === dim);
+  const header = ['ID', 'Dimension', 'Check Name', 'Status', 'Points', 'Max', 'Note'];
+  const lines = rows.map(c =>
+    [c.id, DIM_LABELS[dim], `"${c.name}"`, c.status, c.pts, c.max, `"${c.note ?? ''}"`].join(',')
+  );
+  const csv = [header.join(','), ...lines].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `AccountingIQ_${dim}_${DIM_LABELS[dim].replace(/\s+/g, '_')}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportAllCSV(checks: Check[]) {
+  const header = ['ID', 'Dimension', 'Check Name', 'Status', 'Points', 'Max', 'Note'];
+  const lines = checks.map(c =>
+    [c.id, DIM_LABELS[c.dim], `"${c.name}"`, c.status, c.pts, c.max, `"${c.note ?? ''}"`].join(',')
+  );
+  const csv = [header.join(','), ...lines].join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `AccountingIQ_Full_Checklist.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 export default function ChecklistView() {
@@ -77,25 +108,37 @@ export default function ChecklistView() {
           </p>
         </div>
 
-        {/* Filter tabs */}
-        <div
-          className="flex rounded-lg border overflow-hidden"
-          style={{ borderColor: 'var(--border)' }}
-        >
-          {FILTER_LABELS.map(({ mode, label }) => (
-            <button
-              key={mode}
-              onClick={() => setFilter(mode)}
-              className="px-3 py-1.5 text-xs font-medium transition-colors"
-              style={{
-                background: filter === mode ? 'var(--bg4)' : 'var(--bg2)',
-                color: filter === mode ? 'var(--text1)' : 'var(--text3)',
-                borderRight: '1px solid var(--border)',
-              }}
-            >
-              {label}
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          {/* Export all CSV */}
+          <button
+            onClick={() => exportAllCSV(checks)}
+            className="text-xs px-3 py-1.5 rounded border transition-colors flex items-center gap-1.5"
+            style={{ borderColor: 'var(--border)', color: 'var(--text2)', background: 'var(--bg3)' }}
+            title="Export all checks as CSV"
+          >
+            ↓ Export CSV
+          </button>
+
+          {/* Filter tabs */}
+          <div
+            className="flex rounded-lg border overflow-hidden"
+            style={{ borderColor: 'var(--border)' }}
+          >
+            {FILTER_LABELS.map(({ mode, label }) => (
+              <button
+                key={mode}
+                onClick={() => setFilter(mode)}
+                className="px-3 py-1.5 text-xs font-medium transition-colors"
+                style={{
+                  background: filter === mode ? 'var(--bg4)' : 'var(--bg2)',
+                  color: filter === mode ? 'var(--text1)' : 'var(--text3)',
+                  borderRight: '1px solid var(--border)',
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -103,6 +146,7 @@ export default function ChecklistView() {
       <div className="space-y-3">
         {DIMS.map(dim => {
           const dimChecks = filteredChecks.filter(c => c.dim === dim);
+          const allDimChecks = checks.filter(c => c.dim === dim);
           if (dimChecks.length === 0) return null;
           const isCollapsed = collapsed.has(dim);
           const color = DIM_COLORS[dim];
@@ -114,26 +158,38 @@ export default function ChecklistView() {
               style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}
             >
               {/* Dim header */}
-              <button
-                className="w-full flex items-center gap-3 px-5 py-3 text-left"
-                onClick={() => toggleCollapse(dim)}
-              >
-                <span
-                  className="w-6 text-xs font-bold font-mono text-center shrink-0"
-                  style={{ color }}
+              <div className="flex items-center pr-2" style={{ borderBottom: isCollapsed ? 'none' : `1px solid var(--border)` }}>
+                <button
+                  className="flex-1 flex items-center gap-3 px-5 py-3 text-left"
+                  onClick={() => toggleCollapse(dim)}
                 >
-                  {dim}
-                </span>
-                <span className="text-sm font-medium flex-1" style={{ color: 'var(--text1)' }}>
-                  {DIM_LABELS[dim]}
-                </span>
-                <span className="text-xs" style={{ color: 'var(--text3)' }}>
-                  {dimChecks.length} check{dimChecks.length !== 1 ? 's' : ''}
-                </span>
-                <span className="text-xs ml-1" style={{ color: 'var(--text3)' }}>
-                  {isCollapsed ? '▶' : '▼'}
-                </span>
-              </button>
+                  <span className="w-6 text-xs font-bold font-mono text-center shrink-0" style={{ color }}>
+                    {dim}
+                  </span>
+                  <span className="text-sm font-medium flex-1" style={{ color: 'var(--text1)' }}>
+                    {DIM_LABELS[dim]}
+                  </span>
+                  <span className="text-xs" style={{ color: 'var(--text3)' }}>
+                    {DIM_WEIGHTS[dim]}% weight
+                  </span>
+                  <span className="text-xs ml-2" style={{ color: 'var(--text3)' }}>
+                    {dimChecks.length} check{dimChecks.length !== 1 ? 's' : ''}
+                  </span>
+                  <span className="text-xs ml-1" style={{ color: 'var(--text3)' }}>
+                    {isCollapsed ? '▶' : '▼'}
+                  </span>
+                </button>
+
+                {/* Per-dimension CSV export */}
+                <button
+                  onClick={(e) => { e.stopPropagation(); exportDimCSV(allDimChecks, dim); }}
+                  className="text-xs px-2 py-1 rounded border transition-colors shrink-0"
+                  style={{ borderColor: 'var(--border)', color: 'var(--text3)', background: 'var(--bg3)' }}
+                  title={`Export ${dim} checks as CSV`}
+                >
+                  ↓ CSV
+                </button>
+              </div>
 
               {/* Checks */}
               {!isCollapsed && (
@@ -158,10 +214,7 @@ function CheckRow({ check }: { check: Check }) {
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <span
-            className="text-xs font-mono"
-            style={{ color: 'var(--text3)' }}
-          >
+          <span className="text-xs font-mono" style={{ color: 'var(--text3)' }}>
             {check.id}
           </span>
           <span className="text-sm" style={{ color: 'var(--text1)' }}>

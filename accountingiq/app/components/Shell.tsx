@@ -10,6 +10,7 @@ import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
 
 // Lazy-load views to keep initial bundle small
+const ConsentModal  = dynamic(() => import('@/app/components/ConsentModal'));
 const UploadView    = dynamic(() => import('@/app/views/UploadView'));
 const DashboardView = dynamic(() => import('@/app/views/DashboardView'));
 const ChecklistView = dynamic(() => import('@/app/views/ChecklistView'));
@@ -43,7 +44,7 @@ interface UserInfo {
 
 export default function Shell({ user }: { user: UserInfo | null }) {
   const { state, dispatch } = useApp();
-  const { currentView, analysed, uploadProgress } = state;
+  const { currentView, analysed, uploadProgress, consentGiven } = state;
 
   function navigate(view: ViewId) {
     dispatch({ type: 'SET_VIEW', view });
@@ -58,6 +59,8 @@ export default function Shell({ user }: { user: UserInfo | null }) {
 
   return (
     <div className="flex h-full" style={{ background: 'var(--bg)' }}>
+      {/* DPDPA consent modal — blocks all views until both checkboxes accepted */}
+      {!consentGiven && <ConsentModal />}
       {/* Sidebar */}
       <aside
         className="flex flex-col shrink-0 border-r"

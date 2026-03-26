@@ -91,44 +91,8 @@ function readWithEncoding(file: File): Promise<string> {
 
 export default function UploadView() {
   const { state, dispatch } = useApp();
-  const { consentGiven, files } = state;
-  if (!consentGiven) return <ConsentScreen />;
+  const { files } = state;
   return <UploadScreen files={files} state={state} dispatch={dispatch} />;
-}
-
-// ── Consent screen ────────────────────────────────────────────────────────
-
-function ConsentScreen() {
-  const { dispatch } = useApp();
-  return (
-    <div className="flex items-center justify-center min-h-full p-8 animate-fade-in">
-      <div
-        className="max-w-lg w-full rounded-xl p-8 border"
-        style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}
-      >
-        <div className="text-2xl mb-1" style={{ fontFamily: 'var(--font-dm-serif)', color: 'var(--text1)' }}>
-          Before you begin
-        </div>
-        <p className="text-sm mt-4 leading-relaxed" style={{ color: 'var(--text2)' }}>
-          AccountingIQ processes your Tally XML files{' '}
-          <strong style={{ color: 'var(--text1)' }}>entirely in your browser</strong>.
-          No data is uploaded to any server.
-        </p>
-        <ul className="mt-4 space-y-2 text-sm" style={{ color: 'var(--text2)' }}>
-          <li className="flex gap-2"><span style={{ color: 'var(--teal)' }}>✓</span> All processing happens client-side</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--teal)' }}>✓</span> No data leaves your device</li>
-          <li className="flex gap-2"><span style={{ color: 'var(--teal)' }}>✓</span> Session data is stored only in browser memory</li>
-        </ul>
-        <button
-          onClick={() => dispatch({ type: 'CONSENT_GIVEN' })}
-          className="mt-6 w-full py-2.5 rounded-lg text-sm font-semibold transition-opacity hover:opacity-90"
-          style={{ background: 'var(--teal)', color: '#000' }}
-        >
-          I understand — proceed
-        </button>
-      </div>
-    </div>
-  );
 }
 
 // ── Upload screen ─────────────────────────────────────────────────────────
@@ -146,7 +110,6 @@ function UploadScreen({
   const [scanning, setScanning] = useState(false);
   const [scanSummary, setScanSummary] = useState<{ total: number; matched: number; skipped: string[] } | null>(null);
   const [dragging, setDragging] = useState(false);
-
   const requiredLoaded = FILE_TIERS.required.every(k => files[k].hasContent);
 
   async function processFolder(fileList: FileList) {
@@ -261,6 +224,9 @@ function UploadScreen({
     dispatch({ type: 'ANALYSIS_DONE', results, parsedData });
   }
 
+
+
+
   return (
     <div className="p-8 max-w-2xl mx-auto animate-fade-in">
       <h1 className="text-2xl mb-1" style={{ fontFamily: 'var(--font-dm-serif)', color: 'var(--text1)' }}>
@@ -334,7 +300,7 @@ function UploadScreen({
           className="px-6 py-2.5 rounded-lg text-sm font-semibold transition-opacity disabled:opacity-40"
           style={{ background: 'var(--teal)', color: '#000' }}
         >
-          Run Analysis
+          {state.analysed ? 'Re-run Analysis' : 'Run Analysis'}
         </button>
         {!requiredLoaded && (
           <span className="text-xs" style={{ color: 'var(--text3)' }}>

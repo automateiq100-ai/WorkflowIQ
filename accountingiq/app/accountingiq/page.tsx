@@ -4,6 +4,15 @@ import AppProvider from '../components/AppProvider';
 import Shell from '../components/Shell';
 
 export default async function AccountingIQPage() {
+  // Local dev bypass — skip auth so you can test without Google OAuth
+  if (process.env.DEV_BYPASS_AUTH === 'true') {
+    return (
+      <AppProvider>
+        <Shell user={{ name: 'Dev User', email: 'dev@localhost', image: null }} />
+      </AppProvider>
+    );
+  }
+
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 

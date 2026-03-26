@@ -21,10 +21,17 @@ export async function proxy(request: NextRequest) {
     },
   );
 
+  const { pathname } = request.nextUrl;
+
+  // Local dev bypass — skip Supabase auth check entirely
+  if (process.env.NODE_ENV === 'development' && process.env.DEV_BYPASS_AUTH === 'true') {
+    if (pathname === '/') return NextResponse.redirect(new URL('/accountingiq', request.url));
+    return supabaseResponse;
+  }
+
   // Refresh session — must call getUser() not getSession() for security
   const { data: { user } } = await supabase.auth.getUser();
 
-  const { pathname } = request.nextUrl;
   const isPublic =
     pathname === '/login' ||
     pathname.startsWith('/auth/') ||
