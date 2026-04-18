@@ -100,7 +100,7 @@ export default function MISDashboardTab() {
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
                 <XAxis dataKey="month" tick={{ fontSize: 11, fill: 'var(--text3)' }} tickLine={false} axisLine={false} />
                 <YAxis tickFormatter={(val) => `₹${fmt(val)}`} tick={{ fontSize: 11, fill: 'var(--text3)' }} tickLine={false} axisLine={false} />
-                <RechartsTooltip formatter={(value: number) => `₹${fmt(value)}`} contentStyle={{ backgroundColor: 'var(--bg3)', borderColor: 'var(--border)', borderRadius: 8, fontSize: 12, color: 'var(--text1)' }} itemStyle={{ color: 'var(--text1)' }} />
+                <RechartsTooltip formatter={(value: any) => `₹${fmt(value)}`} contentStyle={{ backgroundColor: 'var(--bg3)', borderColor: 'var(--border)', borderRadius: 8, fontSize: 12, color: 'var(--text1)' }} itemStyle={{ color: 'var(--text1)' }} />
                 <Legend iconType="circle" wrapperStyle={{ fontSize: 11 }} />
                 <Area type="monotone" name="Revenue" dataKey="revenue" stroke="#4a9eff" strokeWidth={2} fillOpacity={1} fill="url(#colorRevenue)" />
                 <Area type="monotone" name="Expenses" dataKey="expenses" stroke="#f26b5b" strokeWidth={2} fillOpacity={1} fill="url(#colorExpenses)" />
@@ -129,7 +129,7 @@ export default function MISDashboardTab() {
                     <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                   ))}
                 </Pie>
-                <RechartsTooltip formatter={(value: number) => `₹${fmt(value)}`} contentStyle={{ backgroundColor: 'var(--bg3)', borderColor: 'var(--border)', borderRadius: 8, fontSize: 12 }} />
+                <RechartsTooltip formatter={(value: any) => `₹${fmt(value)}`} contentStyle={{ backgroundColor: 'var(--bg3)', borderColor: 'var(--border)', borderRadius: 8, fontSize: 12 }} />
               </PieChart>
             </ResponsiveContainer>
           </div>
@@ -155,7 +155,7 @@ export default function MISDashboardTab() {
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
                 <XAxis dataKey="month" tick={{ fontSize: 11, fill: 'var(--text3)' }} tickLine={false} axisLine={false} />
                 <YAxis tickFormatter={(val) => `₹${fmt(val)}`} tick={{ fontSize: 11, fill: 'var(--text3)' }} tickLine={false} axisLine={false} />
-                <RechartsTooltip formatter={(value: number) => `₹${fmt(value)}`} cursor={{ fill: 'var(--bg4)', opacity: 0.4 }} contentStyle={{ backgroundColor: 'var(--bg3)', borderColor: 'var(--border)', borderRadius: 8, fontSize: 12 }} />
+                <RechartsTooltip formatter={(value: any) => `₹${fmt(value)}`} cursor={{ fill: 'var(--bg4)', opacity: 0.4 }} contentStyle={{ backgroundColor: 'var(--bg3)', borderColor: 'var(--border)', borderRadius: 8, fontSize: 12 }} />
                 <Bar name="Net Profit" dataKey="profit" fill="#0fd4a0" radius={[4, 4, 0, 0]} barSize={24} />
               </BarChart>
             </ResponsiveContainer>
@@ -195,7 +195,7 @@ export default function MISDashboardTab() {
                   <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="var(--border)" />
                   <XAxis type="number" hide />
                   <YAxis type="category" dataKey="category" tick={{ fontSize: 11, fill: 'var(--text3)' }} tickLine={false} axisLine={false} width={70} />
-                  <RechartsTooltip formatter={(value: number) => `₹${fmt(value)}`} cursor={{ fill: 'var(--bg4)', opacity: 0.4 }} contentStyle={{ backgroundColor: 'var(--bg3)', borderColor: 'var(--border)', borderRadius: 8, fontSize: 12 }} />
+                  <RechartsTooltip formatter={(value: any) => `₹${fmt(value)}`} cursor={{ fill: 'var(--bg4)', opacity: 0.4 }} contentStyle={{ backgroundColor: 'var(--bg3)', borderColor: 'var(--border)', borderRadius: 8, fontSize: 12 }} />
                   <Legend iconType="circle" wrapperStyle={{ fontSize: 11, paddingTop: 10 }} />
                   <Bar name="Debtors" dataKey="debtors" fill="#4a9eff" radius={[0, 4, 4, 0]} barSize={12} />
                   <Bar name="Creditors" dataKey="creditors" fill="#f26b5b" radius={[0, 4, 4, 0]} barSize={12} />
