@@ -2,7 +2,10 @@ import OpenAI from 'openai';
 import { NextRequest, NextResponse } from 'next/server';
 import type { DimKey } from '@/lib/types';
 
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// Initialize client inside handler or lazily to avoid build-time errors when key is missing
+function getClient() {
+  return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+}
 
 // ── System prompt — kept exactly as specified ──────────────────────────────
 
@@ -152,6 +155,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const body: AIRequestBody = await req.json();
+    const client = getClient();
 
     const response = await client.chat.completions.create({
       model: 'gpt-4o',
