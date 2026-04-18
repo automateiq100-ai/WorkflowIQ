@@ -11,7 +11,7 @@ export default async function PortalPage() {
 
   const admin = createAdmin(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    process.env.SUPABASE_SERVICE_KEY!,
   );
   const { data: profile } = await admin
     .from('user_profiles')

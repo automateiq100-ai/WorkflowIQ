@@ -4,7 +4,7 @@ import type { ParsedData, ChunkedStats, HealthSignal } from './types';
 
 function fmtINR(n: number): string {
   const abs = Math.abs(n);
-  const sign = n < 0 ? '-' : '';
+  const sign = n < 0 ? '−' : '';
   if (abs >= 10_000_000) return `${sign}₹${(abs / 10_000_000).toFixed(2)} Cr`;
   if (abs >= 100_000)    return `${sign}₹${(abs / 100_000).toFixed(2)} L`;
   return `${sign}₹${abs.toLocaleString('en-IN')}`;
@@ -55,14 +55,14 @@ export function generateHealthSignals(
     }
   }
 
-  // ── Liquidity ─────────────────────────────────────────────────────────
-  if (ca > 0 || cl > 0) {
-    const currentRatio = cl > 0 ? ca / cl : null;
+  // ── Liquidity (Bug 1: preserve signs, handle negative CA) ──────────────
+  if (ca !== 0 || cl !== 0) {
     signals.push({
       category: 'Liquidity',
       signal: 'Current Assets',
       value: fmtINR(ca),
-      note: 'From Balance Sheet',
+      // Bug 1: flag anomalous negative CA
+      note: ca < 0 ? 'ANOMALY: Current Assets negative — structurally impossible, check Tally setup' : 'From Balance Sheet',
     });
     signals.push({
       category: 'Liquidity',
@@ -70,7 +70,17 @@ export function generateHealthSignals(
       value: fmtINR(cl),
       note: 'From Balance Sheet',
     });
-    if (currentRatio !== null) {
+
+    // Bug 1: don't compute current ratio when CA is negative
+    if (ca < 0) {
+      signals.push({
+        category: 'Liquidity',
+        signal: 'Current Ratio',
+        value: 'N/A',
+        note: 'Cannot compute — Current Assets negative',
+      });
+    } else if (cl !== 0) {
+      const currentRatio = ca / Math.abs(cl);
       signals.push({
         category: 'Liquidity',
         signal: 'Current Ratio',
@@ -78,6 +88,7 @@ export function generateHealthSignals(
         note: currentRatio >= 1.5 ? 'Good liquidity' : currentRatio >= 1 ? 'Adequate but tight' : 'Liquidity risk — current liabilities exceed assets',
       });
     }
+
     signals.push({
       category: 'Liquidity',
       signal: 'Working Capital',
@@ -86,31 +97,37 @@ export function generateHealthSignals(
     });
   }
 
-  // ── Balances ──────────────────────────────────────────────────────────
-  if (bankBal > 0) {
+  // ── Balances (Bug 1: preserve signs, flag anomalies) ──────────────────
+  if (bankBal !== 0) {
     signals.push({
       category: 'Balances',
       signal: 'Cash & Bank Balance',
       value: fmtINR(bankBal),
-      note: 'Closing balance per Balance Sheet',
+      note: bankBal < 0
+        ? 'ANOMALY: Bank balance negative — possible overdraft or data error'
+        : 'Closing balance per Balance Sheet',
     });
   }
 
-  if (debtorBal > 0) {
+  if (debtorBal !== 0) {
     signals.push({
       category: 'Balances',
       signal: 'Trade Receivables (Debtors)',
       value: fmtINR(debtorBal),
-      note: revenue > 0 ? `${pct(debtorBal, revenue)} of revenue — monitor for overdue` : 'From Balance Sheet',
+      note: debtorBal < 0
+        ? 'ANOMALY: Debtors negative — customer overpayment or Dr/Cr flip'
+        : revenue > 0 ? `${pct(debtorBal, revenue)} of revenue — monitor for overdue` : 'From Balance Sheet',
     });
   }
 
-  if (creditorBal > 0) {
+  if (creditorBal !== 0) {
     signals.push({
       category: 'Balances',
       signal: 'Trade Payables (Creditors)',
       value: fmtINR(creditorBal),
-      note: 'Outstanding supplier balances',
+      note: creditorBal > 0
+        ? 'ANOMALY: Creditors positive (Dr balance) — possible overpayment or misposting'
+        : 'Outstanding supplier balances',
     });
   }
 

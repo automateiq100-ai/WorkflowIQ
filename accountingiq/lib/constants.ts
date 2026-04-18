@@ -1,4 +1,4 @@
-import type { DimKey, FileKey, ViewId } from './types';
+import type { DimKey, FileKey, ViewId, ModuleId } from './types';
 
 export const DIM_WEIGHTS: Record<DimKey, number> = {
   A: 5, B: 18, C: 18, D: 22, E: 18, F: 7, G: 2, H: 10,
@@ -65,15 +65,34 @@ export const FILE_DESCRIPTIONS: Record<FileKey, string> = {
 };
 
 export const VIEWS: { id: ViewId; label: string; icon: string; }[] = [
-  { id: 'dashboard', label: 'Dashboard',       icon: '⬡' },
-  { id: 'checklist', label: 'Checklist',        icon: '✓' },
-  { id: 'insights',  label: 'Key Insights',     icon: '◈' },
-  { id: 'health',    label: 'Financial Health', icon: '⬟' },
-  { id: 'flags',     label: 'Anomaly Flags',    icon: '⚑' },
-  { id: 'upload',    label: 'Upload Files',     icon: '⬆' },
-  { id: 'profile',   label: 'Company Profile',  icon: '◎' },
-  { id: 'reports',   label: 'Reports',          icon: '▤' },
+  { id: 'upload',        label: 'Upload Files',     icon: '⬆' },
+  { id: 'profile',       label: 'Company Profile',  icon: '◎' },
+  { id: 'dashboard',     label: 'Dashboard',        icon: '⬡' },
+  { id: 'checklist',     label: 'Checklist',        icon: '✓' },
+  { id: 'insights',      label: 'Key Insights',     icon: '◈' },
+  { id: 'aiAnalysis',    label: 'AI Analysis',      icon: '⚡' },
+  { id: 'health',        label: 'Financial Health', icon: '⬟' },
+  { id: 'flags',         label: 'Anomaly Flags',    icon: '⚑' },
+  { id: 'reports',       label: 'Reports',          icon: '▤' },
+  { id: 'rules',         label: 'Rules Engine',     icon: '⚙' },
+  { id: 'mis-setup',     label: 'MIS Setup',        icon: '⊞' },
+  { id: 'mis-report',    label: 'MIS Report',       icon: '▦' },
+  { id: 'reconciliation',label: 'Reconciliation',   icon: '⇌' },
 ];
+
+
+export const MODULE_VIEWS: Record<ModuleId, ViewId[]> = {
+  accounting: ['upload', 'profile', 'dashboard', 'checklist', 'insights', 'aiAnalysis', 'health', 'flags', 'reports', 'rules'],
+  mis: ['mis-setup', 'mis-report'],
+  reconciliation: ['reconciliation'],
+};
+
+export const MODULES: { id: ModuleId; label: string; icon: string }[] = [
+  { id: 'accounting',    label: 'Account Health',  icon: '⬡' },
+  { id: 'mis',           label: 'MIS Report',      icon: '▦' },
+  { id: 'reconciliation',label: 'Reconciliation',  icon: '⇌' },
+];
+
 
 export const GRADE_THRESHOLDS = [
   { min: 90, label: 'A+', color: 'var(--teal)' },

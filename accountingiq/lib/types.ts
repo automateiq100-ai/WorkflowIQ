@@ -5,9 +5,15 @@ export type FileKey =
   | 'sales' | 'purchase' | 'bills' | 'payables' | 'cashflow'   // conditional
   | 'faregister' | 'stock' | 'bankrecon';                       // optional
 
+export type ModuleId = 'accounting' | 'mis' | 'reconciliation';
+
 export type ViewId =
   | 'dashboard' | 'checklist' | 'insights' | 'health'
-  | 'flags' | 'upload' | 'profile' | 'reports';
+  | 'flags' | 'upload' | 'profile' | 'reports' | 'rules'
+  | 'mis-setup' | 'mis-report'
+  | 'reconciliation' | 'aiAnalysis';
+
+export type Theme = 'dark' | 'light';
 
 export type CheckStatus = 'pass' | 'partial' | 'fail' | 'missing' | 'uncertain' | 'na';
 export type Urgency = 'critical' | 'high' | 'medium' | 'positive';
@@ -59,6 +65,10 @@ export interface Check {
   pts: number;
   max: number;
   note: string;
+  /** Label shown when check passes (defaults to name) */
+  passLabel?: string;
+  /** Label shown when check fails/partial — describes the finding, not the rule */
+  failLabel?: string;
 }
 
 export interface AnalysisResults {
@@ -90,6 +100,10 @@ export interface ParsedData {
   pfLedgerFound: boolean;
   salesLedgersNoRate: number;
   gstDiffPct: number;
+  /** Names and amounts of suspense/misc ledgers for richer notes (Bug 4) */
+  suspenseLedgers: Array<{ name: string; amount: number }>;
+  /** Near-duplicate ledger pair names for fail labels */
+  dupPairDetails: Array<[string, string]>;
 
   // P&L
   revenue: number;
@@ -99,7 +113,7 @@ export interface ParsedData {
   depAmt: number;
   openingStock: number;
 
-  // Balance Sheet
+  // Balance Sheet (signed values — Bug 1)
   ca: number;
   cl: number;
   bankBal: number;
@@ -108,6 +122,8 @@ export interface ParsedData {
   closingStock: number;
   fixedAssets: number;
   bsCashBankTotal: number;
+  /** Net Profit read directly from BS "Profit & Loss A/c" line (Bug 2) */
+  bsNetProfit: number | null;
 
   // Group Summary
   salesWrongGroup: boolean;
@@ -132,6 +148,27 @@ export interface CompanyProfile {
   fullFY: boolean;
 }
 
+export interface Rule {
+  id: string;
+  name: string;
+  description: string;
+  dimension: DimKey;
+  severity: 'critical' | 'high' | 'medium' | 'info';
+  enabled: boolean;
+  builtIn: boolean;        // built-in rules cannot be deleted
+  checkId?: string;       // links to an existing check in engine.ts
+  condition?: string;     // human-readable condition description
+  remediation: string;   // what to do to fix it
+}
+
+export type MISSector = 'Manufacturing' | 'Trading' | 'Services' | 'Retail' | 'Construction' | 'Financial Services' | 'Hospitality' | 'IT/SaaS';
+
+export interface MISSetup {
+  sector: MISSector | null;
+  hasBudget: boolean;
+  selectedMetricIds: string[];  // IDs of metrics user has selected
+}
+
 export interface AppState {
   files: Record<FileKey, FileEntry>;
   parsedData: Partial<ParsedData>;
@@ -139,8 +176,17 @@ export interface AppState {
   filters: CompanyProfile;
   analysed: boolean;
   currentView: ViewId;
+  currentModule: ModuleId;
+  theme: Theme;
   consentGiven: boolean;
+  /** Separate consent for AI analysis — data sent to OpenAI (Workstream 2) */
+  aiConsentGiven: boolean;
   uploadProgress: string | null;   // chunked parse progress message
+  misSetup: MISSetup;
+  /** Cached AI analysis response */
+  aiAnalysis: AIResponse | null;
+  /** Hash of input data used to generate cached AI analysis */
+  aiAnalysisHash: string | null;
 }
 
 export interface Insight {
@@ -167,4 +213,57 @@ export interface AnomalyFlag {
   title: string;
   detail: string;
   count?: number;
+}
+
+// ── AI Analysis types (Workstream 2) ──
+
+export interface AIRequest {
+  score: number;
+  grade: string;
+  dimScores: Record<DimKey, number>;
+  findings: Array<{
+    id: string;
+    dim: DimKey;
+    name: string;
+    status: CheckStatus;
+    note: string;
+    max: number;
+  }>;
+  financials: {
+    revenue: number;
+    netProfit: number;
+    currentAssets: number;
+    currentLiabilities: number;
+    bankBalance: number;
+    debtorBalance: number;
+    creditorBalance: number;
+    suspenseBalance: number;
+    fixedAssets: number;
+    closingStock: number;
+  };
+  profile: CompanyProfile;
+  dataNotes: {
+    filesUploaded: number;
+    dayBookVoucherCount: number;
+    distinctMonthsInData: number;
+    scoreCapped: boolean;
+  };
+}
+
+export interface AIResponse {
+  executiveSummary: string;
+  rootCauses: Array<{
+    theme: string;
+    findingIds: string[];
+    explanation: string;
+  }>;
+  actions: Array<{
+    task: string;
+    impact: 'critical' | 'high' | 'medium' | 'low';
+    effort: 'S' | 'M' | 'L';
+    category: 'Chart of Accounts' | 'Statutory' | 'Data Integrity' | 'Reconciliation' | 'Reporting';
+    resolvesCheckIds: string[];
+  }>;
+  financialCommentary: string;
+  preflight: string[];
 }

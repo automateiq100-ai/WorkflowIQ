@@ -1,14 +1,16 @@
 'use strict';
 const path = require('path');
 
-// Load env vars from both app subdirectories
-require('dotenv').config({ path: path.join(__dirname, 'accountingiq', '.env.local') });
-require('dotenv').config({ path: path.join(__dirname, 'researchiq', '.env') });
+// Load environment variables from root .env
+require('dotenv').config();
 
-// Env var aliases — ResearchIQ uses different names than AccountingIQ
-process.env.SUPABASE_URL         = process.env.SUPABASE_URL         || process.env.NEXT_PUBLIC_SUPABASE_URL;
-process.env.SUPABASE_ANON_KEY    = process.env.SUPABASE_ANON_KEY    || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-process.env.SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+// Env var aliases — Cross-populate between sub-app name conventions
+process.env.SUPABASE_URL              = process.env.SUPABASE_URL              || process.env.NEXT_PUBLIC_SUPABASE_URL;
+process.env.SUPABASE_ANON_KEY         = process.env.SUPABASE_ANON_KEY         || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+process.env.SUPABASE_SERVICE_KEY      = process.env.SUPABASE_SERVICE_KEY      || process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+process.env.NEXT_PUBLIC_SUPABASE_URL      = process.env.NEXT_PUBLIC_SUPABASE_URL      || process.env.SUPABASE_URL;
+process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
 
 const next    = require('next');
 const express = require('express');

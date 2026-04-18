@@ -73,6 +73,11 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     ...(grpResult ?? {}),
   };
 
+  // Bug 2 fix: prefer bsNetProfit from Balance Sheet over P&L-derived netProfit
+  if (bsResult?.bsNetProfit != null && bsResult.bsNetProfit !== 0) {
+    parsedData.netProfit = bsResult.bsNetProfit;
+  }
+
   const {
     tbLedgers = [], suspenseCount = 0, dupPairs = 0,
     capFound = false, bankFound = false, cashFound = false,
@@ -83,6 +88,7 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     revenue = 0, netProfit = 0, depFound = false, depAmt = 0, openingStock = 0,
     closingStock = 0, fixedAssets = 0, bsCashBankTotal = 0,
     salesWrongGroup = false, purchaseWrongGroup = false, dutiesUnderExpense = false,
+    suspenseLedgers = [], dupPairDetails = [],
   } = parsedData as Partial<ParsedData>;
 
   const {
@@ -122,6 +128,9 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
   const monthAvg = monthVals.length > 0 ? monthVals.reduce((a, b) => a + b, 0) / monthVals.length : 0;
   const monthMax = monthVals.length > 0 ? Math.max(...monthVals) : 0;
 
+  // Distinct months for H8 NA check (Bug 5)
+  const distinctMonths = Object.keys(monthCounts).length;
+
   // Gap analysis
   const dates = (dbStats?.dateSet ?? []).map(d => {
     const y = parseInt(d.slice(0,4)), m = parseInt(d.slice(4,6))-1, day = parseInt(d.slice(6,8));
@@ -134,8 +143,9 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
   }
 
   const checks: Check[] = [];
-  function c(id: string, dim: DimKey, name: string, result: ReturnType<typeof pass>) {
-    checks.push({ id, dim, name, ...result });
+  // Bug 4: helper that attaches failLabel to checks
+  function c(id: string, dim: DimKey, name: string, result: ReturnType<typeof pass>, failLabel?: string) {
+    checks.push({ id, dim, name, ...result, failLabel });
   }
 
   // ────── A: Data Completeness ──────
@@ -164,48 +174,68 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     : hasOpeningBal ? pass(2, 2, 'Opening balances found') : uncertain(2, 'Opening balances not detected'));
 
   // ────── B: Ledger Structure ──────
-  c('B1', 'B', 'Zero Suspense / Miscellaneous ledgers',
+  // Bug 4: richer fail notes with ledger name and amount from suspenseLedgers
+  const suspenseNote = suspenseCount === 0
+    ? 'No suspense ledgers'
+    : suspenseLedgers.length > 0
+      ? `${suspenseCount} suspense/misc ledger${suspenseCount > 1 ? 's' : ''}: ${suspenseLedgers.map(s => `₹${fmt(s.amount)} in '${s.name}'`).join(', ')}`
+      : `${suspenseCount} suspense/misc ledger${suspenseCount > 1 ? 's' : ''} found`;
+  c('B1', 'B', 'No suspense or miscellaneous ledgers',
     !hasTB ? uncertain(8, 'Requires Trial Balance')
     : suspenseCount === 0 ? pass(8, 8, 'No suspense ledgers')
-    : fail(8, `${suspenseCount} suspense/misc ledger${suspenseCount > 1 ? 's' : ''} found`));
+    : fail(8, suspenseNote),
+    'Suspense / Miscellaneous ledgers have non-zero balance');
 
-  c('B2', 'B', 'No duplicate / near-duplicate ledger names',
+  // Bug 4: richer B2 fail note with pair names
+  const dupNote = dupPairs === 0
+    ? 'No duplicates detected'
+    : `${dupPairs} near-duplicate ledger pair${dupPairs > 1 ? 's' : ''}: ${dupPairDetails.slice(0, 3).map(([a,b]) => `"${a}" ↔ "${b}"`).join(', ')}${dupPairs > 3 ? '…' : ''}`;
+  c('B2', 'B', 'No duplicate or near-duplicate ledger names',
     !hasTB ? uncertain(6, 'Requires Trial Balance')
     : dupPairs === 0 ? pass(6, 6, 'No duplicates detected')
-    : fail(6, `${dupPairs} near-duplicate ledger pair${dupPairs > 1 ? 's' : ''} detected`));
+    : fail(6, dupNote),
+    'Near-duplicate ledger pairs detected');
 
   c('B3', 'B', 'Capital / owner equity ledger exists',
     !hasTB ? uncertain(5, 'Requires Trial Balance')
-    : capFound ? pass(5, 5, 'Capital ledger found') : fail(5, 'No capital/owner equity ledger found'));
+    : capFound ? pass(5, 5, 'Capital ledger found') : fail(5, 'No capital/owner equity ledger found'),
+    'No Capital or owner equity ledger found');
 
   c('B4', 'B', 'Sales ledgers under Sales Accounts group',
     !hasGrp ? uncertain(4, 'Requires Group Summary')
-    : !salesWrongGroup ? pass(4, 4, 'Sales ledgers correctly grouped') : fail(4, 'Sales ledgers under wrong group'));
+    : !salesWrongGroup ? pass(4, 4, 'Sales ledgers correctly grouped') : fail(4, 'Sales ledgers under wrong group'),
+    'Sales ledgers classified under wrong Tally group');
 
   c('B5', 'B', 'Purchase ledgers under Purchase Accounts',
     !hasGrp ? uncertain(4, 'Requires Group Summary')
-    : !purchaseWrongGroup ? pass(4, 4, 'Purchase ledgers correctly grouped') : fail(4, 'Purchase ledgers under wrong group'));
+    : !purchaseWrongGroup ? pass(4, 4, 'Purchase ledgers correctly grouped') : fail(4, 'Purchase ledgers under wrong group'),
+    'Purchase ledgers classified under wrong Tally group');
 
   c('B6', 'B', 'Bank ledgers under Bank Accounts group',
     !hasTB ? uncertain(3, 'Requires Trial Balance')
-    : bankFound ? pass(3, 3, 'Bank ledger found') : fail(3, 'No bank ledger detected'));
+    : bankFound ? pass(3, 3, 'Bank ledger found') : fail(3, 'No bank ledger detected'),
+    'No Bank Account ledger found');
 
   c('B7', 'B', 'Cash ledger under Cash-in-Hand group',
     !hasTB ? uncertain(3, 'Requires Trial Balance')
-    : cashFound ? pass(3, 3, 'Cash ledger found') : fail(3, 'No cash ledger detected'));
+    : cashFound ? pass(3, 3, 'Cash ledger found') : fail(3, 'No cash ledger detected'),
+    'No Cash-in-Hand ledger found');
 
   c('B8', 'B', 'Debtors under Sundry Debtors group',
     !hasTB ? uncertain(3, 'Requires Trial Balance')
-    : debtorFound ? pass(3, 3, 'Sundry Debtors ledger found') : fail(3, 'No Sundry Debtors ledger found'));
+    : debtorFound ? pass(3, 3, 'Sundry Debtors ledger found') : fail(3, 'No Sundry Debtors ledger found'),
+    'No Sundry Debtors ledger found');
 
   c('B9', 'B', 'Creditors under Sundry Creditors group',
     !hasTB ? uncertain(3, 'Requires Trial Balance')
-    : creditorFound ? pass(3, 3, 'Sundry Creditors ledger found') : fail(3, 'No Sundry Creditors ledger found'));
+    : creditorFound ? pass(3, 3, 'Sundry Creditors ledger found') : fail(3, 'No Sundry Creditors ledger found'),
+    'No Sundry Creditors ledger found');
 
   c('B10', 'B', 'Duties & Taxes ledgers not under Expenses',
     !(gstApplicable || tdsApplicable) ? na('Not applicable (GST/TDS not selected)')
     : !hasGrp ? uncertain(3, 'Requires Group Summary')
-    : !dutiesUnderExpense ? pass(3, 3, 'Duties & Taxes correctly grouped') : fail(3, 'Duties & Taxes ledgers under Expenses'));
+    : !dutiesUnderExpense ? pass(3, 3, 'Duties & Taxes correctly grouped') : fail(3, 'Duties & Taxes ledgers under Expenses'),
+    'Duties & Taxes ledgers misclassified under Expenses');
 
   // ────── C: Voucher Integrity ──────
   c('C1', 'C', 'All vouchers have voucher numbers',
@@ -214,35 +244,41 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     : missingVno === 0 ? pass(6, 6, 'All vouchers numbered')
     : missingVno === totalVouchers ? uncertain(6, 'All vouchers missing numbers — possible parsing issue')
     : missingVno < 5 ? partial(2, 6, `${missingVno} vouchers missing numbers`)
-    : fail(6, `${missingVno} of ${totalVouchers} vouchers missing numbers`));
+    : fail(6, `${missingVno} of ${totalVouchers} vouchers missing numbers`),
+    'Vouchers with missing voucher numbers');
 
   c('C2', 'C', 'No duplicate voucher numbers',
     !hasDaybook ? uncertain(6, 'Requires DayBook')
     : dupVouchers === 0 ? pass(6, 6, 'No duplicate voucher numbers')
-    : fail(6, `${dupVouchers} duplicate voucher number${dupVouchers > 1 ? 's' : ''} found`));
+    : fail(6, `${dupVouchers} duplicate voucher number${dupVouchers > 1 ? 's' : ''} found`),
+    'Duplicate voucher numbers in DayBook');
 
   c('C3', 'C', 'All trade vouchers have party name',
     !hasDaybook ? uncertain(5, 'Requires DayBook')
     : missingParty === 0 ? pass(5, 5, 'All trade vouchers have party names')
     : missingParty < 5 ? partial(2, 5, `${missingParty} trade vouchers missing party name`)
-    : fail(5, `${missingParty} trade vouchers missing party name`));
+    : fail(5, `${missingParty} trade vouchers missing party name`),
+    'Trade vouchers missing party names');
 
   c('C4', 'C', 'All entry dates within financial year',
     !hasDaybook ? uncertain(4, 'Requires DayBook')
     : outOfFY === 0 ? pass(4, 4, 'All dates within FY')
-    : fail(4, `${outOfFY} vouchers have dates outside financial year`));
+    : fail(4, `${outOfFY} vouchers have dates outside financial year`),
+    'Voucher dates outside financial year');
 
   c('C5', 'C', 'No wrong-type postings',
     !hasDaybook ? uncertain(6, 'Requires DayBook')
     : wrongType === 0 ? pass(6, 6, 'No wrong-type postings detected')
-    : fail(6, `${wrongType} wrong-type postings detected`));
+    : fail(6, `${wrongType} wrong-type postings detected`),
+    'Wrong-type voucher postings detected');
 
   c('C6', 'C', 'Zero-amount vouchers below 2%',
     !hasDaybook ? uncertain(3, 'Requires DayBook')
     : totalVouchers === 0 ? uncertain(3, 'No vouchers parsed')
     : zeroPct > 0.99 ? uncertain(3, 'Almost all vouchers are zero-amount — possible parsing issue')
     : zeroPct < 0.02 ? pass(3, 3, `${(zeroPct*100).toFixed(1)}% zero-amount vouchers`)
-    : fail(3, `${(zeroPct*100).toFixed(1)}% zero-amount vouchers (threshold: 2%)`));
+    : fail(3, `${(zeroPct*100).toFixed(1)}% zero-amount vouchers (threshold: 2%)`),
+    'Excessive zero-amount vouchers');
 
   c('C7', 'C', 'No voucher references absent from ledger',
     hasDaybook && hasTB ? pass(4, 4, 'DayBook and Trial Balance both present')
@@ -250,7 +286,7 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
 
   // ────── D: Arithmetical Accuracy ──────
   const tbDr = hasTB ? tbLedgers.filter(l => l.dr).reduce((s,l) => s+l.closing, 0) : 0;
-  const tbCr = hasTB ? tbLedgers.filter(l => !l.dr).reduce((s,l) => s+l.closing, 0) : 0;
+  const tbCr = hasTB ? tbLedgers.filter(l => !l.dr).reduce((s,l) => s+Math.abs(l.closing), 0) : 0;
   const tbDiff = Math.abs(tbDr - tbCr);
   const tbDiffPct = tbCr > 0 ? tbDiff / tbCr : 1;
 
@@ -259,31 +295,37 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     : tbCr === 0 ? uncertain(10, 'Could not extract Dr/Cr totals')
     : tbDiffPct < 0.001 ? pass(10, 10, `Dr = Cr ≈ ₹${fmt(tbCr)} (diff: ₹${fmt(tbDiff)})`)
     : tbDiffPct < 0.01  ? partial(5, 10, `Minor imbalance: ₹${fmt(tbDiff)} (${(tbDiffPct*100).toFixed(2)}%)`)
-    : fail(10, `TB imbalance: ₹${fmt(tbDiff)} (${(tbDiffPct*100).toFixed(2)}%)`));
+    : fail(10, `TB imbalance: ₹${fmt(tbDiff)} (${(tbDiffPct*100).toFixed(2)}%)`),
+    'Trial Balance does not tally — Dr ≠ Cr');
 
   c('D2', 'D', 'P&L net profit = BS Profit & Loss A/c',
     hasPL && hasBS ? pass(8, 8, `Net profit: ₹${fmt(netProfit)}`)
-    : missing(8, 'Requires P&L and Balance Sheet'));
+    : missing(8, 'Requires P&L and Balance Sheet'),
+    'P&L net profit does not match Balance Sheet');
 
   c('D3', 'D', 'Balance Sheet balances (Assets = Liab + Cap)',
     hasBS ? pass(8, 8, 'Balance Sheet present — structural balance assumed')
-    : missing(8, 'Balance Sheet not uploaded'));
+    : missing(8, 'Balance Sheet not uploaded'),
+    'Balance Sheet equation broken — Assets ≠ Liabilities + Equity');
 
   c('D4', 'D', 'TB total ≈ BS total assets',
     hasTB && hasBS ? pass(4, 4, `TB total: ₹${fmt(tbTotal)}`)
-    : uncertain(4, 'Requires Trial Balance and Balance Sheet'));
+    : uncertain(4, 'Requires Trial Balance and Balance Sheet'),
+    'Trial Balance total does not match Balance Sheet total');
 
   c('D5', 'D', 'Closing stock: P&L = BS figure',
     !isGoods ? na('Not applicable (goods not selected in profile)')
     : closingStock > 0 ? pass(5, 5, `Closing stock: ₹${fmt(closingStock)}`)
-    : fail(5, 'No closing stock found in Balance Sheet'));
+    : fail(5, 'No closing stock found in Balance Sheet'),
+    'Closing stock mismatch between P&L and Balance Sheet');
 
   // ────── E: Statutory Accuracy ──────
   c('E1', 'E', 'Output GST ledger exists',
     !gstApplicable ? na('Not applicable (GST not selected)')
     : !hasTB ? uncertain(5, 'Requires Trial Balance')
     : outputGSTAmt > 0 ? pass(5, 5, `Output GST: ₹${fmt(outputGSTAmt)}`)
-    : fail(5, 'No output GST ledger found'));
+    : fail(5, 'No output GST ledger found'),
+    'No Output GST ledger found');
 
   c('E2a', 'E', 'All sales ledgers have GST rate specified',
     !gstApplicable ? na('Not applicable')
@@ -295,26 +337,30 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     : !hasTB ? uncertain(4, 'Requires Trial Balance')
     : gstDiffPct < 0.05 ? pass(4, 4, `GST variance: ${(gstDiffPct*100).toFixed(1)}%`)
     : gstDiffPct < 0.15 ? partial(2, 4, `GST variance: ${(gstDiffPct*100).toFixed(1)}% (>5%)`)
-    : fail(4, `GST variance: ${(gstDiffPct*100).toFixed(1)}% — exceeds 15% threshold`));
+    : fail(4, `GST variance: ${(gstDiffPct*100).toFixed(1)}% — exceeds 15% threshold`),
+    'Output GST amount does not match computed total');
 
   c('E3', 'E', 'Input ITC ledgers exist',
     !gstApplicable ? na('Not applicable')
     : !hasTB ? uncertain(3, 'Requires Trial Balance')
     : inputITCAmt > 0 ? pass(3, 3, `Input ITC: ₹${fmt(inputITCAmt)}`)
-    : fail(3, 'No Input ITC/CGST/SGST/IGST ledger found'));
+    : fail(3, 'No Input ITC/CGST/SGST/IGST ledger found'),
+    'No Input ITC ledger found');
 
   c('E4', 'E', 'Input ITC does not exceed Output GST',
     !gstApplicable ? na('Not applicable')
     : !hasTB ? uncertain(3, 'Requires Trial Balance')
     : outputGSTAmt === 0 ? uncertain(3, 'Output GST not found')
     : inputITCAmt <= outputGSTAmt ? pass(3, 3, `ITC ₹${fmt(inputITCAmt)} ≤ Output GST ₹${fmt(outputGSTAmt)}`)
-    : fail(3, `ITC ₹${fmt(inputITCAmt)} exceeds Output GST ₹${fmt(outputGSTAmt)}`));
+    : fail(3, `ITC ₹${fmt(inputITCAmt)} exceeds Output GST ₹${fmt(outputGSTAmt)}`),
+    'Input ITC exceeds Output GST');
 
   c('E5', 'E', 'TDS Payable ledger exists',
     !tdsApplicable ? na('Not applicable')
     : !hasTB ? uncertain(5, 'Requires Trial Balance')
     : tdsLedgerFound ? pass(5, 5, 'TDS Payable ledger found')
-    : fail(5, 'No TDS Payable ledger found'));
+    : fail(5, 'No TDS Payable ledger found'),
+    'No TDS Payable ledger found');
 
   c('E6', 'E', 'TDS amount reasonable vs payments',
     !tdsApplicable ? na('Not applicable')
@@ -324,25 +370,29 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     !hasEmployees ? na('Not applicable')
     : !hasTB ? uncertain(4, 'Requires Trial Balance')
     : pfLedgerFound ? pass(4, 4, 'PF/ESI Payable ledger found')
-    : fail(4, 'No PF/ESI Payable ledger found'));
+    : fail(4, 'No PF/ESI Payable ledger found'),
+    'No PF/ESI Payable ledger found');
 
   c('E8', 'E', 'Depreciation entry exists in P&L',
     !hasFAfilter ? na('Not applicable')
     : !hasPL ? uncertain(4, 'Requires P&L')
     : depFound ? pass(4, 4, `Depreciation entry found: ₹${fmt(depAmt)}`)
-    : fail(4, 'No depreciation entry in P&L'));
+    : fail(4, 'No depreciation entry in P&L'),
+    'No depreciation entry in P&L');
 
   c('E9', 'E', 'Depreciation amount reasonable',
     !hasFAfilter ? na('Not applicable')
     : !(hasPL && hasBS) ? uncertain(3, 'Requires P&L and Balance Sheet')
     : depAmt > 0 && fixedAssets > 0 && depAmt < fixedAssets ? pass(3, 3, `Dep ₹${fmt(depAmt)} < FA ₹${fmt(fixedAssets)}`)
-    : fail(3, depAmt >= fixedAssets ? 'Depreciation exceeds Fixed Assets value' : 'Depreciation amount is zero'));
+    : fail(3, depAmt >= fixedAssets ? 'Depreciation exceeds Fixed Assets value' : 'Depreciation amount is zero'),
+    'Depreciation amount unreasonable');
 
   c('E10', 'E', 'Closing stock in Balance Sheet',
     !isGoods ? na('Not applicable')
     : !hasBS ? uncertain(4, 'Requires Balance Sheet')
     : closingStock > 0 ? pass(4, 4, `Closing stock: ₹${fmt(closingStock)}`)
-    : fail(4, 'No closing stock in Balance Sheet'));
+    : fail(4, 'No closing stock in Balance Sheet'),
+    'No closing stock in Balance Sheet');
 
   c('E11', 'E', 'Stock equation: Op + Pur − COGS ≈ Closing',
     !isGoods ? na('Not applicable')
@@ -361,7 +411,8 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     : dates.length < 2 ? uncertain(4, 'Insufficient date data')
     : maxGapDays <= 30 ? pass(4, 4, `Max gap: ${Math.round(maxGapDays)} days`)
     : maxGapDays <= 60 ? partial(2, 4, `Max gap: ${Math.round(maxGapDays)} days (>30 days)`)
-    : fail(4, `Max gap: ${Math.round(maxGapDays)} days (>60 days)`));
+    : fail(4, `Max gap: ${Math.round(maxGapDays)} days (>60 days)`),
+    'Date gap over 30 days in active months');
 
   c('F2', 'F', 'Books current — entries up to FY end',
     !fullFY ? na('Not applicable (partial FY)')
@@ -373,21 +424,24 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     : totalVouchers === 0 ? uncertain(4, 'No vouchers parsed')
     : narratedPct >= 0.90 ? pass(4, 4, `${(narratedPct*100).toFixed(1)}% vouchers have narration`)
     : narratedPct >= 0.70 ? partial(2, 4, `${(narratedPct*100).toFixed(1)}% narrated (threshold: 90%)`)
-    : fail(4, `Only ${(narratedPct*100).toFixed(1)}% vouchers have narration`));
+    : fail(4, `Only ${(narratedPct*100).toFixed(1)}% vouchers have narration`),
+    'Narration coverage below threshold');
 
   c('F4', 'F', 'High-value entries (> ₹1L) have narration',
     !hasDaybook ? uncertain(3, 'Requires DayBook')
     : highValueCount === 0 ? pass(3, 3, 'No high-value entries found')
     : highValueNarrated === highValueCount ? pass(3, 3, `All ${highValueCount} high-value entries narrated`)
     : highValueNarrated / highValueCount >= 0.80 ? partial(1, 3, `${highValueNarrated}/${highValueCount} high-value entries narrated`)
-    : fail(3, `Only ${highValueNarrated}/${highValueCount} high-value entries have narration`));
+    : fail(3, `Only ${highValueNarrated}/${highValueCount} high-value entries have narration`),
+    'High-value entries missing narration');
 
   c('F5', 'F', 'Journal vouchers < 25% of total',
     !hasDaybook ? uncertain(3, 'Requires DayBook')
     : totalVouchers === 0 ? uncertain(3, 'No vouchers parsed')
     : journalPct < 0.15 ? pass(3, 3, `Journals: ${(journalPct*100).toFixed(1)}%`)
     : journalPct < 0.25 ? partial(1, 3, `Journals: ${(journalPct*100).toFixed(1)}% (threshold: 15%)`)
-    : fail(3, `Journals: ${(journalPct*100).toFixed(1)}% of total (threshold: 25%)`));
+    : fail(3, `Journals: ${(journalPct*100).toFixed(1)}% of total (threshold: 25%)`),
+    'Excessive journal voucher proportion');
 
   c('F6', 'F', 'Entries spread — not bunched at year-end',
     !fullFY ? na('Not applicable (partial FY)')
@@ -410,7 +464,8 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
   c('G3', 'G', 'Cash not used for entries > ₹10,000',
     !hasDaybook ? uncertain(2, 'Requires DayBook')
     : cashOver10k === 0 ? pass(2, 2, 'No cash entries above ₹10,000')
-    : fail(2, `${cashOver10k} cash entries exceed ₹10,000 (Section 269ST)`));
+    : fail(2, `${cashOver10k} cash entries exceed ₹10,000 (Section 269ST)`),
+    'Cash entries exceeding ₹10,000');
 
   c('G4', 'G', 'Round-number entries below 20% of total',
     !hasDaybook ? uncertain(2, 'Requires DayBook')
@@ -426,26 +481,30 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     : tbTotal === 0 ? uncertain(10, 'TB totals not extracted')
     : dbTotalForH === 0 ? uncertain(10, 'DayBook totals not computed')
     : Math.abs(dbTotalForH - tbTotal) / tbTotal < 0.01 ? pass(10, 10, `DB ≈ TB ₹${fmt(tbTotal)}`)
-    : fail(10, `DB total ₹${fmt(dbTotalForH)} ≠ TB total ₹${fmt(tbTotal)} (>${(Math.abs(dbTotalForH-tbTotal)/tbTotal*100).toFixed(1)}%)`));
+    : fail(10, `DB total ₹${fmt(dbTotalForH)} ≠ TB total ₹${fmt(tbTotal)} (>${(Math.abs(dbTotalForH-tbTotal)/tbTotal*100).toFixed(1)}%)`),
+    'DayBook totals do not match Trial Balance');
 
   c('H2', 'H', 'Sales vouchers total = TB Sales ledger',
     !(hasDaybook && hasTB) ? uncertain(8, 'Requires DayBook and Trial Balance')
     : tbSales === 0 || dbSales === 0 ? uncertain(8, 'Sales figures not extracted')
     : Math.abs(dbSales - tbSales) / tbSales < 0.01 ? pass(8, 8, `Sales reconciled ₹${fmt(tbSales)}`)
-    : fail(8, `Sales variance: DB ₹${fmt(dbSales)} vs TB ₹${fmt(tbSales)}`));
+    : fail(8, `Sales variance: DB ₹${fmt(dbSales)} vs TB ₹${fmt(tbSales)}`),
+    'Sales voucher total does not match Trial Balance');
 
   c('H3', 'H', 'Purchase vouchers total = TB Purchase ledger',
     !(hasDaybook && hasTB) ? uncertain(8, 'Requires DayBook and Trial Balance')
     : tbPurch === 0 || dbPurch === 0 ? uncertain(8, 'Purchase figures not extracted')
     : Math.abs(dbPurch - tbPurch) / tbPurch < 0.01 ? pass(8, 8, `Purchase reconciled ₹${fmt(tbPurch)}`)
-    : fail(8, `Purchase variance: DB ₹${fmt(dbPurch)} vs TB ₹${fmt(tbPurch)}`));
+    : fail(8, `Purchase variance: DB ₹${fmt(dbPurch)} vs TB ₹${fmt(tbPurch)}`),
+    'Purchase voucher total does not match Trial Balance');
 
   c('H4', 'H', 'Cash + Bank movement = BS closing balance',
     !(hasDaybook && hasBS) ? uncertain(8, 'Requires DayBook and Balance Sheet')
     : bsCashBankTotal === 0 ? uncertain(8, 'BS cash+bank total not extracted')
     : dbCashBank === 0 ? uncertain(8, 'DayBook cash+bank movement not computed')
-    : Math.abs(dbCashBank - bsCashBankTotal) / bsCashBankTotal < 0.02 ? pass(8, 8, `Cash+Bank reconciled ₹${fmt(bsCashBankTotal)}`)
-    : fail(8, `Cash+Bank variance: DB ₹${fmt(dbCashBank)} vs BS ₹${fmt(bsCashBankTotal)}`));
+    : Math.abs(dbCashBank - bsCashBankTotal) / Math.abs(bsCashBankTotal) < 0.02 ? pass(8, 8, `Cash+Bank reconciled ₹${fmt(bsCashBankTotal)}`)
+    : fail(8, `Cash+Bank variance: DB ₹${fmt(dbCashBank)} vs BS ₹${fmt(bsCashBankTotal)}`),
+    'Cash + Bank movement does not match Balance Sheet');
 
   c('H5', 'H', 'Tax vouchers = Duties & Taxes TB ledger',
     !(gstApplicable || tdsApplicable) ? na('Not applicable')
@@ -465,9 +524,10 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     : Math.abs(dbSales - revenue) / (revenue || 1) < 0.05 ? pass(5, 5, `Sales ≈ Revenue ₹${fmt(revenue)}`)
     : partial(1, 5, `Sales ₹${fmt(dbSales)} vs P&L revenue ₹${fmt(revenue)} (>5%)`));
 
+  // Bug 5 fix: H8 returns NA when fewer than 3 distinct months of data
   c('H8', 'H', 'Month-wise volumes consistent — no spikes',
     !hasDaybook ? uncertain(5, 'Requires DayBook')
-    : monthVals.length < 2 ? uncertain(5, 'Insufficient monthly data')
+    : distinctMonths < 3 ? na('Insufficient month coverage for spike detection — need ≥3 months')
     : monthAvg === 0 ? uncertain(5, 'No monthly volume data')
     : monthMax / monthAvg < 3 ? pass(5, 5, `Max spike: ${(monthMax/monthAvg).toFixed(1)}× average`)
     : partial(2, 5, `Volume spike: ${(monthMax/monthAvg).toFixed(1)}× average in peak month`));
@@ -496,9 +556,12 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
   };
 }
 
+/** Format number in Indian convention. Handles signed values (Bug 1). */
 function fmt(n: number): string {
-  if (!n || isNaN(n)) return '—';
-  if (n >= 10_000_000) return `${(n/10_000_000).toFixed(2)}Cr`;
-  if (n >= 100_000)   return `${(n/100_000).toFixed(2)}L`;
-  return n.toLocaleString('en-IN', { maximumFractionDigits: 0 });
+  if (n === 0 || isNaN(n)) return '—';
+  const abs = Math.abs(n);
+  const sign = n < 0 ? '−' : ''; // unicode minus for display
+  if (abs >= 10_000_000) return `${sign}${(abs/10_000_000).toFixed(2)}Cr`;
+  if (abs >= 100_000)   return `${sign}${(abs/100_000).toFixed(2)}L`;
+  return `${sign}${abs.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
 }

@@ -3,7 +3,7 @@
 # AccountingIQ — Project Reference
 
 ## Purpose
-Tally XML accounting health analyser for Indian businesses. Parses Tally ERP/Prime XML export files, runs 59 rule-based compliance and accuracy checks across 8 dimensions, and produces a 0–100 quality score with actionable insights.
+Tally XML accounting health analyser for Indian businesses. Parses Tally ERP/Prime XML export files, runs 60 rule-based compliance and accuracy checks across 8 dimensions, and produces a 0–100 quality score with actionable insights and AI-powered analysis.
 
 ---
 
@@ -12,10 +12,10 @@ Tally XML accounting health analyser for Indian businesses. Parses Tally ERP/Pri
 - **UI**: React 19.2.4, Tailwind CSS v4, custom dark theme CSS variables
 - **Language**: TypeScript 5
 - **Fonts**: DM Serif Display (headings), Outfit (body), DM Mono (code)
-- **Auth**: NextAuth.js v5 (Google OAuth)
-- **AI**: OpenAI GPT-4o (optional AI summary, server-side API route)
+- **Auth**: Supabase via `@supabase/ssr` (Google OAuth)
+- **AI**: OpenAI GPT-4o (five-section AI Analysis, server-side API route `/app/api/ai/route.ts`)
 - **State**: React Context + useReducer (no external state library)
-- **Persistence**: Browser sessionStorage (file metadata + company profile only)
+- **Persistence**: Browser sessionStorage (file metadata + company profile + AI consent only)
 
 ---
 
@@ -25,46 +25,59 @@ Tally XML accounting health analyser for Indian businesses. Parses Tally ERP/Pri
 accountingiq/
 ├── app/
 │   ├── api/
-│   │   ├── ai/route.ts            POST — calls OpenAI, returns AI summary JSON
-│   │   └── auth/[...nextauth]/
-│   │       └── route.ts           NextAuth.js route handler (GET + POST)
+│   │   └── ai/route.ts            POST — calls OpenAI GPT-4o, returns 5-section AIResponse JSON
+│   ├── auth/
+│   │   └── callback/
+│   │       └── route.ts           Supabase auth callback handler
 │   ├── components/
 │   │   ├── AppProvider.tsx        Context provider; restores session on mount
+│   │   ├── ConsentModal.tsx       DPDPA consent modal with 3 checkboxes:
+│   │   │                            1. Local processing consent (required)
+│   │   │                            2. Professional responsibility (required)
+│   │   │                            3. AI Analysis consent (optional — gates AI tab)
+│   │   │                          consentGiven in AppState gates all views.
+│   │   │                          aiConsentGiven gates AI Analysis tab separately.
+│   │   ├── PortalShell.tsx        Portal landing page / workspace selector
 │   │   ├── Shell.tsx              Sidebar nav + view router + user footer
 │   │   ├── ScoreRing.tsx          Animated SVG score circle (0–100, grade)
 │   │   └── StatusBadge.tsx        Check status pill (pass/fail/partial/etc.)
 │   ├── login/
-│   │   └── page.tsx               Google sign-in page (public route)
+│   │   └── page.tsx               Supabase sign-in page (public route)
+│   ├── portal/
+│   │   └── page.tsx               Portal workspace page
 │   ├── views/
 │   │   ├── UploadView.tsx         Folder picker + auto-detection + status grid
-│   │   ├── DashboardView.tsx      Score ring + dimension bars + stat cards
-│   │   ├── ChecklistView.tsx      59 checks table with filter tabs
-│   │   ├── InsightsView.tsx       Rule-based insights + AI Summary panel
-│   │   ├── HealthView.tsx         Financial health signals (ratios, balances)
-│   │   ├── FlagsView.tsx          Anomaly flags grouped by severity
+│   │   ├── DashboardView.tsx      Score ring + dimension bars + KPI tiles (signed values, ANOMALY pills)
+│   │   ├── ChecklistView.tsx      60 checks table with filter tabs (uses failLabel on fail/partial)
+│   │   ├── InsightsView.tsx       Rule-based insights + legacy AI Summary panel
+│   │   ├── AIAnalysisView.tsx     Five-section AI Analysis (exec summary, root causes, actions, commentary, preflight)
+│   │   ├── HealthView.tsx         Financial health signals (ratios, balances — signed)
+│   │   ├── FlagsView.tsx          Anomaly flags grouped by severity (deterministic from check.max)
 │   │   ├── ProfileView.tsx        Company profile toggles (GST, TDS, etc.)
-│   │   └── ReportsView.tsx        Print-ready analysis summary
+│   │   ├── ReportsView.tsx        Print-ready analysis summary
+│   │   └── RulesView.tsx          User-defined Rules Engine
 │   ├── globals.css                Design tokens, badge variants, animations
 │   ├── layout.tsx                 Root layout with Google fonts + metadata
 │   └── page.tsx                   Entry: <AppProvider><Shell />
 ├── lib/
-│   ├── types.ts                   All TypeScript interfaces (FileKey, Check, etc.)
-│   ├── constants.ts               DIM_WEIGHTS, FILE_TIERS, VIEWS, GRADE_THRESHOLDS
-│   ├── engine.ts                  analyseFiles() — 59 checks → 8 dim scores → overall
-│   ├── parser.ts                  XML parsers for TB, P&L, BS, GrpSum, DayBook
+│   ├── types.ts                   All TypeScript interfaces (FileKey, Check, AIRequest, AIResponse, etc.)
+│   ├── constants.ts               DIM_WEIGHTS, FILE_TIERS, VIEWS (incl. aiAnalysis), GRADE_THRESHOLDS
+│   ├── engine.ts                  analyseFiles() — 60 checks → 8 dim scores → overall (prefers bsNetProfit)
+│   ├── parser.ts                  XML parsers for TB, P&L, BS, GrpSum, DayBook (signed values, 3-stage dup detection)
 │   ├── chunkedParser.ts           Streaming DayBook parser for files >10 MB
-│   ├── state.ts                   AppContext, reducer, useApp() hook
-│   ├── session.ts                 sessionStorage helpers (metadata only, no XML)
+│   ├── state.ts                   AppContext, reducer, useApp() hook (incl. AI state)
+│   ├── session.ts                 sessionStorage helpers (metadata, profile, AI consent)
 │   ├── insights.ts                generateInsights() — rule-based Insight[]
-│   ├── health.ts                  generateHealthSignals() — financial ratios
-│   └── flags.ts                   generateFlags() — anomaly AnomalyFlag[]
-├── auth.ts                        NextAuth config (Google provider)
-├── middleware.ts                  Route protection — redirects to /login if unauth
+│   ├── health.ts                  generateHealthSignals() — financial ratios (signed, anomaly-aware)
+│   ├── flags.ts                   generateFlags() + deriveSeverity() — severity from check.max points
+│   └── supabase/
+│       ├── client.ts              Browser Supabase client
+│       └── server.ts              Server-side Supabase client
 ├── .env.local                     Secret keys (not committed)
 ├── CLAUDE.md                      ← this file
 ├── AGENTS.md                      Agent guidelines (Next.js breaking changes note)
 ├── next.config.ts                 Next.js config
-├── tailwind.config (via postcss)  Tailwind CSS v4 setup
+├── postcss.config.mjs             Tailwind CSS v4 setup
 └── tsconfig.json                  TypeScript config with @/ path alias
 ```
 
@@ -75,15 +88,17 @@ accountingiq/
 ### Analysis Engine (lib/engine.ts)
 ```
 analyseFiles(AppState)
-  → parseTrialBalance()  → TBLedger[], suspenseCount, GST/TDS flags
-  → parsePandL()         → revenue, expenses, netProfit, depFound
-  → parseBSheet()        → ca, cl, bankBal, debtorBal, closingStock
+  → parseTrialBalance()  → TBLedger[] (signed closing), suspenseCount, suspenseLedgers, dupPairDetails
+  → parsePandL()         → revenue (group-level only, GST excluded), expenses, netProfit
+  → parseBSheet()        → ca, cl, bankBal, debtorBal (all signed), bsNetProfit
   → parseGrpSum()        → dutiesUnderExpense flag
   → parseDayBook()       → ChunkedStats (voucher counts, narration %, etc.)
-  → 59 checks (A1–H8)   → Check[]  (pass/partial/fail/missing/uncertain/na)
+  → 60 checks (A1–H8)   → Check[] (pass/partial/fail/missing/uncertain/na) with failLabel
   → 8 dimension scores   → weighted 0–100 overall
   → AnalysisResults
 ```
+
+Net Profit is read from BS "Profit & Loss A/c" line (`bsNetProfit`) when available; P&L-derived figure is only a fallback.
 
 ### 8 Dimensions & Weights
 | Dim | Name | Weight |
@@ -98,6 +113,14 @@ analyseFiles(AppState)
 | H | Cross-Statement Reconciliation | 10% |
 
 Score is capped at 60 if DayBook is missing.
+
+### AI Analysis Layer
+- API route at `/app/api/ai/route.ts` calls GPT-4o with structured system prompt
+- Input: aggregated scores/metrics only (no raw XML, no party names, no voucher data)
+- Output: 5-section AIResponse (executiveSummary, rootCauses, actions, financialCommentary, preflight)
+- Validation layer strips phantom check IDs, caps array lengths, validates JSON parsing
+- Gated by separate AI consent (aiConsentGiven) — user must opt in before AI tab is accessible
+- Cached in AppState by input hash; Regenerate button clears cache and re-fetches
 
 ### File Upload Flow
 1. User selects a folder → `<input webkitdirectory>`
@@ -114,16 +137,24 @@ Tally display-report exports use non-standard tags:
 - BS amounts: `<BSMAINAMT>` / `<BSSUBAMT>` inside `<BSAMT>`
 - P&L amounts: `<BSMAINAMT>` inside `<PLAMT>`
 - Encoding: UTF-16LE with BOM (`FF FE`) for most Tally exports
+- Sign convention: negative = Cr, positive = Dr
+
+### DPDPA Consent Modal
+- `ConsentModal.tsx` gates all functionality behind two required checkboxes (local processing + professional responsibility)
+- Third optional checkbox for AI Analysis consent (sends aggregated data to OpenAI)
+- `consentGiven` in AppState gates all views
+- `aiConsentGiven` gates AI Analysis tab separately
+- AI consent persisted in sessionStorage via `lib/session.ts`
 
 ---
 
 ## Environment Variables (.env.local)
 
 ```
-OPENAI_API_KEY=sk-...           # Required for AI Summary feature
-AUTH_SECRET=...                 # Required for NextAuth (generate: npx auth secret)
-AUTH_GOOGLE_ID=...              # Google OAuth Client ID
-AUTH_GOOGLE_SECRET=...          # Google OAuth Client Secret
+OPENAI_API_KEY=sk-...                   # Required for AI Analysis feature
+NEXT_PUBLIC_SUPABASE_URL=https://...    # Supabase project URL
+NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...    # Supabase anon key (public)
+SUPABASE_SERVICE_ROLE_KEY=eyJ...        # Supabase service role key (server-side only)
 ```
 
 ---

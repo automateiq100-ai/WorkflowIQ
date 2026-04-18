@@ -1,40 +1,49 @@
 'use client';
 
 import { useApp } from '@/lib/state';
-import { VIEWS } from '@/lib/constants';
+import { VIEWS, MODULES, MODULE_VIEWS } from '@/lib/constants';
 import { clearSession } from '@/lib/session';
-import type { ViewId } from '@/lib/types';
+import type { ViewId, ModuleId } from '@/lib/types';
 import dynamic from 'next/dynamic';
 import Image from 'next/image';
 import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
 
-// Lazy-load views to keep initial bundle small
-const ConsentModal  = dynamic(() => import('@/app/components/ConsentModal'));
-const UploadView    = dynamic(() => import('@/app/views/UploadView'));
-const DashboardView = dynamic(() => import('@/app/views/DashboardView'));
-const ChecklistView = dynamic(() => import('@/app/views/ChecklistView'));
-const InsightsView  = dynamic(() => import('@/app/views/InsightsView'));
-const HealthView    = dynamic(() => import('@/app/views/HealthView'));
-const FlagsView     = dynamic(() => import('@/app/views/FlagsView'));
-const ProfileView   = dynamic(() => import('@/app/views/ProfileView'));
-const ReportsView   = dynamic(() => import('@/app/views/ReportsView'));
+// Lazy-load views
+const ConsentModal      = dynamic(() => import('@/app/components/ConsentModal'));
+const UploadView        = dynamic(() => import('@/app/views/UploadView'));
+const DashboardView     = dynamic(() => import('@/app/views/DashboardView'));
+const ChecklistView     = dynamic(() => import('@/app/views/ChecklistView'));
+const InsightsView      = dynamic(() => import('@/app/views/InsightsView'));
+const HealthView        = dynamic(() => import('@/app/views/HealthView'));
+const FlagsView         = dynamic(() => import('@/app/views/FlagsView'));
+const ProfileView       = dynamic(() => import('@/app/views/ProfileView'));
+const ReportsView       = dynamic(() => import('@/app/views/ReportsView'));
+const RulesView         = dynamic(() => import('@/app/views/RulesView'));
+const MISReportView     = dynamic(() => import('@/app/views/MISReportView'));
+const ReconciliationView = dynamic(() => import('@/app/views/ReconciliationView'));
+const AIAnalysisView    = dynamic(() => import('@/app/views/AIAnalysisView'));
 
 const VIEW_COMPONENTS: Record<ViewId, React.ComponentType> = {
-  upload:    UploadView,
-  dashboard: DashboardView,
-  checklist: ChecklistView,
-  insights:  InsightsView,
-  health:    HealthView,
-  flags:     FlagsView,
-  profile:   ProfileView,
-  reports:   ReportsView,
+  upload:          UploadView,
+  dashboard:       DashboardView,
+  checklist:       ChecklistView,
+  insights:        InsightsView,
+  health:          HealthView,
+  flags:           FlagsView,
+  profile:         ProfileView,
+  reports:         ReportsView,
+  rules:           RulesView,
+  'mis-setup':     MISReportView,
+  'mis-report':    MISReportView,
+  reconciliation:  ReconciliationView,
+  aiAnalysis:      AIAnalysisView,
 };
 
-// Views always visible in nav (regardless of analysed state)
-const ALWAYS_VISIBLE: ViewId[] = ['upload', 'profile'];
-// Views only visible after analysis
-const POST_ANALYSIS: ViewId[] = ['dashboard', 'checklist', 'insights', 'health', 'flags', 'reports'];
+// Accounting module: views always visible
+const ACCOUNTING_ALWAYS: ViewId[] = ['upload', 'profile', 'rules'];
+// Accounting module: views only after analysis
+const ACCOUNTING_POST: ViewId[] = ['dashboard', 'checklist', 'insights', 'aiAnalysis', 'health', 'flags', 'reports'];
 
 interface UserInfo {
   name: string | null;
@@ -44,10 +53,18 @@ interface UserInfo {
 
 export default function Shell({ user }: { user: UserInfo | null }) {
   const { state, dispatch } = useApp();
-  const { currentView, analysed, uploadProgress, consentGiven } = state;
+  const { currentView, currentModule, analysed, uploadProgress, consentGiven, aiConsentGiven, theme } = state;
 
   function navigate(view: ViewId) {
     dispatch({ type: 'SET_VIEW', view });
+  }
+
+  function switchModule(mod: ModuleId) {
+    dispatch({ type: 'SET_MODULE', module: mod });
+  }
+
+  function toggleTheme() {
+    dispatch({ type: 'SET_THEME', theme: theme === 'dark' ? 'light' : 'dark' });
   }
 
   function handleClear() {
@@ -57,93 +74,152 @@ export default function Shell({ user }: { user: UserInfo | null }) {
 
   const ViewComponent = VIEW_COMPONENTS[currentView];
 
+  // Which nav items to show based on current module
+  const moduleViews = MODULE_VIEWS[currentModule];
+
   return (
-    <div className="flex h-full" style={{ background: 'var(--bg)' }}>
-      {/* DPDPA consent modal — blocks all views until both checkboxes accepted */}
+    <div className="flex flex-col h-full" style={{ background: 'var(--bg)' }}>
+      {/* DPDPA consent modal */}
       {!consentGiven && <ConsentModal />}
-      {/* Sidebar */}
-      <aside
-        className="flex flex-col shrink-0 border-r"
-        style={{
-          width: 220,
-          background: 'var(--bg2)',
-          borderColor: 'var(--border)',
-        }}
+
+      {/* ── Top Module Tab Bar ── */}
+      <header
+        className="shrink-0 flex items-center border-b px-4"
+        style={{ background: 'var(--bg2)', borderColor: 'var(--border)', height: 48 }}
       >
         {/* Logo */}
-        <div className="px-5 pt-6 pb-5 border-b" style={{ borderColor: 'var(--border)' }}>
-          <div
-            className="text-base font-semibold tracking-tight"
-            style={{ color: 'var(--text1)', fontFamily: 'var(--font-dm-serif)' }}
-          >
-            AccountingIQ
-          </div>
-          <div className="text-xs mt-0.5" style={{ color: 'var(--text3)' }}>
-            Tally XML Analyser
-          </div>
+        <div
+          className="text-sm font-semibold tracking-tight mr-6"
+          style={{ color: 'var(--text1)', fontFamily: 'var(--font-dm-serif)' }}
+        >
+          AccountingIQ
         </div>
 
-        {/* Nav */}
-        <nav className="flex-1 py-3 overflow-y-auto">
-          {/* Always visible */}
-          {VIEWS.filter(v => ALWAYS_VISIBLE.includes(v.id)).map(v => (
-            <NavItem
-              key={v.id}
-              view={v}
-              active={currentView === v.id}
-              onClick={() => navigate(v.id)}
-            />
-          ))}
-
-          {/* Divider */}
-          {analysed && (
-            <div className="mx-4 my-2 border-t" style={{ borderColor: 'var(--border)' }} />
-          )}
-
-          {/* Post-analysis views */}
-          {analysed && VIEWS.filter(v => POST_ANALYSIS.includes(v.id)).map(v => (
-            <NavItem
-              key={v.id}
-              view={v}
-              active={currentView === v.id}
-              onClick={() => navigate(v.id)}
-            />
-          ))}
+        {/* Module tabs */}
+        <nav className="flex items-center flex-1 gap-1">
+          {MODULES.map(mod => {
+            const active = currentModule === mod.id;
+            return (
+              <button
+                key={mod.id}
+                onClick={() => switchModule(mod.id)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md font-medium transition-all"
+                style={{
+                  background: active ? 'var(--bg4)' : 'transparent',
+                  color: active ? 'var(--teal)' : 'var(--text2)',
+                  borderBottom: active ? '2px solid var(--teal)' : '2px solid transparent',
+                  borderRadius: active ? '6px 6px 0 0' : '6px',
+                }}
+              >
+                <span style={{ fontSize: 12 }}>{mod.icon}</span>
+                {mod.label}
+              </button>
+            );
+          })}
         </nav>
 
-        {/* Clear session */}
-        <div className="px-3 pt-2" style={{ borderTop: `1px solid var(--border)` }}>
-          <button
-            onClick={handleClear}
-            className="w-full text-xs px-3 py-2 rounded text-left transition-colors"
-            style={{ color: 'var(--text3)' }}
-            onMouseEnter={e => (e.currentTarget.style.color = 'var(--red)')}
-            onMouseLeave={e => (e.currentTarget.style.color = 'var(--text3)')}
-          >
-            ✕ Clear session
-          </button>
-        </div>
+        {/* Theme toggle */}
+        <button
+          onClick={toggleTheme}
+          id="theme-toggle"
+          title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          className="w-8 h-8 flex items-center justify-center rounded-lg border text-sm transition-all"
+          style={{
+            background: 'var(--bg3)',
+            borderColor: 'var(--border)',
+            color: 'var(--text2)',
+          }}
+          onMouseEnter={e => (e.currentTarget.style.color = 'var(--teal)')}
+          onMouseLeave={e => (e.currentTarget.style.color = 'var(--text2)')}
+        >
+          {theme === 'dark' ? '☀' : '☾'}
+        </button>
+      </header>
 
-        {/* User footer */}
-        <UserFooter user={user} />
-      </aside>
+      {/* ── Main body: sidebar + content ── */}
+      <div className="flex flex-1 min-h-0">
+        {/* Sidebar */}
+        <aside
+          className="flex flex-col shrink-0 border-r"
+          style={{ width: 200, background: 'var(--bg2)', borderColor: 'var(--border)' }}
+        >
+          {/* Nav */}
+          <nav className="flex-1 py-3 overflow-y-auto">
+            {currentModule === 'accounting' && (
+              <>
+                {/* Always visible */}
+                {VIEWS.filter(v => ACCOUNTING_ALWAYS.includes(v.id)).map(v => (
+                  <NavItem key={v.id} view={v} active={currentView === v.id} onClick={() => navigate(v.id)} />
+                ))}
 
-      {/* Main */}
-      <div className="flex flex-col flex-1 min-w-0">
-        {/* Progress banner */}
-        {uploadProgress && (
-          <div
-            className="px-4 py-2 text-xs text-center shrink-0"
-            style={{ background: 'var(--bg4)', color: 'var(--amber)' }}
-          >
-            {uploadProgress}
+                {/* Divider + post-analysis */}
+                {analysed && (
+                  <>
+                    <div className="mx-4 my-2 border-t" style={{ borderColor: 'var(--border)' }} />
+                    {VIEWS.filter(v => ACCOUNTING_POST.includes(v.id)).map(v => {
+                      // Lock AI Analysis tab if user hasn't consented
+                      const isAILocked = v.id === 'aiAnalysis' && !aiConsentGiven;
+                      return (
+                        <NavItem
+                          key={v.id}
+                          view={v}
+                          active={currentView === v.id}
+                          onClick={() => navigate(v.id)}
+                          locked={isAILocked}
+                        />
+                      );
+                    })}
+                  </>
+                )}
+              </>
+            )}
+
+            {currentModule === 'mis' && (
+              <div className="px-5 py-4 text-xs" style={{ color: 'var(--text3)' }}>
+                {/* Sidebar nav intentionally left blank for MIS module to avoid redundant tabs */}
+              </div>
+            )}
+
+            {currentModule === 'reconciliation' && (
+              <div className="px-5 py-4 text-xs" style={{ color: 'var(--text3)' }}>
+                {/* Sidebar nav intentionally left blank for Reconciliation */}
+              </div>
+            )}
+          </nav>
+
+          {/* Clear session */}
+          <div className="px-3 pt-2" style={{ borderTop: `1px solid var(--border)` }}>
+            <button
+              onClick={handleClear}
+              className="w-full text-xs px-3 py-2 rounded text-left transition-colors"
+              style={{ color: 'var(--text3)' }}
+              onMouseEnter={e => (e.currentTarget.style.color = 'var(--red)')}
+              onMouseLeave={e => (e.currentTarget.style.color = 'var(--text3)')}
+            >
+              ✕ Clear session
+            </button>
           </div>
-        )}
 
-        {/* Content */}
-        <main className="flex-1 overflow-y-auto">
-          <ViewComponent />
-        </main>
+          {/* User footer */}
+          <UserFooter user={user} />
+        </aside>
+
+        {/* Main content */}
+        <div className="flex flex-col flex-1 min-w-0">
+          {/* Progress banner */}
+          {uploadProgress && (
+            <div
+              className="px-4 py-2 text-xs text-center shrink-0"
+              style={{ background: 'var(--bg4)', color: 'var(--amber)' }}
+            >
+              {uploadProgress}
+            </div>
+          )}
+
+          <main className="flex-1 overflow-y-auto">
+            <ViewComponent />
+          </main>
+        </div>
       </div>
     </div>
   );
@@ -163,11 +239,7 @@ function UserFooter({ user }: { user: UserInfo | null }) {
   }
 
   return (
-    <div
-      className="p-3 flex items-center gap-2.5 border-t"
-      style={{ borderColor: 'var(--border)' }}
-    >
-      {/* Avatar */}
+    <div className="p-3 flex items-center gap-2.5 border-t" style={{ borderColor: 'var(--border)' }}>
       {user.image ? (
         <Image
           src={user.image}
@@ -184,8 +256,6 @@ function UserFooter({ user }: { user: UserInfo | null }) {
           {initials}
         </div>
       )}
-
-      {/* Name + sign out */}
       <div className="flex-1 min-w-0">
         <div className="text-xs font-medium truncate" style={{ color: 'var(--text1)' }}>
           {displayName}
@@ -208,10 +278,12 @@ function NavItem({
   view,
   active,
   onClick,
+  locked,
 }: {
   view: { id: ViewId; label: string; icon: string };
   active: boolean;
   onClick: () => void;
+  locked?: boolean;
 }) {
   return (
     <button
@@ -219,11 +291,12 @@ function NavItem({
       className="w-full flex items-center gap-2.5 px-4 py-2 text-sm text-left transition-colors"
       style={{
         background: active ? 'var(--bg4)' : 'transparent',
-        color: active ? 'var(--text1)' : 'var(--text2)',
+        color: active ? 'var(--text1)' : locked ? 'var(--text3)' : 'var(--text2)',
         borderLeft: active ? '2px solid var(--teal)' : '2px solid transparent',
+        opacity: locked ? 0.6 : 1,
       }}
     >
-      <span className="text-base w-4 text-center shrink-0">{view.icon}</span>
+      <span className="text-base w-4 text-center shrink-0">{locked ? '🔒' : view.icon}</span>
       <span>{view.label}</span>
     </button>
   );

@@ -27,11 +27,14 @@ function matchesFilter(check: Check, mode: FilterMode): boolean {
 function exportDimCSV(checks: Check[], dim: DimKey) {
   const rows = checks.filter(c => c.dim === dim);
   const header = ['ID', 'Dimension', 'Check Name', 'Status', 'Points', 'Max', 'Note'];
-  const lines = rows.map(c =>
-    [c.id, DIM_LABELS[dim], `"${c.name}"`, c.status, c.pts, c.max, `"${c.note ?? ''}"`].join(',')
-  );
+  const lines = rows.map(c => {
+    const dimLabel = `"${DIM_LABELS[dim].replace(/"/g, '""')}"`;
+    const name = `"${c.name.replace(/"/g, '""')}"`;
+    const note = `"${(c.note ?? '').replace(/"/g, '""').replace(/\n/g, ' ')}"`;
+    return [c.id, dimLabel, name, c.status, c.pts, c.max, note].join(',');
+  });
   const csv = [header.join(','), ...lines].join('\n');
-  const blob = new Blob([csv], { type: 'text/csv' });
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -42,11 +45,14 @@ function exportDimCSV(checks: Check[], dim: DimKey) {
 
 function exportAllCSV(checks: Check[]) {
   const header = ['ID', 'Dimension', 'Check Name', 'Status', 'Points', 'Max', 'Note'];
-  const lines = checks.map(c =>
-    [c.id, DIM_LABELS[c.dim], `"${c.name}"`, c.status, c.pts, c.max, `"${c.note ?? ''}"`].join(',')
-  );
+  const lines = checks.map(c => {
+    const dimLabel = `"${DIM_LABELS[c.dim].replace(/"/g, '""')}"`;
+    const name = `"${c.name.replace(/"/g, '""')}"`;
+    const note = `"${(c.note ?? '').replace(/"/g, '""').replace(/\n/g, ' ')}"`;
+    return [c.id, dimLabel, name, c.status, c.pts, c.max, note].join(',');
+  });
   const csv = [header.join(','), ...lines].join('\n');
-  const blob = new Blob([csv], { type: 'text/csv' });
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -208,6 +214,11 @@ export default function ChecklistView() {
 }
 
 function CheckRow({ check }: { check: Check }) {
+  const { dispatch } = useApp();
+  const isFailing = check.status === 'fail' || check.status === 'partial';
+  // Bug 4: show failLabel when check fails/partial, else show name
+  const displayName = isFailing ? (check.failLabel ?? check.name) : check.name;
+
   return (
     <div className="flex items-start gap-3 px-5 py-3">
       <StatusBadge status={check.status} />
@@ -218,13 +229,23 @@ function CheckRow({ check }: { check: Check }) {
             {check.id}
           </span>
           <span className="text-sm" style={{ color: 'var(--text1)' }}>
-            {check.name}
+            {displayName}
           </span>
         </div>
         {check.note && (
           <p className="text-xs mt-0.5 leading-relaxed" style={{ color: 'var(--text2)' }}>
             {check.note}
           </p>
+        )}
+        {/* Workstream 2: link to AI Analysis for failing checks */}
+        {isFailing && (
+          <button
+            onClick={() => dispatch({ type: 'SET_VIEW', view: 'aiAnalysis' })}
+            className="text-xs mt-1 transition-colors"
+            style={{ color: 'var(--purple)' }}
+          >
+            Get AI explanation →
+          </button>
         )}
       </div>
 

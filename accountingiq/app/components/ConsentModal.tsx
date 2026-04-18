@@ -2,14 +2,24 @@
 
 import { useState } from 'react';
 import { useApp } from '@/lib/state';
+import { persistAIConsent } from '@/lib/session';
 
 export default function ConsentModal() {
   const { dispatch } = useApp();
   const [dpdpa, setDpdpa] = useState(false);
   const [professional, setProfessional] = useState(false);
+  const [aiConsent, setAiConsent] = useState(false);
   const [privacyOpen, setPrivacyOpen] = useState(false);
 
   const canProceed = dpdpa && professional;
+
+  function handleProceed() {
+    dispatch({ type: 'CONSENT_GIVEN' });
+    if (aiConsent) {
+      dispatch({ type: 'AI_CONSENT_GIVEN' });
+      persistAIConsent(true);
+    }
+  }
 
   return (
     <div
@@ -63,6 +73,27 @@ export default function ConsentModal() {
               data uploaded.
             </span>
           </label>
+
+          {/* Third checkbox: AI Analysis consent (optional) */}
+          <div className="border-t pt-4" style={{ borderColor: 'var(--border)' }}>
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={aiConsent}
+                onChange={e => setAiConsent(e.target.checked)}
+                className="mt-0.5 shrink-0 w-4 h-4"
+                style={{ accentColor: 'var(--purple)' }}
+              />
+              <span className="text-sm leading-relaxed" style={{ color: 'var(--text2)' }}>
+                <strong style={{ color: 'var(--purple)' }}>Optional:</strong>{' '}
+                I understand AI Analysis sends aggregated scoring results (no raw XML, no voucher
+                details, no party names) to OpenAI for narrative generation.
+              </span>
+            </label>
+            <p className="text-xs mt-1 ml-7" style={{ color: 'var(--text3)' }}>
+              You can enable this later from Settings. AI Analysis tab will be locked until consent is given.
+            </p>
+          </div>
         </div>
 
         {/* Privacy rights accordion */}
@@ -106,9 +137,9 @@ export default function ConsentModal() {
           )}
         </div>
 
-        {/* Proceed button — disabled until both boxes checked */}
+        {/* Proceed button — disabled until both required boxes checked */}
         <button
-          onClick={() => dispatch({ type: 'CONSENT_GIVEN' })}
+          onClick={handleProceed}
           disabled={!canProceed}
           className="mt-6 w-full py-2.5 rounded-lg text-sm font-semibold"
           style={{

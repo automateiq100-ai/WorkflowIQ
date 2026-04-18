@@ -49,5 +49,25 @@ export function clearSession() {
   try {
     sessionStorage.removeItem(SESSION_KEY);
     sessionStorage.removeItem(PROFILE_KEY);
+    sessionStorage.removeItem(AI_CONSENT_KEY);
   } catch { /* ignore */ }
+}
+
+// ── AI consent persistence (Workstream 2) ──
+
+const AI_CONSENT_KEY = 'aiq_ai_consent';
+
+export function persistAIConsent(consented: boolean) {
+  try {
+    sessionStorage.setItem(AI_CONSENT_KEY, JSON.stringify(consented));
+  } catch { /* ignore */ }
+}
+
+export function restoreAIConsent(): boolean {
+  try {
+    const raw = sessionStorage.getItem(AI_CONSENT_KEY);
+    return raw ? JSON.parse(raw) === true : false;
+  } catch {
+    return false;
+  }
 }

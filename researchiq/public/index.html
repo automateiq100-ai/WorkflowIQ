@@ -103,40 +103,6 @@
             align-items: center;
         }
 
-        .model-selector {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            background: var(--bg-card);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 6px 12px;
-        }
-
-        .model-selector label {
-            font-size: 11px;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            white-space: nowrap;
-        }
-
-        .model-selector select {
-            background: var(--bg-input);
-            color: var(--text-primary);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            padding: 5px 10px;
-            font-size: 13px;
-            font-family: 'Inter', sans-serif;
-            cursor: pointer;
-            outline: none;
-        }
-
-        .model-selector select:focus {
-            border-color: var(--accent);
-            box-shadow: 0 0 0 2px var(--accent-glow);
-        }
 
         .status-badge {
             display: flex;
@@ -1125,16 +1091,6 @@
             <div class="brand-sub">AI-Powered Legal Research</div>
         </div>
         <div class="header-right">
-            <div class="model-selector">
-                <label>Model</label>
-                <select id="modelSelect">
-                    <option value="gpt-4o">GPT-4o</option>
-                    <option value="gpt-4o-mini" selected>GPT-4o Mini</option>
-                    <option value="gpt-4-turbo">GPT-4 Turbo</option>
-                    <option value="o1-mini">o1-mini</option>
-                    <option value="o3-mini">o3-mini</option>
-                </select>
-            </div>
             <div class="status-badge">
                 <div class="status-dot" id="statusDot"></div>
                 <span id="statusText">Ready</span>

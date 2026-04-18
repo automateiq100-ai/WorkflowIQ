@@ -1,7 +1,11 @@
 'use client';
 
 import { createContext, useContext, useReducer, type Dispatch } from 'react';
-import type { AppState, FileKey, FileEntry, AnalysisResults, CompanyProfile, ParsedData, ViewId } from './types';
+import type {
+  AppState, FileKey, FileEntry, AnalysisResults, CompanyProfile,
+  ParsedData, ViewId, ModuleId, Theme, MISSetup, AIResponse,
+} from './types';
+import { MODULE_VIEWS } from './constants';
 
 // ── default state ──────────────────────────────────────────────────────────
 function emptyFile(): FileEntry {
@@ -28,6 +32,12 @@ function initialFiles(): Record<FileKey, FileEntry> {
   return Object.fromEntries(FILE_KEYS.map(k => [k, emptyFile()])) as Record<FileKey, FileEntry>;
 }
 
+const DEFAULT_MIS_SETUP: MISSetup = {
+  sector: null,
+  hasBudget: false,
+  selectedMetricIds: [],
+};
+
 const INITIAL_STATE: AppState = {
   files: initialFiles(),
   parsedData: {},
@@ -35,19 +45,31 @@ const INITIAL_STATE: AppState = {
   filters: DEFAULT_FILTERS,
   analysed: false,
   currentView: 'upload',
+  currentModule: 'accounting',
+  theme: 'dark',
   consentGiven: false,
+  aiConsentGiven: false,
   uploadProgress: null,
+  misSetup: DEFAULT_MIS_SETUP,
+  aiAnalysis: null,
+  aiAnalysisHash: null,
 };
 
 // ── actions ───────────────────────────────────────────────────────────────
 export type Action =
   | { type: 'CONSENT_GIVEN' }
+  | { type: 'AI_CONSENT_GIVEN' }
   | { type: 'SET_VIEW'; view: ViewId }
+  | { type: 'SET_MODULE'; module: ModuleId }
+  | { type: 'SET_THEME'; theme: Theme }
   | { type: 'FILE_LOADED'; key: FileKey; entry: Partial<FileEntry> }
   | { type: 'FILE_REMOVED'; key: FileKey }
   | { type: 'UPLOAD_PROGRESS'; message: string | null }
   | { type: 'ANALYSIS_DONE'; results: AnalysisResults; parsedData: Partial<ParsedData> }
   | { type: 'FILTERS_UPDATED'; filters: CompanyProfile }
+  | { type: 'MIS_SETUP_UPDATED'; misSetup: Partial<MISSetup> }
+  | { type: 'AI_ANALYSIS_DONE'; analysis: AIResponse; hash: string }
+  | { type: 'AI_ANALYSIS_CLEAR' }
   | { type: 'SESSION_CLEARED' };
 
 function reducer(state: AppState, action: Action): AppState {
@@ -55,8 +77,20 @@ function reducer(state: AppState, action: Action): AppState {
     case 'CONSENT_GIVEN':
       return { ...state, consentGiven: true };
 
+    case 'AI_CONSENT_GIVEN':
+      return { ...state, aiConsentGiven: true };
+
     case 'SET_VIEW':
       return { ...state, currentView: action.view };
+
+    case 'SET_MODULE': {
+      // When switching modules, navigate to the first view in that module
+      const firstView = MODULE_VIEWS[action.module][0];
+      return { ...state, currentModule: action.module, currentView: firstView };
+    }
+
+    case 'SET_THEME':
+      return { ...state, theme: action.theme };
 
     case 'FILE_LOADED':
       return {
@@ -91,8 +125,17 @@ function reducer(state: AppState, action: Action): AppState {
     case 'FILTERS_UPDATED':
       return { ...state, filters: action.filters, results: null, analysed: false };
 
+    case 'MIS_SETUP_UPDATED':
+      return { ...state, misSetup: { ...state.misSetup, ...action.misSetup } };
+
+    case 'AI_ANALYSIS_DONE':
+      return { ...state, aiAnalysis: action.analysis, aiAnalysisHash: action.hash };
+
+    case 'AI_ANALYSIS_CLEAR':
+      return { ...state, aiAnalysis: null, aiAnalysisHash: null };
+
     case 'SESSION_CLEARED':
-      return { ...INITIAL_STATE, consentGiven: false };
+      return { ...INITIAL_STATE, consentGiven: false, aiConsentGiven: false, theme: state.theme };
 
     default:
       return state;

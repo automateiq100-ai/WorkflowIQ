@@ -41,6 +41,16 @@ export default function AppProvider({ children }: { children: React.ReactNode })
     persistProfile(state.filters);
   }, [state.files, state.filters]);
 
+  // Apply theme class to <html> element
+  useEffect(() => {
+    const html = document.documentElement;
+    if (state.theme === 'light') {
+      html.classList.add('light');
+    } else {
+      html.classList.remove('light');
+    }
+  }, [state.theme]);
+
   return (
     <AppContext.Provider value={{ state, dispatch }}>
       {children}

@@ -1,6 +1,22 @@
 'use client';
 
-import type { AnalysisResults, ParsedData, ChunkedStats, AnomalyFlag } from './types';
+import type { AnalysisResults, ParsedData, ChunkedStats, AnomalyFlag, Check } from './types';
+
+/**
+ * Bug 7 fix: Derive severity deterministically from check's max points.
+ * This is the single source of truth for severity across all views.
+ *
+ * max >= 8  → 'critical'
+ * max 5–7   → 'high'
+ * max 3–4   → 'medium'
+ * max 1–2   → 'low'
+ */
+export function deriveSeverity(check: Pick<Check, 'max'>): AnomalyFlag['severity'] {
+  if (check.max >= 8) return 'critical';
+  if (check.max >= 5) return 'high';
+  if (check.max >= 3) return 'medium';
+  return 'low';
+}
 
 export function generateFlags(
   results: AnalysisResults,
@@ -10,13 +26,14 @@ export function generateFlags(
   const flags: AnomalyFlag[] = [];
   const { checks } = results;
 
-  // Map check status → severity
+  // Map check status → severity using deterministic deriveSeverity (Bug 7 fix)
   for (const check of checks) {
     if (check.status === 'fail') {
       flags.push({
         id: check.id,
-        severity: getSeverityForCheck(check.id),
-        title: check.name,
+        severity: deriveSeverity(check),
+        // Bug 4: use failLabel when available
+        title: check.failLabel ?? check.name,
         detail: check.note || `Check ${check.id} failed.`,
       });
     }
@@ -141,13 +158,4 @@ export function generateFlags(
     seen.add(f.id);
     return true;
   });
-}
-
-function getSeverityForCheck(checkId: string): AnomalyFlag['severity'] {
-  const criticals = ['D1', 'D4', 'B1'];
-  const highs = ['B9', 'C1', 'C2', 'C6', 'E1', 'E5', 'G2', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'H7', 'H8', 'F4'];
-  if (criticals.includes(checkId)) return 'critical';
-  if (highs.includes(checkId)) return 'high';
-  if (checkId.startsWith('E') || checkId.startsWith('D')) return 'high';
-  return 'medium';
 }

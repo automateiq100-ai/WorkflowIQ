@@ -128,7 +128,7 @@ export default function PortalShell({
             className="text-lg"
             style={{ fontFamily: 'var(--font-dm-serif)', color: 'var(--text1)' }}
           >
-            WorkFlowIQ
+            WorkflowIQ
           </div>
           <div className="text-xs" style={{ color: 'var(--text3)' }}>Your AI-powered workspace</div>
         </div>
@@ -173,20 +173,22 @@ export default function PortalShell({
         </div>
 
         <div className="flex gap-6 flex-wrap justify-center w-full max-w-2xl">
-          {/* AccountingIQ card — coming soon */}
-          <div
-            className="flex-1 min-w-64 rounded-2xl border p-8 text-left"
-            style={{ background: 'var(--bg2)', borderColor: 'var(--border)', minWidth: 260, opacity: 0.5, cursor: 'not-allowed' }}
+          {/* AccountingIQ card */}
+          <button
+            onClick={() => router.push('/accountingiq')}
+            id="accountingiq-card"
+            className="flex-1 min-w-64 rounded-2xl border p-8 text-left transition-all"
+            style={{ background: 'var(--bg2)', borderColor: 'var(--border)', minWidth: 260 }}
+            onMouseEnter={e => {
+              (e.currentTarget as HTMLElement).style.borderColor = 'var(--teal)';
+              (e.currentTarget as HTMLElement).style.background = 'var(--bg3)';
+            }}
+            onMouseLeave={e => {
+              (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)';
+              (e.currentTarget as HTMLElement).style.background = 'var(--bg2)';
+            }}
           >
-            <div className="flex items-start justify-between mb-4">
-              <div className="text-3xl">📊</div>
-              <span
-                className="text-xs font-medium px-2 py-0.5 rounded-full"
-                style={{ background: 'var(--bg4)', color: 'var(--text3)', border: '1px solid var(--border)' }}
-              >
-                Launching soon
-              </span>
-            </div>
+            <div className="text-3xl mb-4">📊</div>
             <div
               className="text-lg mb-1"
               style={{ fontFamily: 'var(--font-dm-serif)', color: 'var(--text1)' }}
@@ -199,7 +201,7 @@ export default function PortalShell({
             <p className="text-sm" style={{ color: 'var(--text2)' }}>
               59 health checks across 8 dimensions. Upload Tally XML exports and get a 0–100 accounting quality score.
             </p>
-          </div>
+          </button>
 
           {/* ResearchIQ card */}
           <button

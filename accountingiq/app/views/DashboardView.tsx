@@ -2,7 +2,6 @@
 
 import { useApp } from '@/lib/state';
 import { getGrade, DIM_LABELS, DIM_WEIGHTS, DIM_COLORS } from '@/lib/constants';
-import { generateHealthSignals } from '@/lib/health';
 import { generateFlags } from '@/lib/flags';
 import { generateInsights } from '@/lib/insights';
 import ScoreRing from '@/app/components/ScoreRing';
@@ -10,10 +9,11 @@ import type { DimKey } from '@/lib/types';
 
 const DIMS: DimKey[] = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
 
+/** Bug 1: Format INR with unicode minus for negatives */
 function fmtINR(n: number): string {
   if (!n || isNaN(n)) return '—';
   const abs = Math.abs(n);
-  const sign = n < 0 ? '-' : '';
+  const sign = n < 0 ? '−' : '';
   if (abs >= 10_000_000) return `${sign}₹${(abs / 10_000_000).toFixed(2)} Cr`;
   if (abs >= 100_000) return `${sign}₹${(abs / 100_000).toFixed(2)} L`;
   return `${sign}₹${abs.toLocaleString('en-IN')}`;
@@ -37,6 +37,20 @@ const URGENCY_COLORS: Record<string, string> = {
   medium:   'var(--amber)',
   positive: 'var(--teal)',
 };
+
+/**
+ * Bug 1: Check if a BS-sourced metric has an anomalous sign.
+ * Returns true if the value contradicts its accounting convention.
+ */
+function isAnomaly(label: string, value: number): boolean {
+  if (value === 0) return false;
+  const l = label.toLowerCase();
+  // Debtors, Current Assets, Bank, Cash should be positive (Dr)
+  if (l.includes('debtor') || l.includes('current asset') || l.includes('bank')) return value < 0;
+  // Creditors, Capital should be negative (Cr) in Tally convention
+  if (l.includes('creditor')) return value > 0;
+  return false;
+}
 
 export default function DashboardView() {
   const { state, dispatch } = useApp();
@@ -66,20 +80,30 @@ export default function DashboardView() {
   const { cappedScore, scoreCapped, checks, dimScores, runAt } = results;
   const grade = getGrade(cappedScore);
   const filesLoaded = Object.values(files).filter(f => f.hasContent).length;
-  const passed  = checks.filter(c => c.status === 'pass').length;
-  const failed  = checks.filter(c => c.status === 'fail').length;
-  const partial = checks.filter(c => c.status === 'partial').length;
+
+  // Bug 6 fix: count all status categories including NA
+  const passed    = checks.filter(c => c.status === 'pass').length;
+  const failed    = checks.filter(c => c.status === 'fail').length;
+  const partialCt = checks.filter(c => c.status === 'partial').length;
+  const missingCt = checks.filter(c => c.status === 'missing').length;
+  const naCt      = checks.filter(c => c.status === 'na').length;
+  const uncertainCt = checks.filter(c => c.status === 'uncertain').length;
+  const applicable = checks.length - naCt;
+
   const runDate = new Date(runAt).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
 
-  // Get real parsed financial data
-  const pd = parsedData as Record<string, number | boolean | undefined>;
+  // Get real parsed financial data — Bug 1: use signed values directly
+  const pd = parsedData as Record<string, number | boolean | undefined | null>;
   const revenue    = (pd.revenue    as number) ?? 0;
   const netProfit  = (pd.netProfit  as number) ?? 0;
   const ca         = (pd.ca         as number) ?? 0;
   const cl         = (pd.cl         as number) ?? 0;
   const debtorBal  = (pd.debtorBal  as number) ?? 0;
   const creditorBal= (pd.creditorBal as number) ?? 0;
-  const currentRatio = ca > 0 && cl > 0 ? ca / cl : null;
+
+  // Bug 1: Current Ratio — N/A when CA < 0
+  const currentRatio = ca > 0 && cl !== 0 ? ca / Math.abs(cl) : null;
+  const caIsNegative = ca < 0;
 
   // Determine DayBook stats for flags
   const dbStatsRef = files.daybook?.chunkedStats ?? null;
@@ -90,13 +114,24 @@ export default function DashboardView() {
   const topFlags   = allFlags.slice(0, 4);
   const topInsights = allInsights.filter(i => i.urgency !== 'positive').slice(0, 3);
 
-  // Build KPI tiles
-  const kpis = [
+  // Build KPI tiles — Bug 1: signed values, ANOMALY pills
+  const kpis: Array<{
+    label: string; value: string; sub: string; color: string; anomaly?: boolean; critical?: boolean
+  }> = [
     { label: 'Revenue',       value: revenue > 0    ? fmtINR(revenue)    : '—', sub: 'From P&L',           color: 'var(--teal)' },
     { label: 'Net Profit',    value: netProfit !== 0 ? fmtINR(netProfit)  : '—', sub: netProfit < 0 ? 'Loss year' : 'Bottom line', color: netProfit >= 0 ? 'var(--green)' : 'var(--red)' },
-    { label: 'Current Ratio', value: currentRatio !== null ? currentRatio.toFixed(2) : '—', sub: currentRatio !== null ? (currentRatio >= 1.5 ? 'Good liquidity' : currentRatio >= 1 ? 'Adequate' : 'Risk') : 'Needs BS', color: currentRatio !== null ? (currentRatio >= 1.5 ? 'var(--green)' : currentRatio >= 1 ? 'var(--amber)' : 'var(--red)') : 'var(--text3)' },
-    { label: 'Debtors',       value: debtorBal > 0  ? fmtINR(debtorBal)  : '—', sub: 'Trade receivables',  color: 'var(--blue)' },
-    { label: 'Creditors',     value: creditorBal > 0 ? fmtINR(creditorBal): '—', sub: 'Trade payables',    color: 'var(--purple)' },
+    // Bug 1: Current Ratio — show N/A with CRITICAL when CA < 0
+    {
+      label: 'Current Ratio',
+      value: caIsNegative ? 'N/A' : currentRatio !== null ? currentRatio.toFixed(2) : '—',
+      sub: caIsNegative ? 'Current Assets negative' : currentRatio !== null ? (currentRatio >= 1.5 ? 'Good liquidity' : currentRatio >= 1 ? 'Adequate' : 'Risk') : 'Needs BS',
+      color: caIsNegative ? 'var(--red)' : currentRatio !== null ? (currentRatio >= 1.5 ? 'var(--green)' : currentRatio >= 1 ? 'var(--amber)' : 'var(--red)') : 'var(--text3)',
+      critical: caIsNegative,
+    },
+    // Bug 1: Show signed Debtors with ANOMALY pill if negative
+    { label: 'Debtors',       value: debtorBal !== 0 ? fmtINR(debtorBal) : '—', sub: 'Trade receivables',  color: debtorBal < 0 ? 'var(--red)' : 'var(--blue)', anomaly: debtorBal < 0 },
+    // Bug 1: Show signed Creditors with ANOMALY pill if positive (Dr balance)
+    { label: 'Creditors',     value: creditorBal !== 0 ? fmtINR(creditorBal): '—', sub: 'Trade payables',    color: creditorBal > 0 ? 'var(--red)' : 'var(--purple)', anomaly: creditorBal > 0 },
     { label: 'Files',         value: `${filesLoaded}`, sub: 'of 13 uploaded',   color: 'var(--text1)' },
   ];
 
@@ -147,12 +182,15 @@ export default function DashboardView() {
           <ScoreRing score={cappedScore} color={grade.color} grade={grade.label} />
         </div>
 
-        {/* Quick stats */}
-        <div className="grid grid-cols-2 gap-3">
-          <StatCard label="Checks Passed" value={passed}  unit={`/ ${checks.length}`} color="var(--green)" />
+        {/* Bug 6 fix: responsive grid with NA + uncertain tiles */}
+        <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}>
+          <StatCard label="Checks Passed" value={passed}  unit={`/ ${applicable}`} color="var(--green)" tooltip={`${checks.length} total (${naCt} N/A)`} />
           <StatCard label="Checks Failed" value={failed}  unit=""                      color="var(--red)" />
-          <StatCard label="Partial"        value={partial} unit=""                      color="var(--amber)" />
-          <StatCard label="Missing"        value={checks.filter(c => c.status === 'missing').length} unit="" color="var(--text2)" />
+          <StatCard label="Partial"        value={partialCt} unit=""                      color="var(--amber)" />
+          <StatCard label="Not Applicable"  value={naCt} unit="" color="var(--text3)" />
+          {uncertainCt > 0 && (
+            <StatCard label="Needs Data" value={uncertainCt} unit="" color="var(--text2)" />
+          )}
         </div>
       </div>
 
@@ -168,7 +206,21 @@ export default function DashboardView() {
               className="rounded-xl border px-4 py-3"
               style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}
             >
-              <div className="text-xs mb-1" style={{ color: 'var(--text3)' }}>{kpi.label}</div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-xs" style={{ color: 'var(--text3)' }}>{kpi.label}</span>
+                {/* Bug 1: ANOMALY pill */}
+                {kpi.anomaly && (
+                  <span className="badge-critical text-[10px] px-1.5 py-0.5 rounded font-semibold">
+                    ANOMALY
+                  </span>
+                )}
+                {/* Bug 1: CRITICAL pill for negative CA Current Ratio */}
+                {kpi.critical && (
+                  <span className="badge-critical text-[10px] px-1.5 py-0.5 rounded font-semibold">
+                    CRITICAL
+                  </span>
+                )}
+              </div>
               <div className="text-xl font-bold" style={{ color: kpi.color }}>{kpi.value}</div>
               <div className="text-xs mt-0.5" style={{ color: 'var(--text3)' }}>{kpi.sub}</div>
             </div>
@@ -176,7 +228,7 @@ export default function DashboardView() {
         </div>
       </div>
 
-      {/* Critical Flags panel */}
+      {/* Critical Flags panel — Bug 4: use failLabel, Bug 7: use deriveSeverity */}
       {topFlags.length > 0 && (
         <div className="mb-6">
           <div className="flex items-center justify-between mb-3">
@@ -298,9 +350,9 @@ export default function DashboardView() {
   );
 }
 
-function StatCard({ label, value, unit, color }: { label: string; value: number; unit: string; color?: string }) {
+function StatCard({ label, value, unit, color, tooltip }: { label: string; value: number; unit: string; color?: string; tooltip?: string }) {
   return (
-    <div className="rounded-lg border px-4 py-3" style={{ background: 'var(--bg3)', borderColor: 'var(--border)' }}>
+    <div className="rounded-lg border px-4 py-3" style={{ background: 'var(--bg3)', borderColor: 'var(--border)' }} title={tooltip}>
       <div className="text-xs mb-1" style={{ color: 'var(--text3)' }}>{label}</div>
       <div className="text-2xl font-bold" style={{ color: color ?? 'var(--text1)' }}>
         {value}
