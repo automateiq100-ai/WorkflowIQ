@@ -5,7 +5,16 @@ import { getGrade, DIM_LABELS, DIM_WEIGHTS, DIM_COLORS } from '@/lib/constants';
 import { generateFlags } from '@/lib/flags';
 import { generateInsights } from '@/lib/insights';
 import ScoreRing from '@/app/components/ScoreRing';
-import type { DimKey } from '@/lib/types';
+import type { DimKey, Check } from '@/lib/types';
+import { useEffect, useState } from 'react';
+
+interface FirstRun {
+  overall_score: number;
+  capped_score: number;
+  dim_scores: Record<DimKey, number>;
+  checks: Check[];
+  run_at: string;
+}
 
 const DIMS: DimKey[] = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
 
@@ -55,6 +64,21 @@ function isAnomaly(label: string, value: number): boolean {
 export default function DashboardView() {
   const { state, dispatch } = useApp();
   const { results, parsedData, files, filters } = state;
+  const [firstRun, setFirstRun] = useState<FirstRun | null>(null);
+  const [runCount, setRunCount] = useState(0);
+
+  useEffect(() => {
+    if (!results) return;
+    const url = state.currentCompany
+      ? `/api/analysis/first?company_id=${state.currentCompany.id}`
+      : '/api/analysis/first';
+    fetch(url)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.first) { setFirstRun(data.first); setRunCount(data.count ?? 1); }
+      })
+      .catch(() => {});
+  }, [results?.runAt, state.currentCompany?.id]);
 
   if (!results) {
     return (
@@ -172,6 +196,69 @@ export default function DashboardView() {
           ⚠ Score capped at 60 — DayBook was not uploaded. Upload DayBook for full analysis.
         </div>
       )}
+
+      {/* Improvement panel — shown when there's a prior run to compare against */}
+      {firstRun && runCount > 1 && (() => {
+        const scoreDelta = results.cappedScore - firstRun.capped_score;
+        const firstMap = Object.fromEntries((firstRun.checks as Check[]).map(c => [c.id, c.status]));
+        const improved  = results.checks.filter(c => {
+          const prev = firstMap[c.id];
+          return (prev === 'fail' || prev === 'partial') && c.status === 'pass';
+        });
+        const regressed = results.checks.filter(c => {
+          const prev = firstMap[c.id];
+          return prev === 'pass' && (c.status === 'fail' || c.status === 'partial');
+        });
+        const firstDate = new Date(firstRun.run_at).toLocaleDateString('en-IN', { dateStyle: 'medium' });
+        return (
+          <div
+            className="mb-4 rounded-xl border p-4"
+            style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}
+          >
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text3)' }}>
+                Progress since first analysis
+              </div>
+              <div className="text-xs" style={{ color: 'var(--text3)' }}>First run: {firstDate}</div>
+            </div>
+            <div className="flex items-center gap-6 flex-wrap">
+              {/* Score delta */}
+              <div className="flex items-baseline gap-1.5">
+                <span
+                  className="text-2xl font-bold"
+                  style={{ color: scoreDelta >= 0 ? 'var(--green)' : 'var(--red)', fontFamily: 'var(--font-dm-serif)' }}
+                >
+                  {scoreDelta >= 0 ? '+' : ''}{scoreDelta.toFixed(0)}
+                </span>
+                <span className="text-xs" style={{ color: 'var(--text3)' }}>points ({firstRun.capped_score.toFixed(0)} → {results.cappedScore.toFixed(0)})</span>
+              </div>
+              {/* Improved checks */}
+              {improved.length > 0 && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-sm font-semibold" style={{ color: 'var(--green)' }}>✓ {improved.length}</span>
+                  <span className="text-xs" style={{ color: 'var(--text3)' }}>
+                    check{improved.length !== 1 ? 's' : ''} fixed
+                    {improved.length <= 3 && ': ' + improved.map(c => c.id).join(', ')}
+                  </span>
+                </div>
+              )}
+              {/* Regressed checks */}
+              {regressed.length > 0 && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-sm font-semibold" style={{ color: 'var(--red)' }}>↓ {regressed.length}</span>
+                  <span className="text-xs" style={{ color: 'var(--text3)' }}>
+                    new issue{regressed.length !== 1 ? 's' : ''}
+                    {regressed.length <= 3 && ': ' + regressed.map(c => c.id).join(', ')}
+                  </span>
+                </div>
+              )}
+              {improved.length === 0 && regressed.length === 0 && scoreDelta === 0 && (
+                <span className="text-xs" style={{ color: 'var(--text3)' }}>No change in check statuses since first run.</span>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Top row: ring + stats */}
       <div className="grid gap-4 mb-6" style={{ gridTemplateColumns: '160px 1fr' }}>

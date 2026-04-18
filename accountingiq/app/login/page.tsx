@@ -1,23 +1,106 @@
 'use client';
 
+import { useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import { useRouter } from 'next/navigation';
+
+type Tab = 'signin' | 'signup';
+
+const TOOLS = [
+  { id: 'accountingiq', label: 'AccountingIQ', description: 'Tally XML Analyser — 60 checks, 0–100 score' },
+  { id: 'researchiq',   label: 'ResearchIQ',   description: 'AI-Powered Legal Research' },
+];
+
+const COUNTRY_CODES = [
+  { flag: '🇮🇳', code: '+91',  name: 'India' },
+  { flag: '🇺🇸', code: '+1',   name: 'USA' },
+  { flag: '🇬🇧', code: '+44',  name: 'UK' },
+  { flag: '🇦🇪', code: '+971', name: 'UAE' },
+  { flag: '🇸🇬', code: '+65',  name: 'Singapore' },
+  { flag: '🇦🇺', code: '+61',  name: 'Australia' },
+  { flag: '🇨🇦', code: '+1',   name: 'Canada' },
+  { flag: '🇩🇪', code: '+49',  name: 'Germany' },
+];
 
 export default function LoginPage() {
-  async function handleGoogleSignIn() {
-    const supabase = createClient();
-    await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: `${window.location.origin}/auth/callback`,
-      },
-    });
+  const router = useRouter();
+  const [tab, setTab] = useState<Tab>('signin');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  // Sign in fields
+  const [siEmail, setSiEmail] = useState('');
+  const [siPassword, setSiPassword] = useState('');
+
+  // Sign up fields
+  const [suName, setSuName] = useState('');
+  const [suEmail, setSuEmail] = useState('');
+  const [suCountry, setSuCountry] = useState(COUNTRY_CODES[0]);
+  const [suMobile, setSuMobile] = useState('');
+  const [suPassword, setSuPassword] = useState('');
+  const [suConfirm, setSuConfirm] = useState('');
+  const [suTools, setSuTools] = useState<string[]>([]);
+
+  function toggleTool(id: string) {
+    setSuTools(prev => prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id]);
   }
 
+  async function handleSignIn(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+    const supabase = createClient();
+    const { error } = await supabase.auth.signInWithPassword({ email: siEmail, password: siPassword });
+    setLoading(false);
+    if (error) {
+      setError(error.message);
+    } else {
+      router.push('/portal');
+    }
+  }
+
+  async function handleSignUp(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    if (suPassword !== suConfirm) { setError('Passwords do not match.'); return; }
+    if (suPassword.length < 8) { setError('Password must be at least 8 characters.'); return; }
+    if (suTools.length === 0) { setError('Please select at least one tool.'); return; }
+    setLoading(true);
+    const supabase = createClient();
+    const { data, error } = await supabase.auth.signUp({
+      email: suEmail,
+      password: suPassword,
+      options: {
+        data: { full_name: suName.trim(), mobile: `${suCountry.code} ${suMobile.trim()}`, selected_tools: suTools },
+        emailRedirectTo: `${window.location.origin}/auth/callback`,
+      },
+    });
+    setLoading(false);
+    if (error) {
+      setError(error.message);
+    } else if (data.session) {
+      // Email confirmation is disabled — session is live immediately.
+      // Bootstrap the user profile then go to onboarding.
+      await fetch('/api/onboarding/init', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ selected_tools: suTools }),
+      });
+      router.push('/portal');
+    } else {
+      setMessage('Check your email for a verification link to complete sign-up.');
+    }
+  }
+
+  const inputStyle = {
+    background: 'var(--bg4)',
+    border: '1px solid var(--border)',
+    color: 'var(--text1)',
+  };
+
   return (
-    <div
-      className="flex items-center justify-center min-h-screen"
-      style={{ background: 'var(--bg)' }}
-    >
+    <div className="flex items-center justify-center min-h-screen" style={{ background: 'var(--bg)' }}>
       <div
         className="max-w-sm w-full mx-4 rounded-xl border p-8"
         style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}
@@ -35,23 +118,169 @@ export default function LoginPage() {
           </div>
         </div>
 
-        <p className="text-sm text-center mb-6" style={{ color: 'var(--text2)' }}>
-          Sign in to access your workspace
-        </p>
+        {/* Tabs */}
+        <div className="flex mb-6 border-b" style={{ borderColor: 'var(--border)' }}>
+          {(['signin', 'signup'] as Tab[]).map(t => (
+            <button
+              key={t}
+              onClick={() => { setTab(t); setError(null); setMessage(null); }}
+              className="flex-1 pb-2 text-sm font-medium transition-colors"
+              style={{
+                color: tab === t ? 'var(--teal)' : 'var(--text3)',
+                borderBottom: tab === t ? '2px solid var(--teal)' : '2px solid transparent',
+                marginBottom: -1,
+              }}
+            >
+              {t === 'signin' ? 'Sign In' : 'Sign Up'}
+            </button>
+          ))}
+        </div>
 
-        <button
-          onClick={handleGoogleSignIn}
-          className="w-full flex items-center justify-center gap-3 py-2.5 rounded-lg text-sm font-semibold transition-opacity hover:opacity-80"
-          style={{ background: 'var(--bg4)', color: 'var(--text1)', border: '1px solid var(--border)' }}
-        >
-          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-            <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4"/>
-            <path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z" fill="#34A853"/>
-            <path d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z" fill="#FBBC05"/>
-            <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 7.29C4.672 5.163 6.656 3.58 9 3.58z" fill="#EA4335"/>
-          </svg>
-          Sign in with Google
-        </button>
+        {message ? (
+          <div
+            className="rounded-lg p-4 text-sm text-center"
+            style={{ background: 'var(--bg4)', color: 'var(--teal)', border: '1px solid var(--border)' }}
+          >
+            {message}
+          </div>
+        ) : tab === 'signin' ? (
+          <form onSubmit={handleSignIn} className="flex flex-col gap-3">
+            <input
+              type="email"
+              placeholder="Email"
+              value={siEmail}
+              onChange={e => setSiEmail(e.target.value)}
+              required
+              className="w-full px-3 py-2.5 rounded-lg text-sm outline-none"
+              style={inputStyle}
+            />
+            <input
+              type="password"
+              placeholder="Password"
+              value={siPassword}
+              onChange={e => setSiPassword(e.target.value)}
+              required
+              className="w-full px-3 py-2.5 rounded-lg text-sm outline-none"
+              style={inputStyle}
+            />
+            {error && <p className="text-xs" style={{ color: 'var(--red)' }}>{error}</p>}
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full py-2.5 rounded-lg text-sm font-semibold transition-opacity"
+              style={{ background: 'var(--teal)', color: '#000', opacity: loading ? 0.6 : 1 }}
+            >
+              {loading ? 'Signing in…' : 'Sign In'}
+            </button>
+          </form>
+        ) : (
+          <form onSubmit={handleSignUp} className="flex flex-col gap-3">
+            <input
+              type="text"
+              placeholder="Full name"
+              value={suName}
+              onChange={e => setSuName(e.target.value)}
+              required
+              className="w-full px-3 py-2.5 rounded-lg text-sm outline-none"
+              style={inputStyle}
+            />
+            <input
+              type="email"
+              placeholder="Email"
+              value={suEmail}
+              onChange={e => setSuEmail(e.target.value)}
+              required
+              className="w-full px-3 py-2.5 rounded-lg text-sm outline-none"
+              style={inputStyle}
+            />
+            <div className="flex gap-2">
+              <select
+                value={suCountry.code + suCountry.name}
+                onChange={e => setSuCountry(COUNTRY_CODES.find(c => c.code + c.name === e.target.value) ?? COUNTRY_CODES[0])}
+                className="shrink-0 px-2 py-2.5 rounded-lg text-sm outline-none"
+                style={{ ...inputStyle, width: 110 }}
+              >
+                {COUNTRY_CODES.map(c => (
+                  <option key={c.code + c.name} value={c.code + c.name}>
+                    {c.flag} {c.code}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="tel"
+                placeholder="Mobile number"
+                value={suMobile}
+                onChange={e => setSuMobile(e.target.value)}
+                required
+                className="flex-1 px-3 py-2.5 rounded-lg text-sm outline-none"
+                style={inputStyle}
+              />
+            </div>
+            <input
+              type="password"
+              placeholder="Password (min 8 characters)"
+              value={suPassword}
+              onChange={e => setSuPassword(e.target.value)}
+              required
+              minLength={8}
+              className="w-full px-3 py-2.5 rounded-lg text-sm outline-none"
+              style={inputStyle}
+            />
+            <input
+              type="password"
+              placeholder="Confirm password"
+              value={suConfirm}
+              onChange={e => setSuConfirm(e.target.value)}
+              required
+              className="w-full px-3 py-2.5 rounded-lg text-sm outline-none"
+              style={inputStyle}
+            />
+            {/* Tool access */}
+            <div className="flex flex-col gap-2 pt-1">
+              <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text3)' }}>
+                Tools Access
+              </div>
+              {TOOLS.map(tool => {
+                const selected = suTools.includes(tool.id);
+                return (
+                  <div
+                    key={tool.id}
+                    onClick={() => toggleTool(tool.id)}
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg border cursor-pointer transition-all"
+                    style={{
+                      background: selected ? 'var(--bg4)' : 'var(--bg3)',
+                      borderColor: selected ? 'var(--teal)' : 'var(--border)',
+                    }}
+                  >
+                    <div
+                      className="w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-all"
+                      style={{
+                        background: selected ? 'var(--teal)' : 'transparent',
+                        borderColor: selected ? 'var(--teal)' : 'var(--text3)',
+                      }}
+                    >
+                      {selected && <span style={{ color: '#000', fontSize: 10, fontWeight: 700 }}>✓</span>}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium" style={{ color: 'var(--text1)' }}>{tool.label}</div>
+                      <div className="text-xs mt-0.5" style={{ color: 'var(--text3)' }}>{tool.description}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {error && <p className="text-xs" style={{ color: 'var(--red)' }}>{error}</p>}
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full py-2.5 rounded-lg text-sm font-semibold transition-opacity"
+              style={{ background: 'var(--teal)', color: '#000', opacity: loading ? 0.6 : 1 }}
+            >
+              {loading ? 'Creating account…' : 'Create Account'}
+            </button>
+          </form>
+        )}
       </div>
     </div>
   );

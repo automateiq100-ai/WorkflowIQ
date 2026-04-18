@@ -8,6 +8,7 @@ export type FileKey =
 export type ModuleId = 'accounting' | 'mis' | 'reconciliation';
 
 export type ViewId =
+  | 'company-select'
   | 'dashboard' | 'checklist' | 'insights' | 'health'
   | 'flags' | 'upload' | 'profile' | 'reports' | 'rules'
   | 'mis-setup' | 'mis-report'
@@ -163,10 +164,74 @@ export interface Rule {
 
 export type MISSector = 'Manufacturing' | 'Trading' | 'Services' | 'Retail' | 'Construction' | 'Financial Services' | 'Hospitality' | 'IT/SaaS';
 
+export interface UserProfile {
+  id: string;
+  email: string;
+  full_name: string | null;
+  mobile: string | null;
+  company_name: string | null;
+  company_type: string | null;
+  selected_tools: string[];
+  gst_applicable: boolean;
+  gst_regular: boolean;
+  tds_applicable: boolean;
+  has_employees: boolean;
+  has_fa_filter: boolean;
+  is_goods: boolean;
+  full_fy: boolean;
+  theme: 'dark' | 'light';
+  onboarding_done: boolean;
+}
+
+export function dbProfileToFilters(p: Partial<UserProfile>): CompanyProfile {
+  return {
+    gstApplicable: p.gst_applicable ?? false,
+    gstRegular:    p.gst_regular ?? false,
+    tdsApplicable: p.tds_applicable ?? false,
+    hasEmployees:  p.has_employees ?? false,
+    hasFAfilter:   p.has_fa_filter ?? false,
+    isGoods:       p.is_goods ?? false,
+    fullFY:        p.full_fy ?? true,
+  };
+}
+
 export interface MISSetup {
   sector: MISSector | null;
   hasBudget: boolean;
   selectedMetricIds: string[];  // IDs of metrics user has selected
+}
+
+export interface Company {
+  id: string;
+  user_id: string;
+  name: string;
+  company_type: string | null;
+  gst_applicable: boolean;
+  gst_regular: boolean;
+  tds_applicable: boolean;
+  has_employees: boolean;
+  has_fa_filter: boolean;
+  is_goods: boolean;
+  full_fy: boolean;
+  created_at: string;
+}
+
+export interface ActiveCompany {
+  id: string;
+  name: string;
+  companyType: string | null;
+}
+
+export function companyToFilters(c: Company): CompanyProfile {
+  return {
+    gstApplicable: c.gst_applicable,
+    gstRegular:    c.gst_regular,
+    tdsApplicable: c.tds_applicable,
+    hasEmployees:  c.has_employees,
+    hasFAfilter:   c.has_fa_filter,
+    isGoods:       c.is_goods,
+    fullFY:        c.full_fy,
+  };
 }
 
 export interface AppState {
@@ -187,6 +252,7 @@ export interface AppState {
   aiAnalysis: AIResponse | null;
   /** Hash of input data used to generate cached AI analysis */
   aiAnalysisHash: string | null;
+  currentCompany: ActiveCompany | null;
 }
 
 export interface Insight {

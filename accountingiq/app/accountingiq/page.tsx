@@ -20,7 +20,7 @@ export default async function AccountingIQPage() {
 
   return (
     <AppProvider>
-      <Shell user={{ name: user.user_metadata?.full_name ?? null, email: user.email ?? null, image: user.user_metadata?.avatar_url ?? null }} />
+      <Shell user={{ name: user.user_metadata?.full_name ?? null, email: user.email ?? null, image: null }} />
     </AppProvider>
   );
 }

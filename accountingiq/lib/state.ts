@@ -3,7 +3,7 @@
 import { createContext, useContext, useReducer, type Dispatch } from 'react';
 import type {
   AppState, FileKey, FileEntry, AnalysisResults, CompanyProfile,
-  ParsedData, ViewId, ModuleId, Theme, MISSetup, AIResponse,
+  ParsedData, ViewId, ModuleId, Theme, MISSetup, AIResponse, ActiveCompany,
 } from './types';
 import { MODULE_VIEWS } from './constants';
 
@@ -44,7 +44,7 @@ const INITIAL_STATE: AppState = {
   results: null,
   filters: DEFAULT_FILTERS,
   analysed: false,
-  currentView: 'upload',
+  currentView: 'company-select',
   currentModule: 'accounting',
   theme: 'dark',
   consentGiven: false,
@@ -53,6 +53,7 @@ const INITIAL_STATE: AppState = {
   misSetup: DEFAULT_MIS_SETUP,
   aiAnalysis: null,
   aiAnalysisHash: null,
+  currentCompany: null,
 };
 
 // ── actions ───────────────────────────────────────────────────────────────
@@ -70,7 +71,9 @@ export type Action =
   | { type: 'MIS_SETUP_UPDATED'; misSetup: Partial<MISSetup> }
   | { type: 'AI_ANALYSIS_DONE'; analysis: AIResponse; hash: string }
   | { type: 'AI_ANALYSIS_CLEAR' }
-  | { type: 'SESSION_CLEARED' };
+  | { type: 'SESSION_CLEARED' }
+  | { type: 'COMPANY_SELECTED'; company: ActiveCompany; filters: CompanyProfile }
+  | { type: 'COMPANY_DESELECTED' };
 
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
@@ -135,7 +138,34 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, aiAnalysis: null, aiAnalysisHash: null };
 
     case 'SESSION_CLEARED':
-      return { ...INITIAL_STATE, consentGiven: false, aiConsentGiven: false, theme: state.theme };
+      return { ...INITIAL_STATE, consentGiven: false, aiConsentGiven: false, theme: state.theme, currentCompany: null, currentView: 'company-select' };
+
+    case 'COMPANY_SELECTED':
+      return {
+        ...state,
+        currentCompany: action.company,
+        filters: action.filters,
+        files: initialFiles(),
+        results: null,
+        parsedData: {},
+        analysed: false,
+        aiAnalysis: null,
+        aiAnalysisHash: null,
+        currentView: 'upload',
+      };
+
+    case 'COMPANY_DESELECTED':
+      return {
+        ...state,
+        currentCompany: null,
+        currentView: 'company-select',
+        files: initialFiles(),
+        results: null,
+        parsedData: {},
+        analysed: false,
+        aiAnalysis: null,
+        aiAnalysisHash: null,
+      };
 
     default:
       return state;

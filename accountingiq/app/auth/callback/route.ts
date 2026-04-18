@@ -11,7 +11,8 @@ export async function GET(request: NextRequest) {
     ?? (forwardedHost ? `${forwardedProto}://${forwardedHost}` : new URL(request.url).origin);
   const code = searchParams.get('code');
   const token_hash = searchParams.get('token_hash');
-  const type = searchParams.get('type') as 'email' | 'recovery' | null;
+  const type = searchParams.get('type') as 'signup' | 'email' | 'recovery' | null;
+  const isSignup = type === 'signup';
   const next = searchParams.get('next') ?? '/portal';
 
   const cookieStore = await cookies();
@@ -46,18 +47,20 @@ export async function GET(request: NextRequest) {
   if (!error && user) {
     const admin = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      process.env.SUPABASE_SERVICE_KEY!,
     );
-    // Upsert user profile
     await admin.from('user_profiles').upsert({
       id: user.id,
       email: user.email,
       full_name: user.user_metadata?.full_name ?? null,
-      avatar_url: user.user_metadata?.avatar_url ?? null,
+      mobile: user.user_metadata?.mobile ?? null,
       last_seen: new Date().toISOString(),
+      ...(isSignup ? {
+        onboarding_done: true,
+        selected_tools: user.user_metadata?.selected_tools ?? ['accountingiq'],
+      } : {}),
     }, { onConflict: 'id' });
     await admin.rpc('increment_login_count', { user_id: user.id });
-    // Create session record
     await admin.from('login_sessions').insert({
       user_id: user.id,
       app: 'accountingiq',

@@ -5,7 +5,6 @@ import { VIEWS, MODULES, MODULE_VIEWS } from '@/lib/constants';
 import { clearSession } from '@/lib/session';
 import type { ViewId, ModuleId } from '@/lib/types';
 import dynamic from 'next/dynamic';
-import Image from 'next/image';
 import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
 
@@ -22,10 +21,12 @@ const ReportsView       = dynamic(() => import('@/app/views/ReportsView'));
 const RulesView         = dynamic(() => import('@/app/views/RulesView'));
 const MISReportView     = dynamic(() => import('@/app/views/MISReportView'));
 const ReconciliationView = dynamic(() => import('@/app/views/ReconciliationView'));
-const AIAnalysisView    = dynamic(() => import('@/app/views/AIAnalysisView'));
+const AIAnalysisView      = dynamic(() => import('@/app/views/AIAnalysisView'));
+const CompanySelectorView = dynamic(() => import('@/app/views/CompanySelectorView'));
 
 const VIEW_COMPONENTS: Record<ViewId, React.ComponentType> = {
-  upload:          UploadView,
+  'company-select': CompanySelectorView,
+  upload:           UploadView,
   dashboard:       DashboardView,
   checklist:       ChecklistView,
   insights:        InsightsView,
@@ -40,9 +41,11 @@ const VIEW_COMPONENTS: Record<ViewId, React.ComponentType> = {
   aiAnalysis:      AIAnalysisView,
 };
 
-// Accounting module: views always visible
-const ACCOUNTING_ALWAYS: ViewId[] = ['upload', 'profile', 'rules'];
-// Accounting module: views only after analysis
+// Accounting module: always visible
+const ACCOUNTING_ALWAYS: ViewId[] = ['company-select'];
+// Accounting module: visible only when a company is selected
+const ACCOUNTING_COMPANY: ViewId[] = ['upload', 'profile', 'rules'];
+// Accounting module: visible only after analysis
 const ACCOUNTING_POST: ViewId[] = ['dashboard', 'checklist', 'insights', 'aiAnalysis', 'health', 'flags', 'reports'];
 
 interface UserInfo {
@@ -53,7 +56,7 @@ interface UserInfo {
 
 export default function Shell({ user }: { user: UserInfo | null }) {
   const { state, dispatch } = useApp();
-  const { currentView, currentModule, analysed, uploadProgress, consentGiven, aiConsentGiven, theme } = state;
+  const { currentView, currentModule, analysed, uploadProgress, consentGiven, aiConsentGiven, theme, currentCompany } = state;
 
   function navigate(view: ViewId) {
     dispatch({ type: 'SET_VIEW', view });
@@ -152,12 +155,30 @@ export default function Shell({ user }: { user: UserInfo | null }) {
                   <NavItem key={v.id} view={v} active={currentView === v.id} onClick={() => navigate(v.id)} />
                 ))}
 
+                {/* Working-on chip + company-gated views */}
+                {currentCompany && (
+                  <>
+                    <div
+                      className="mx-3 my-1 px-3 py-2 rounded-lg border cursor-pointer text-xs"
+                      style={{ background: 'var(--bg3)', borderColor: 'var(--border)', color: 'var(--text2)' }}
+                      onClick={() => navigate('company-select')}
+                    >
+                      <div style={{ color: 'var(--text3)', fontSize: 10 }}>Working on</div>
+                      <div className="truncate font-semibold" style={{ color: 'var(--teal)' }}>
+                        {currentCompany.name}
+                      </div>
+                    </div>
+                    {VIEWS.filter(v => ACCOUNTING_COMPANY.includes(v.id)).map(v => (
+                      <NavItem key={v.id} view={v} active={currentView === v.id} onClick={() => navigate(v.id)} />
+                    ))}
+                  </>
+                )}
+
                 {/* Divider + post-analysis */}
                 {analysed && (
                   <>
                     <div className="mx-4 my-2 border-t" style={{ borderColor: 'var(--border)' }} />
                     {VIEWS.filter(v => ACCOUNTING_POST.includes(v.id)).map(v => {
-                      // Lock AI Analysis tab if user hasn't consented
                       const isAILocked = v.id === 'aiAnalysis' && !aiConsentGiven;
                       return (
                         <NavItem
@@ -240,22 +261,12 @@ function UserFooter({ user }: { user: UserInfo | null }) {
 
   return (
     <div className="p-3 flex items-center gap-2.5 border-t" style={{ borderColor: 'var(--border)' }}>
-      {user.image ? (
-        <Image
-          src={user.image}
-          alt={displayName}
-          width={28}
-          height={28}
-          className="rounded-full shrink-0"
-        />
-      ) : (
-        <div
+      <div
           className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
           style={{ background: 'var(--teal)', color: '#000' }}
         >
           {initials}
         </div>
-      )}
       <div className="flex-1 min-w-0">
         <div className="text-xs font-medium truncate" style={{ color: 'var(--text1)' }}>
           {displayName}

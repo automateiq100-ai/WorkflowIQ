@@ -92,6 +92,24 @@ function readWithEncoding(file: File): Promise<string> {
 export default function UploadView() {
   const { state, dispatch } = useApp();
   const { files } = state;
+
+  if (!state.currentCompany) {
+    return (
+      <div className="flex items-center justify-center min-h-full p-8">
+        <p className="text-sm" style={{ color: 'var(--text3)' }}>
+          Select a company first.{' '}
+          <button
+            className="underline"
+            style={{ color: 'var(--teal)' }}
+            onClick={() => dispatch({ type: 'SET_VIEW', view: 'company-select' })}
+          >
+            Go to Companies
+          </button>
+        </p>
+      </div>
+    );
+  }
+
   return <UploadScreen files={files} state={state} dispatch={dispatch} />;
 }
 
@@ -219,9 +237,22 @@ function UploadScreen({
     if (fl && fl.length > 0) processFolder(fl);
   }
 
-  function handleAnalyse() {
+  async function handleAnalyse() {
     const { results, parsedData } = analyseFiles(state);
     dispatch({ type: 'ANALYSIS_DONE', results, parsedData });
+    // Save to DB in the background — don't block UI
+    fetch('/api/analysis/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        overall_score: results.overall,
+        capped_score: results.cappedScore,
+        score_capped: results.scoreCapped,
+        dim_scores: results.dimScores,
+        checks: results.checks,
+        company_id: state.currentCompany?.id ?? null,
+      }),
+    }).catch(() => {});
   }
 
 

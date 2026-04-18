@@ -1,49 +1,47 @@
 'use client';
 
-import { useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
-import Image from 'next/image';
 
 interface UserInfo {
   name: string | null;
   email: string;
-  image: string | null;
 }
+
+const ALL_TOOLS = [
+  {
+    id: 'accountingiq',
+    label: 'AccountingIQ',
+    tagline: 'Tally XML Analyser',
+    tagColor: 'var(--teal)',
+    icon: '📊',
+    description: '59 health checks across 8 dimensions. Upload Tally XML exports and get a 0–100 accounting quality score.',
+    href: '/accountingiq',
+  },
+  {
+    id: 'researchiq',
+    label: 'ResearchIQ',
+    tagline: 'AI-Powered Legal Research',
+    tagColor: 'var(--blue)',
+    icon: '⚖️',
+    description: 'Search and analyse thousands of legal cases. AI-powered relevancy scoring and synthesis memos.',
+    href: null, // uses token-hash redirect
+  },
+];
 
 export default function PortalShell({
   user,
-  hasMobile,
+  selectedTools,
 }: {
   user: UserInfo;
-  hasMobile: boolean;
+  selectedTools: string[];
 }) {
-  const [mobile, setMobile] = useState('');
-  const [showModal, setShowModal] = useState(!hasMobile);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const router = useRouter();
 
   const displayName = user.name ?? user.email;
   const initials = displayName.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
 
-  async function handleMobileSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!mobile.trim()) return;
-    setSaving(true);
-    setError(null);
-    const res = await fetch('/api/portal/mobile', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mobile: mobile.trim() }),
-    });
-    if (res.ok) {
-      setShowModal(false);
-    } else {
-      setError('Failed to save. Please try again.');
-    }
-    setSaving(false);
-  }
+  const visibleTools = ALL_TOOLS.filter(t => selectedTools.includes(t.id));
 
   async function goToResearchIQ() {
     const supabase = createClient();
@@ -56,7 +54,6 @@ export default function PortalShell({
       `token_type=bearer`,
       `type=bearer`,
     ].join('&');
-    // ResearchIQ is served at /researchiq on the same origin via Next.js proxy
     window.location.href = `/researchiq#${hash}`;
   }
 
@@ -66,58 +63,16 @@ export default function PortalShell({
     router.push('/login');
   }
 
+  function handleToolClick(tool: typeof ALL_TOOLS[number]) {
+    if (tool.id === 'researchiq') {
+      goToResearchIQ();
+    } else if (tool.href) {
+      router.push(tool.href);
+    }
+  }
+
   return (
     <div className="min-h-screen flex flex-col" style={{ background: 'var(--bg)' }}>
-      {/* Mobile number modal */}
-      {showModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center"
-          style={{ background: 'rgba(0,0,0,0.7)' }}
-        >
-          <div
-            className="w-full max-w-sm mx-4 rounded-2xl border p-8"
-            style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}
-          >
-            <div className="mb-5">
-              <div
-                className="text-lg font-semibold mb-1"
-                style={{ fontFamily: 'var(--font-dm-serif)', color: 'var(--text1)' }}
-              >
-                One last thing
-              </div>
-              <p className="text-sm" style={{ color: 'var(--text2)' }}>
-                Add your mobile number so we can reach you if needed.
-              </p>
-            </div>
-
-            <form onSubmit={handleMobileSubmit} className="flex flex-col gap-3">
-              <input
-                type="tel"
-                placeholder="+91 98765 43210"
-                value={mobile}
-                onChange={e => setMobile(e.target.value)}
-                required
-                className="w-full px-3 py-2.5 rounded-lg text-sm outline-none"
-                style={{
-                  background: 'var(--bg4)',
-                  border: '1px solid var(--border)',
-                  color: 'var(--text1)',
-                }}
-              />
-              {error && <p className="text-xs" style={{ color: 'var(--red)' }}>{error}</p>}
-              <button
-                type="submit"
-                disabled={saving}
-                className="w-full py-2.5 rounded-lg text-sm font-semibold transition-opacity"
-                style={{ background: 'var(--teal)', color: '#000', opacity: saving ? 0.6 : 1 }}
-              >
-                {saving ? 'Saving…' : 'Continue'}
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
-
       {/* Header */}
       <header
         className="px-6 py-4 border-b flex items-center justify-between shrink-0"
@@ -135,16 +90,12 @@ export default function PortalShell({
 
         {/* User */}
         <div className="flex items-center gap-2.5">
-          {user.image ? (
-            <Image src={user.image} alt={displayName} width={28} height={28} className="rounded-full shrink-0" />
-          ) : (
-            <div
-              className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
-              style={{ background: 'var(--teal)', color: '#000' }}
-            >
-              {initials}
-            </div>
-          )}
+          <div
+            className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
+            style={{ background: 'var(--teal)', color: '#000' }}
+          >
+            {initials}
+          </div>
           <div className="text-xs" style={{ color: 'var(--text2)' }}>{displayName}</div>
           <button
             onClick={handleSignOut}
@@ -172,66 +123,52 @@ export default function PortalShell({
           </p>
         </div>
 
-        <div className="flex gap-6 flex-wrap justify-center w-full max-w-2xl">
-          {/* AccountingIQ card */}
-          <button
-            onClick={() => router.push('/accountingiq')}
-            id="accountingiq-card"
-            className="flex-1 min-w-64 rounded-2xl border p-8 text-left transition-all"
-            style={{ background: 'var(--bg2)', borderColor: 'var(--border)', minWidth: 260 }}
-            onMouseEnter={e => {
-              (e.currentTarget as HTMLElement).style.borderColor = 'var(--teal)';
-              (e.currentTarget as HTMLElement).style.background = 'var(--bg3)';
-            }}
-            onMouseLeave={e => {
-              (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)';
-              (e.currentTarget as HTMLElement).style.background = 'var(--bg2)';
-            }}
+        {visibleTools.length === 0 ? (
+          <div
+            className="rounded-xl border p-8 text-center max-w-sm"
+            style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}
           >
-            <div className="text-3xl mb-4">📊</div>
-            <div
-              className="text-lg mb-1"
-              style={{ fontFamily: 'var(--font-dm-serif)', color: 'var(--text1)' }}
-            >
-              AccountingIQ
-            </div>
-            <div className="text-xs mb-4" style={{ color: 'var(--teal)' }}>
-              Tally XML Analyser
-            </div>
-            <p className="text-sm" style={{ color: 'var(--text2)' }}>
-              59 health checks across 8 dimensions. Upload Tally XML exports and get a 0–100 accounting quality score.
+            <p className="text-sm mb-4" style={{ color: 'var(--text2)' }}>
+              You don&apos;t have access to any tools yet.
             </p>
-          </button>
-
-          {/* ResearchIQ card */}
-          <button
-            onClick={goToResearchIQ}
-            className="flex-1 min-w-64 rounded-2xl border p-8 text-left transition-all"
-            style={{ background: 'var(--bg2)', borderColor: 'var(--border)', minWidth: 260 }}
-            onMouseEnter={e => {
-              (e.currentTarget as HTMLElement).style.borderColor = 'var(--blue)';
-              (e.currentTarget as HTMLElement).style.background = 'var(--bg3)';
-            }}
-            onMouseLeave={e => {
-              (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)';
-              (e.currentTarget as HTMLElement).style.background = 'var(--bg2)';
-            }}
-          >
-            <div className="text-3xl mb-4">⚖️</div>
-            <div
-              className="text-lg mb-1"
-              style={{ fontFamily: 'var(--font-dm-serif)', color: 'var(--text1)' }}
-            >
-              ResearchIQ
-            </div>
-            <div className="text-xs mb-4" style={{ color: 'var(--blue)' }}>
-              AI-Powered Legal Research
-            </div>
-            <p className="text-sm" style={{ color: 'var(--text2)' }}>
-              Search and analyse thousands of legal cases. AI-powered relevancy scoring and synthesis memos.
+            <p className="text-xs" style={{ color: 'var(--text3)' }}>
+              Contact your administrator or update your tool selection in Profile settings.
             </p>
-          </button>
-        </div>
+          </div>
+        ) : (
+          <div className="flex gap-6 flex-wrap justify-center w-full max-w-2xl">
+            {visibleTools.map(tool => (
+              <button
+                key={tool.id}
+                onClick={() => handleToolClick(tool)}
+                className="flex-1 min-w-64 rounded-2xl border p-8 text-left transition-all"
+                style={{ background: 'var(--bg2)', borderColor: 'var(--border)', minWidth: 260 }}
+                onMouseEnter={e => {
+                  (e.currentTarget as HTMLElement).style.borderColor = tool.tagColor;
+                  (e.currentTarget as HTMLElement).style.background = 'var(--bg3)';
+                }}
+                onMouseLeave={e => {
+                  (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)';
+                  (e.currentTarget as HTMLElement).style.background = 'var(--bg2)';
+                }}
+              >
+                <div className="text-3xl mb-4">{tool.icon}</div>
+                <div
+                  className="text-lg mb-1"
+                  style={{ fontFamily: 'var(--font-dm-serif)', color: 'var(--text1)' }}
+                >
+                  {tool.label}
+                </div>
+                <div className="text-xs mb-4" style={{ color: tool.tagColor }}>
+                  {tool.tagline}
+                </div>
+                <p className="text-sm" style={{ color: 'var(--text2)' }}>
+                  {tool.description}
+                </p>
+              </button>
+            ))}
+          </div>
+        )}
       </main>
     </div>
   );

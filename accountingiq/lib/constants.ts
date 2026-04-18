@@ -65,8 +65,9 @@ export const FILE_DESCRIPTIONS: Record<FileKey, string> = {
 };
 
 export const VIEWS: { id: ViewId; label: string; icon: string; }[] = [
-  { id: 'upload',        label: 'Upload Files',     icon: '⬆' },
-  { id: 'profile',       label: 'Company Profile',  icon: '◎' },
+  { id: 'company-select', label: 'Companies',        icon: '⊙' },
+  { id: 'upload',         label: 'Upload Files',     icon: '⬆' },
+  { id: 'profile',        label: 'Company Profile',  icon: '◎' },
   { id: 'dashboard',     label: 'Dashboard',        icon: '⬡' },
   { id: 'checklist',     label: 'Checklist',        icon: '✓' },
   { id: 'insights',      label: 'Key Insights',     icon: '◈' },
@@ -82,7 +83,7 @@ export const VIEWS: { id: ViewId; label: string; icon: string; }[] = [
 
 
 export const MODULE_VIEWS: Record<ModuleId, ViewId[]> = {
-  accounting: ['upload', 'profile', 'dashboard', 'checklist', 'insights', 'aiAnalysis', 'health', 'flags', 'reports', 'rules'],
+  accounting: ['company-select', 'upload', 'profile', 'dashboard', 'checklist', 'insights', 'aiAnalysis', 'health', 'flags', 'reports', 'rules'],
   mis: ['mis-setup', 'mis-report'],
   reconciliation: ['reconciliation'],
 };

@@ -1,9 +1,8 @@
 'use client';
 
-import type { FileKey, CompanyProfile } from './types';
+import type { FileKey, ActiveCompany } from './types';
 
 const SESSION_KEY = 'aiq_files';
-const PROFILE_KEY = 'aiq_profile';
 
 interface PersistedFile {
   name: string;
@@ -30,30 +29,15 @@ export function restoreFileMetadata(): Record<FileKey, PersistedFile> | null {
   }
 }
 
-export function persistProfile(profile: CompanyProfile) {
-  try {
-    sessionStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
-  } catch { /* ignore */ }
-}
-
-export function restoreProfile(): CompanyProfile | null {
-  try {
-    const raw = sessionStorage.getItem(PROFILE_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-
 export function clearSession() {
   try {
     sessionStorage.removeItem(SESSION_KEY);
-    sessionStorage.removeItem(PROFILE_KEY);
     sessionStorage.removeItem(AI_CONSENT_KEY);
+    sessionStorage.removeItem(COMPANY_KEY);
   } catch { /* ignore */ }
 }
 
-// ── AI consent persistence (Workstream 2) ──
+// ── AI consent persistence ──
 
 const AI_CONSENT_KEY = 'aiq_ai_consent';
 
@@ -69,5 +53,25 @@ export function restoreAIConsent(): boolean {
     return raw ? JSON.parse(raw) === true : false;
   } catch {
     return false;
+  }
+}
+
+// ── Company persistence ──
+
+const COMPANY_KEY = 'aiq_company';
+
+export function persistCurrentCompany(company: ActiveCompany | null) {
+  try {
+    if (company) sessionStorage.setItem(COMPANY_KEY, JSON.stringify(company));
+    else sessionStorage.removeItem(COMPANY_KEY);
+  } catch { /* ignore */ }
+}
+
+export function restoreCurrentCompany(): ActiveCompany | null {
+  try {
+    const raw = sessionStorage.getItem(COMPANY_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
   }
 }

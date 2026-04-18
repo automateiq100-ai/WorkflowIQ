@@ -5,6 +5,7 @@ import { useApp } from '@/lib/state';
 import { DIM_LABELS, DIM_COLORS, DIM_WEIGHTS } from '@/lib/constants';
 import StatusBadge from '@/app/components/StatusBadge';
 import type { DimKey, FilterMode, Check } from '@/lib/types';
+import { getRemediation } from '@/lib/remediation';
 
 const DIMS: DimKey[] = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
 
@@ -214,45 +215,75 @@ export default function ChecklistView() {
 }
 
 function CheckRow({ check }: { check: Check }) {
-  const { dispatch } = useApp();
+  const { state, dispatch } = useApp();
+  const [showFix, setShowFix] = useState(false);
   const isFailing = check.status === 'fail' || check.status === 'partial';
-  // Bug 4: show failLabel when check fails/partial, else show name
   const displayName = isFailing ? (check.failLabel ?? check.name) : check.name;
+  const remediation = getRemediation(check, state.parsedData ?? {});
 
   return (
-    <div className="flex items-start gap-3 px-5 py-3">
-      <StatusBadge status={check.status} />
+    <div className="flex flex-col">
+      <div className="flex items-start gap-3 px-5 py-3">
+        <StatusBadge status={check.status} />
 
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-mono" style={{ color: 'var(--text3)' }}>
-            {check.id}
-          </span>
-          <span className="text-sm" style={{ color: 'var(--text1)' }}>
-            {displayName}
-          </span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-mono" style={{ color: 'var(--text3)' }}>
+              {check.id}
+            </span>
+            <span className="text-sm" style={{ color: 'var(--text1)' }}>
+              {displayName}
+            </span>
+          </div>
+          {check.note && (
+            <p className="text-xs mt-0.5 leading-relaxed" style={{ color: 'var(--text2)' }}>
+              {check.note}
+            </p>
+          )}
+          {isFailing && (
+            <div className="flex items-center gap-3 mt-1.5">
+              {remediation && (
+                <button
+                  onClick={() => setShowFix(v => !v)}
+                  className="text-xs font-medium transition-colors"
+                  style={{ color: showFix ? 'var(--amber)' : 'var(--teal)' }}
+                >
+                  {showFix ? '↑ Hide fix' : '🔧 How to fix'}
+                </button>
+              )}
+              <button
+                onClick={() => dispatch({ type: 'SET_VIEW', view: 'aiAnalysis' })}
+                className="text-xs transition-colors"
+                style={{ color: 'var(--purple)' }}
+              >
+                Get AI explanation →
+              </button>
+            </div>
+          )}
         </div>
-        {check.note && (
-          <p className="text-xs mt-0.5 leading-relaxed" style={{ color: 'var(--text2)' }}>
-            {check.note}
-          </p>
-        )}
-        {/* Workstream 2: link to AI Analysis for failing checks */}
-        {isFailing && (
-          <button
-            onClick={() => dispatch({ type: 'SET_VIEW', view: 'aiAnalysis' })}
-            className="text-xs mt-1 transition-colors"
-            style={{ color: 'var(--purple)' }}
-          >
-            Get AI explanation →
-          </button>
+
+        {/* Score */}
+        {check.max > 0 && (
+          <div className="text-xs shrink-0 text-right" style={{ color: 'var(--text3)' }}>
+            <span style={{ color: 'var(--text1)' }}>{check.pts}</span>/{check.max}
+          </div>
         )}
       </div>
 
-      {/* Score */}
-      {check.max > 0 && (
-        <div className="text-xs shrink-0 text-right" style={{ color: 'var(--text3)' }}>
-          <span style={{ color: 'var(--text1)' }}>{check.pts}</span>/{check.max}
+      {/* Remediation panel */}
+      {showFix && remediation && (
+        <div
+          className="mx-5 mb-3 px-4 py-3 rounded-lg text-xs leading-relaxed"
+          style={{
+            background: 'rgba(82,196,169,0.07)',
+            border: '1px solid rgba(82,196,169,0.2)',
+            color: 'var(--text2)',
+          }}
+        >
+          <div className="font-semibold mb-1" style={{ color: 'var(--teal)' }}>
+            How to fix — {check.id}
+          </div>
+          {remediation}
         </div>
       )}
     </div>
