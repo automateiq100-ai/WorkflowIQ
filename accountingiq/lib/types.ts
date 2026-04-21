@@ -257,6 +257,10 @@ export interface AppState {
   /** Agentic fix tasks from /api/ai/agent */
   fixTasks: FixTask[] | null;
   fixTasksLoading: boolean;
+  /** true while /api/ai fetch is in-flight (global — visible in sidebar) */
+  aiAnalysisLoading: boolean;
+  /** last error from /api/ai, null when clean */
+  aiAnalysisError: string | null;
 }
 
 export interface Insight {
@@ -336,6 +340,15 @@ export interface AIResponse {
   }>;
   financialCommentary: string;
   preflight: string[];
+  /** Risk matrix: 3-5 key risks with likelihood, impact, mitigation */
+  riskMatrix?: Array<{
+    risk: string;
+    likelihood: 'high' | 'medium' | 'low';
+    impact: 'high' | 'medium' | 'low';
+    mitigation: string;
+  }>;
+  /** 2-3 sentence narrative about data completeness and quality */
+  dataQualityNarrative?: string;
 }
 
 // ── Agentic Fix Loop types ──

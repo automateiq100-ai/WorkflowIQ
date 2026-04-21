@@ -56,6 +56,8 @@ const INITIAL_STATE: AppState = {
   currentCompany: null,
   fixTasks: null,
   fixTasksLoading: false,
+  aiAnalysisLoading: false,
+  aiAnalysisError: null,
 };
 
 // ── actions ───────────────────────────────────────────────────────────────
@@ -79,7 +81,9 @@ export type Action =
   | { type: 'FIX_TASKS_LOADING' }
   | { type: 'FIX_TASKS_LOADED'; tasks: FixTask[] }
   | { type: 'FIX_TASK_STATUS'; id: string; status: FixTask['status'] }
-  | { type: 'FIX_TASKS_CLEAR' };
+  | { type: 'FIX_TASKS_CLEAR' }
+  | { type: 'AI_ANALYSIS_LOADING' }
+  | { type: 'AI_ANALYSIS_ERROR'; error: string };
 
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
@@ -141,14 +145,20 @@ function reducer(state: AppState, action: Action): AppState {
     case 'MIS_SETUP_UPDATED':
       return { ...state, misSetup: { ...state.misSetup, ...action.misSetup } };
 
+    case 'AI_ANALYSIS_LOADING':
+      return { ...state, aiAnalysisLoading: true, aiAnalysisError: null };
+
+    case 'AI_ANALYSIS_ERROR':
+      return { ...state, aiAnalysisLoading: false, aiAnalysisError: action.error };
+
     case 'AI_ANALYSIS_DONE':
-      return { ...state, aiAnalysis: action.analysis, aiAnalysisHash: action.hash };
+      return { ...state, aiAnalysis: action.analysis, aiAnalysisHash: action.hash, aiAnalysisLoading: false, aiAnalysisError: null };
 
     case 'AI_ANALYSIS_CLEAR':
-      return { ...state, aiAnalysis: null, aiAnalysisHash: null };
+      return { ...state, aiAnalysis: null, aiAnalysisHash: null, aiAnalysisLoading: false, aiAnalysisError: null };
 
     case 'SESSION_CLEARED':
-      return { ...INITIAL_STATE, consentGiven: false, aiConsentGiven: false, theme: state.theme, currentCompany: null, currentView: 'company-select', fixTasks: null, fixTasksLoading: false };
+      return { ...INITIAL_STATE, consentGiven: false, aiConsentGiven: false, theme: state.theme, currentCompany: null, currentView: 'company-select', fixTasks: null, fixTasksLoading: false, aiAnalysisLoading: false, aiAnalysisError: null };
 
     case 'COMPANY_SELECTED':
       return {
@@ -163,6 +173,8 @@ function reducer(state: AppState, action: Action): AppState {
         aiAnalysisHash: null,
         fixTasks: null,
         fixTasksLoading: false,
+        aiAnalysisLoading: false,
+        aiAnalysisError: null,
         currentView: 'company-dashboard',
       };
 
@@ -179,6 +191,8 @@ function reducer(state: AppState, action: Action): AppState {
         aiAnalysisHash: null,
         fixTasks: null,
         fixTasksLoading: false,
+        aiAnalysisLoading: false,
+        aiAnalysisError: null,
       };
 
     case 'FIX_TASKS_LOADING':

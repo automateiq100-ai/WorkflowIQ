@@ -1,11 +1,12 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useApp } from '@/lib/state';
 import { getGrade, DIM_LABELS } from '@/lib/constants';
 import { persistAIConsent } from '@/lib/session';
 import { generateInsights } from '@/lib/insights';
-import type { AIResponse, DimKey, CompanyProfile, AIRequest } from '@/lib/types';
+import { runAIAnalysis, computeAIHash } from '@/lib/ai-trigger';
+import type { DimKey } from '@/lib/types';
 
 const IMPACT_COLORS: Record<string, string> = {
   critical: 'var(--red)',
@@ -20,15 +21,6 @@ const EFFORT_LABELS: Record<string, string> = {
   L: '~half day',
 };
 
-/** Simple hash for caching — JSON.stringify + basic hash */
-function hashInput(s: string): string {
-  let hash = 0;
-  for (let i = 0; i < s.length; i++) {
-    hash = ((hash << 5) - hash + s.charCodeAt(i)) | 0;
-  }
-  return hash.toString(36);
-}
-
 const URGENCY_COLORS: Record<string, string> = {
   critical: 'var(--red)',
   high:     'var(--coral)',
@@ -36,13 +28,20 @@ const URGENCY_COLORS: Record<string, string> = {
   positive: 'var(--teal)',
 };
 
+const LIKELIHOOD_COLORS: Record<string, string> = {
+  high:   'var(--red)',
+  medium: 'var(--amber)',
+  low:    'var(--teal)',
+};
+
 export default function AIAnalysisView() {
   const { state, dispatch } = useApp();
-  const { results, parsedData, files, filters, aiConsentGiven, aiAnalysis, aiAnalysisHash } = state;
+  const {
+    results, parsedData, files, filters,
+    aiConsentGiven, aiAnalysis, aiAnalysisHash,
+    aiAnalysisLoading, aiAnalysisError,
+  } = state;
 
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [generatedAt, setGeneratedAt] = useState<string | null>(null);
   const [tab, setTab] = useState<'insights' | 'ai'>('insights');
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
@@ -59,87 +58,14 @@ export default function AIAnalysisView() {
     );
   }
 
-  // Build input hash for caching
-  const inputForHash = JSON.stringify({ dimScores: results.dimScores, overall: results.overall, checks: results.checks.length });
-  const currentHash = hashInput(inputForHash);
-
-  async function generate() {
-    if (!results) return;
-    setLoading(true);
-    setError(null);
-
-    const pd = parsedData as Record<string, number | boolean | null | undefined>;
-    const monthCounts = files.daybook?.chunkedStats?.monthCounts ?? {};
-
-    const payload: AIRequest = {
-      score: results.cappedScore,
-      grade: getGrade(results.cappedScore).label,
-      dimScores: results.dimScores,
-      findings: results.checks
-        .filter(c => c.status === 'fail' || c.status === 'partial')
-        .map(c => ({
-          id: c.id,
-          dim: c.dim,
-          name: c.failLabel ?? c.name,
-          status: c.status,
-          note: c.note,
-          max: c.max,
-        })),
-      financials: {
-        revenue: (pd.revenue as number) ?? 0,
-        netProfit: (pd.netProfit as number) ?? 0,
-        currentAssets: (pd.ca as number) ?? 0,
-        currentLiabilities: (pd.cl as number) ?? 0,
-        bankBalance: (pd.bankBal as number) ?? 0,
-        debtorBalance: (pd.debtorBal as number) ?? 0,
-        creditorBalance: (pd.creditorBal as number) ?? 0,
-        suspenseBalance: (pd.tbTotal as number) ?? 0,
-        fixedAssets: (pd.fixedAssets as number) ?? 0,
-        closingStock: (pd.closingStock as number) ?? 0,
-      },
-      profile: filters as unknown as CompanyProfile,
-      dataNotes: {
-        filesUploaded: Object.values(files).filter(f => f.hasContent).length,
-        dayBookVoucherCount: files.daybook?.chunkedStats?.totalVouchers ?? 0,
-        distinctMonthsInData: Object.keys(monthCounts).length,
-        scoreCapped: results.scoreCapped,
-      },
-    };
-
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 180_000); // 3 min for local models
-
-      const res = await fetch('/api/ai', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
-
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error ?? `HTTP ${res.status}`);
-      }
-
-      const data: AIResponse = await res.json();
-      dispatch({ type: 'AI_ANALYSIS_DONE', analysis: data, hash: currentHash });
-      setGeneratedAt(new Date().toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
-    } finally {
-      setLoading(false);
-    }
-  }
+  const currentHash = computeAIHash(state);
+  const hasCachedAnalysis = aiAnalysis && aiAnalysisHash === currentHash;
 
   function handleRegenerate() {
     dispatch({ type: 'AI_ANALYSIS_CLEAR' });
-    generate();
+    dispatch({ type: 'AI_ANALYSIS_LOADING' });
+    runAIAnalysis(state, dispatch, currentHash);
   }
-
-  // Check if cached analysis matches current data
-  const hasCachedAnalysis = aiAnalysis && aiAnalysisHash === currentHash;
 
   const insights = generateInsights(results, parsedData, filters);
   const insightGroups = ['critical', 'high', 'medium', 'positive'] as const;
@@ -153,27 +79,14 @@ export default function AIAnalysisView() {
             Analysis
           </h1>
         </div>
-        {tab === 'ai' && (
-          <div className="flex items-center gap-2">
-            {!hasCachedAnalysis && !loading && aiConsentGiven && (
-              <button
-                onClick={generate}
-                className="text-xs px-4 py-2 rounded-lg font-semibold transition-opacity hover:opacity-80"
-                style={{ background: 'var(--purple)', color: '#fff' }}
-              >
-                Generate AI Report
-              </button>
-            )}
-            {hasCachedAnalysis && (
-              <button
-                onClick={handleRegenerate}
-                className="text-xs px-3 py-1.5 rounded border transition-colors"
-                style={{ borderColor: 'var(--border)', color: 'var(--text2)' }}
-              >
-                Regenerate
-              </button>
-            )}
-          </div>
+        {tab === 'ai' && aiConsentGiven && hasCachedAnalysis && !aiAnalysisLoading && (
+          <button
+            onClick={handleRegenerate}
+            className="text-xs px-3 py-1.5 rounded border transition-colors"
+            style={{ borderColor: 'var(--border)', color: 'var(--text2)' }}
+          >
+            Regenerate
+          </button>
         )}
       </div>
 
@@ -271,182 +184,253 @@ export default function AIAnalysisView() {
       {/* ── AI Report tab ── */}
       {tab === 'ai' && (
         !aiConsentGiven ? <AIConsentGate /> : (
-        <div>
-
-      {/* Loading state */}
-      {loading && (
-        <div className="space-y-4">
-          {[85, 65, 75, 55, 70].map((w, i) => (
-            <div key={i} className="rounded-xl border p-5" style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}>
-              <div className="h-3 rounded animate-pulse mb-3" style={{ width: `${w}%`, background: 'var(--bg4)' }} />
-              <div className="h-2 rounded animate-pulse" style={{ width: `${w - 20}%`, background: 'var(--bg4)' }} />
-            </div>
-          ))}
-          <p className="text-xs text-center" style={{ color: 'var(--text3)' }}>Analysing with Gemma 4 · 🇮🇳 India…</p>
-        </div>
-      )}
-
-      {/* Error state */}
-      {error && (
-        <div className="rounded-xl border p-5 mb-4" style={{ background: 'rgba(240,72,72,0.08)', borderColor: 'rgba(240,72,72,0.2)' }}>
-          <p className="text-sm" style={{ color: 'var(--red)' }}>Error: {error}</p>
-          <button onClick={generate} className="text-xs mt-2 underline" style={{ color: 'var(--text2)' }}>Retry</button>
-        </div>
-      )}
-
-      {/* Idle state */}
-      {!hasCachedAnalysis && !loading && !error && (
-        <div className="rounded-xl border p-8 text-center" style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}>
-          <div className="text-3xl mb-3">⚡</div>
-          <p className="text-sm mb-2" style={{ color: 'var(--text1)' }}>Generate AI-powered analysis</p>
-          <p className="text-xs" style={{ color: 'var(--text3)' }}>
-            Processed on India-resident server. No raw XML, no voucher details, no party names.
-          </p>
-        </div>
-      )}
-
-      {/* Analysis results */}
-      {hasCachedAnalysis && aiAnalysis && (
-        <div className="space-y-5">
-          {/* 1. Executive Summary */}
-          <section className="rounded-xl border p-5" style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}>
-            <div className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text3)' }}>
-              Executive Summary
-            </div>
-            <blockquote
-              className="text-sm leading-relaxed pl-4 border-l-2"
-              style={{ color: 'var(--text1)', borderColor: 'var(--purple)', fontFamily: 'var(--font-dm-serif)' }}
-            >
-              {aiAnalysis.executiveSummary}
-            </blockquote>
-          </section>
-
-          {/* 2. Root Causes */}
-          {aiAnalysis.rootCauses.length > 0 && (
-            <section>
-              <div className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text3)' }}>
-                Root Cause Analysis
-              </div>
-              <div className="space-y-3">
-                {aiAnalysis.rootCauses.map((rc, i) => (
+          <div>
+            {/* Loading / progress state */}
+            {aiAnalysisLoading && (
+              <div className="rounded-xl border p-5 mb-4" style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}>
+                <div className="flex items-center gap-3 mb-3">
+                  <span className="text-base animate-spin inline-block">⟳</span>
+                  <span className="text-sm font-medium" style={{ color: 'var(--text1)' }}>
+                    Analysing with Gemma 4 · 🇮🇳 India…
+                  </span>
+                </div>
+                <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--bg4)' }}>
                   <div
-                    key={i}
-                    className="rounded-xl border p-4"
-                    style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}
-                    data-root-cause={i}
+                    className="h-full rounded-full animate-pulse"
+                    style={{ width: '60%', background: 'var(--purple)' }}
+                  />
+                </div>
+                <p className="text-xs mt-2" style={{ color: 'var(--text3)' }}>
+                  Local inference — usually 30–90 seconds
+                </p>
+              </div>
+            )}
+
+            {/* Error state */}
+            {aiAnalysisError && !aiAnalysisLoading && (
+              <div className="rounded-xl border p-5 mb-4" style={{ background: 'rgba(240,72,72,0.08)', borderColor: 'rgba(240,72,72,0.2)' }}>
+                <p className="text-sm" style={{ color: 'var(--red)' }}>Error: {aiAnalysisError}</p>
+                <button onClick={handleRegenerate} className="text-xs mt-2 underline" style={{ color: 'var(--text2)' }}>
+                  Retry
+                </button>
+              </div>
+            )}
+
+            {/* Idle state — no analysis yet, not loading, no error */}
+            {!hasCachedAnalysis && !aiAnalysisLoading && !aiAnalysisError && (
+              <div className="rounded-xl border p-8 text-center" style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}>
+                <div className="text-3xl mb-3">⚡</div>
+                <p className="text-sm mb-2" style={{ color: 'var(--text1)' }}>AI analysis will start automatically</p>
+                <p className="text-xs mb-4" style={{ color: 'var(--text3)' }}>
+                  Processed on India-resident server. No raw XML, no voucher details, no party names.
+                </p>
+                <button
+                  onClick={handleRegenerate}
+                  className="text-xs px-4 py-2 rounded-lg font-semibold transition-opacity hover:opacity-80"
+                  style={{ background: 'var(--purple)', color: '#fff' }}
+                >
+                  Generate now
+                </button>
+              </div>
+            )}
+
+            {/* Analysis results */}
+            {hasCachedAnalysis && aiAnalysis && (
+              <div className="space-y-5">
+                {/* 1. Executive Summary */}
+                <section className="rounded-xl border p-5" style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}>
+                  <div className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text3)' }}>
+                    Executive Summary
+                  </div>
+                  <blockquote
+                    className="text-sm leading-relaxed pl-4 border-l-2"
+                    style={{ color: 'var(--text1)', borderColor: 'var(--purple)', fontFamily: 'var(--font-dm-serif)' }}
                   >
-                    <div className="text-sm font-semibold mb-2" style={{ color: 'var(--text1)' }}>
-                      {rc.theme}
+                    {aiAnalysis.executiveSummary}
+                  </blockquote>
+                </section>
+
+                {/* 2. Data Quality Narrative (new) */}
+                {aiAnalysis.dataQualityNarrative && (
+                  <section className="rounded-xl border p-5" style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}>
+                    <div className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text3)' }}>
+                      Data Quality Assessment
                     </div>
-                    <p className="text-xs leading-relaxed mb-2" style={{ color: 'var(--text2)' }}>
-                      {rc.explanation}
+                    <p className="text-sm leading-relaxed" style={{ color: 'var(--text2)' }}>
+                      {aiAnalysis.dataQualityNarrative}
                     </p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {rc.findingIds.map(id => (
-                        <span
-                          key={id}
-                          data-check-id={id}
-                          className="text-xs font-mono px-1.5 py-0.5 rounded cursor-pointer transition-colors"
-                          style={{ background: 'var(--bg4)', color: 'var(--purple)' }}
-                          onClick={() => dispatch({ type: 'SET_VIEW', view: 'checklist' })}
+                  </section>
+                )}
+
+                {/* 3. Root Causes */}
+                {aiAnalysis.rootCauses.length > 0 && (
+                  <section>
+                    <div className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text3)' }}>
+                      Root Cause Analysis
+                    </div>
+                    <div className="space-y-3">
+                      {aiAnalysis.rootCauses.map((rc, i) => (
+                        <div
+                          key={i}
+                          className="rounded-xl border p-4"
+                          style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}
                         >
-                          {id}
-                        </span>
+                          <div className="text-sm font-semibold mb-2" style={{ color: 'var(--text1)' }}>
+                            {rc.theme}
+                          </div>
+                          <p className="text-xs leading-relaxed mb-2" style={{ color: 'var(--text2)' }}>
+                            {rc.explanation}
+                          </p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {rc.findingIds.map(id => (
+                              <span
+                                key={id}
+                                className="text-xs font-mono px-1.5 py-0.5 rounded cursor-pointer transition-colors"
+                                style={{ background: 'var(--bg4)', color: 'var(--purple)' }}
+                                onClick={() => dispatch({ type: 'SET_VIEW', view: 'checklist' })}
+                              >
+                                {id}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
                       ))}
                     </div>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
+                  </section>
+                )}
 
-          {/* 3. Prioritised Actions */}
-          {aiAnalysis.actions.length > 0 && (
-            <section>
-              <div className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text3)' }}>
-                Prioritised Action Plan
-              </div>
-              <div className="rounded-xl border overflow-hidden divide-y" style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}>
-                {aiAnalysis.actions.map((action, i) => (
-                  <div key={i} className="flex items-start gap-3 px-4 py-3" style={{ borderColor: 'var(--border)' }}>
-                    <span
-                      className="shrink-0 w-6 h-6 rounded-full text-xs flex items-center justify-center font-bold mt-0.5"
-                      style={{ background: 'rgba(15,212,160,0.15)', color: 'var(--teal)' }}
-                    >
-                      {i + 1}
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm" style={{ color: 'var(--text1)' }}>{action.task}</div>
-                      <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                        <span
-                          className="text-[10px] px-1.5 py-0.5 rounded font-semibold uppercase"
-                          style={{ color: IMPACT_COLORS[action.impact] ?? 'var(--text3)', background: `${IMPACT_COLORS[action.impact] ?? '#888'}18` }}
-                        >
-                          {action.impact}
-                        </span>
-                        <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'var(--bg4)', color: 'var(--text2)' }}>
-                          {action.effort} · {EFFORT_LABELS[action.effort] ?? action.effort}
-                        </span>
-                        <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'var(--bg4)', color: 'var(--text3)' }}>
-                          {action.category}
-                        </span>
-                        {action.resolvesCheckIds.length > 0 && (
-                          <span className="text-[10px]" style={{ color: 'var(--text3)' }}>
-                            resolves {action.resolvesCheckIds.join(', ')}
-                          </span>
-                        )}
-                      </div>
+                {/* 4. Prioritised Actions */}
+                {aiAnalysis.actions.length > 0 && (
+                  <section>
+                    <div className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text3)' }}>
+                      Prioritised Action Plan
                     </div>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
+                    <div className="rounded-xl border overflow-hidden divide-y" style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}>
+                      {aiAnalysis.actions.map((action, i) => (
+                        <div key={i} className="flex items-start gap-3 px-4 py-3" style={{ borderColor: 'var(--border)' }}>
+                          <span
+                            className="shrink-0 w-6 h-6 rounded-full text-xs flex items-center justify-center font-bold mt-0.5"
+                            style={{ background: 'rgba(15,212,160,0.15)', color: 'var(--teal)' }}
+                          >
+                            {i + 1}
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm" style={{ color: 'var(--text1)' }}>{action.task}</div>
+                            <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                              <span
+                                className="text-[10px] px-1.5 py-0.5 rounded font-semibold uppercase"
+                                style={{ color: IMPACT_COLORS[action.impact] ?? 'var(--text3)', background: `${IMPACT_COLORS[action.impact] ?? '#888'}18` }}
+                              >
+                                {action.impact}
+                              </span>
+                              <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'var(--bg4)', color: 'var(--text2)' }}>
+                                {action.effort} · {EFFORT_LABELS[action.effort] ?? action.effort}
+                              </span>
+                              <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'var(--bg4)', color: 'var(--text3)' }}>
+                                {action.category}
+                              </span>
+                              {(action.resolvesCheckIds ?? []).length > 0 && (
+                                <span className="text-[10px]" style={{ color: 'var(--text3)' }}>
+                                  resolves {(action.resolvesCheckIds ?? []).join(', ')}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                )}
 
-          {/* 4. Financial Commentary */}
-          {aiAnalysis.financialCommentary && (
-            <section className="rounded-xl border p-5" style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}>
-              <div className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text3)' }}>
-                Financial Health Commentary
-              </div>
-              <p className="text-sm leading-relaxed" style={{ color: 'var(--text2)' }}>
-                {aiAnalysis.financialCommentary}
-              </p>
-            </section>
-          )}
+                {/* 5. Risk Matrix (new) */}
+                {aiAnalysis.riskMatrix && aiAnalysis.riskMatrix.length > 0 && (
+                  <section>
+                    <div className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text3)' }}>
+                      Risk Matrix
+                    </div>
+                    <div className="rounded-xl border overflow-hidden" style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}>
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr style={{ background: 'var(--bg3)', borderBottom: '1px solid var(--border)' }}>
+                            <th className="text-left px-4 py-2 font-semibold" style={{ color: 'var(--text3)' }}>Risk</th>
+                            <th className="text-left px-3 py-2 font-semibold" style={{ color: 'var(--text3)' }}>Likelihood</th>
+                            <th className="text-left px-3 py-2 font-semibold" style={{ color: 'var(--text3)' }}>Impact</th>
+                            <th className="text-left px-4 py-2 font-semibold" style={{ color: 'var(--text3)' }}>Mitigation</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y" style={{ borderColor: 'var(--border)' }}>
+                          {aiAnalysis.riskMatrix.map((row, i) => (
+                            <tr key={i} style={{ borderColor: 'var(--border)' }}>
+                              <td className="px-4 py-3" style={{ color: 'var(--text1)' }}>{row.risk}</td>
+                              <td className="px-3 py-3">
+                                <span
+                                  className="px-1.5 py-0.5 rounded font-semibold uppercase"
+                                  style={{ color: LIKELIHOOD_COLORS[row.likelihood] ?? 'var(--text3)', background: `${LIKELIHOOD_COLORS[row.likelihood] ?? '#888'}18` }}
+                                >
+                                  {row.likelihood}
+                                </span>
+                              </td>
+                              <td className="px-3 py-3">
+                                <span
+                                  className="px-1.5 py-0.5 rounded font-semibold uppercase"
+                                  style={{ color: LIKELIHOOD_COLORS[row.impact] ?? 'var(--text3)', background: `${LIKELIHOOD_COLORS[row.impact] ?? '#888'}18` }}
+                                >
+                                  {row.impact}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 leading-relaxed" style={{ color: 'var(--text2)' }}>{row.mitigation}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+                )}
 
-          {/* 5. Preflight */}
-          {aiAnalysis.preflight.length > 0 && (
-            <section className="rounded-xl border p-5" style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}>
-              <div className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text3)' }}>
-                Fix in Tally Before Re-running
-              </div>
-              <ol className="space-y-2">
-                {aiAnalysis.preflight.map((item, i) => (
-                  <li key={i} className="flex gap-2 text-sm">
-                    <span className="shrink-0 text-xs font-mono mt-0.5" style={{ color: 'var(--teal)' }}>{i + 1}.</span>
-                    <span style={{ color: 'var(--text2)' }}>{item}</span>
-                  </li>
-                ))}
-              </ol>
-              <button
-                onClick={() => dispatch({ type: 'SET_VIEW', view: 'upload' })}
-                className="mt-4 text-xs px-4 py-2 rounded-lg font-semibold transition-opacity hover:opacity-80"
-                style={{ background: 'var(--teal)', color: '#000' }}
-              >
-                Re-upload after fixing →
-              </button>
-            </section>
-          )}
+                {/* 6. Financial Commentary */}
+                {aiAnalysis.financialCommentary && (
+                  <section className="rounded-xl border p-5" style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}>
+                    <div className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text3)' }}>
+                      Financial Health Commentary
+                    </div>
+                    <p className="text-sm leading-relaxed" style={{ color: 'var(--text2)' }}>
+                      {aiAnalysis.financialCommentary}
+                    </p>
+                  </section>
+                )}
 
-          {/* Disclaimer */}
-          <p className="text-[10px] text-center leading-relaxed" style={{ color: 'var(--text3)' }}>
-            AI-generated analysis based on scoring output only. No raw XML or voucher data was sent.
-            Verify findings against source data before acting. Not a substitute for professional accounting advice.
-          </p>
-        </div>
-      )}
-        </div>
+                {/* 7. Preflight */}
+                {aiAnalysis.preflight.length > 0 && (
+                  <section className="rounded-xl border p-5" style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}>
+                    <div className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text3)' }}>
+                      Fix in Tally Before Re-running
+                    </div>
+                    <ol className="space-y-2">
+                      {aiAnalysis.preflight.map((item, i) => (
+                        <li key={i} className="flex gap-2 text-sm">
+                          <span className="shrink-0 text-xs font-mono mt-0.5" style={{ color: 'var(--teal)' }}>{i + 1}.</span>
+                          <span style={{ color: 'var(--text2)' }}>{item}</span>
+                        </li>
+                      ))}
+                    </ol>
+                    <button
+                      onClick={() => dispatch({ type: 'SET_VIEW', view: 'upload' })}
+                      className="mt-4 text-xs px-4 py-2 rounded-lg font-semibold transition-opacity hover:opacity-80"
+                      style={{ background: 'var(--teal)', color: '#000' }}
+                    >
+                      Re-upload after fixing →
+                    </button>
+                  </section>
+                )}
+
+                {/* Disclaimer */}
+                <p className="text-[10px] text-center leading-relaxed" style={{ color: 'var(--text3)' }}>
+                  AI-generated analysis based on scoring output only. No raw XML or voucher data was sent.
+                  Verify findings against source data before acting. Not a substitute for professional accounting advice.
+                </p>
+              </div>
+            )}
+          </div>
         )
       )}
     </div>

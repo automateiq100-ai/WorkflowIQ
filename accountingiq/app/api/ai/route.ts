@@ -48,6 +48,12 @@ CORE RULES:
    trend commentary.
 7. Preflight is specifically actions in Tally — "F11 > Show Opening Balances > Yes",
    "Re-export Trial Balance after posting capital entry", etc. Not actions in AccountingIQ.
+8. Risk matrix: identify 3–5 real risks from the findings. Likelihood and impact must be
+   "high", "medium", or "low". Mitigation must be a single concrete action in Tally or
+   with the client — not generic advice.
+9. Data quality narrative: 2–3 sentences about the completeness of the dataset. Mention
+   which files were uploaded, whether DayBook coverage is adequate, and whether the score
+   may be unreliable due to missing data.
 
 Return ONLY the JSON. No preamble, no markdown fencing.`;
 
@@ -102,6 +108,13 @@ interface AIResponseBody {
   }>;
   financialCommentary: string;
   preflight: string[];
+  riskMatrix?: Array<{
+    risk: string;
+    likelihood: 'high' | 'medium' | 'low';
+    impact: 'high' | 'medium' | 'low';
+    mitigation: string;
+  }>;
+  dataQualityNarrative?: string;
 }
 
 // ── Validation layer ──────────────────────────────────────────────────────
@@ -110,11 +123,14 @@ function validateResponse(parsed: AIResponseBody, input: AIRequestBody): AIRespo
   const validCheckIds = new Set(input.findings.map(f => f.id));
 
   // Cap arrays
-  if (parsed.rootCauses?.length > 5) {
-    parsed.rootCauses = parsed.rootCauses.slice(0, 5);
+  if (parsed.rootCauses?.length > 7) {
+    parsed.rootCauses = parsed.rootCauses.slice(0, 7);
   }
-  if (parsed.actions?.length > 10) {
-    parsed.actions = parsed.actions.slice(0, 10);
+  if (parsed.actions?.length > 15) {
+    parsed.actions = parsed.actions.slice(0, 15);
+  }
+  if (parsed.riskMatrix && parsed.riskMatrix.length > 5) {
+    parsed.riskMatrix = parsed.riskMatrix.slice(0, 5);
   }
 
   // Strip phantom check IDs from rootCauses
@@ -126,12 +142,10 @@ function validateResponse(parsed: AIResponseBody, input: AIRequestBody): AIRespo
     }
   }
 
-  // Strip phantom check IDs from actions
+  // Strip phantom check IDs from actions; ensure field always exists
   if (parsed.actions) {
     for (const action of parsed.actions) {
-      if (action.resolvesCheckIds) {
-        action.resolvesCheckIds = action.resolvesCheckIds.filter(id => validCheckIds.has(id));
-      }
+      action.resolvesCheckIds = (action.resolvesCheckIds ?? []).filter(id => validCheckIds.has(id));
     }
   }
 
@@ -152,14 +166,22 @@ function buildUserPrompt(data: AIRequestBody): string {
 
 ${JSON.stringify(data, null, 2)}
 
-Generate the five-section report as structured JSON matching this schema:
+Generate the seven-section report as structured JSON matching this schema exactly:
 {
-  "executiveSummary": "2-4 sentence plain-English executive summary",
-  "rootCauses": [{"theme": "string", "findingIds": ["check IDs"], "explanation": "2-3 sentences"}],
-  "actions": [{"task": "string", "impact": "critical|high|medium|low", "effort": "S|M|L", "category": "Chart of Accounts|Statutory|Data Integrity|Reconciliation|Reporting", "resolvesCheckIds": ["check IDs"]}],
-  "financialCommentary": "3-5 sentences about the financial metrics",
-  "preflight": ["3-5 Tally-specific actions before re-running"]
-}`;
+  "executiveSummary": "3-5 sentence plain-English executive summary covering overall quality, top issues, and immediate risk",
+  "dataQualityNarrative": "2-3 sentences on dataset completeness: which files were uploaded, DayBook coverage adequacy, whether the score is reliable",
+  "rootCauses": [{"theme": "string", "findingIds": ["check IDs from input"], "explanation": "2-3 sentences on why these checks fail together"}],
+  "actions": [{"task": "string describing the specific fix", "impact": "critical|high|medium|low", "effort": "S|M|L", "category": "Chart of Accounts|Statutory|Data Integrity|Reconciliation|Reporting", "resolvesCheckIds": ["check IDs from input"]}],
+  "riskMatrix": [{"risk": "specific risk name", "likelihood": "high|medium|low", "impact": "high|medium|low", "mitigation": "single concrete action"}],
+  "financialCommentary": "4-6 sentences about the financial metrics from the input — current ratio, profitability, cash position, debtor/creditor situation",
+  "preflight": ["4-6 specific Tally Prime menu path actions to take before re-running analysis"]
+}
+
+Rules:
+- rootCauses: up to 7 clusters, ordered by number of failing checks
+- actions: up to 15 items, ordered by leverage (impact × checks resolved / effort)
+- riskMatrix: exactly 3-5 rows covering the most material risks
+- All check IDs in findingIds and resolvesCheckIds must appear verbatim in the input findings array`;
 }
 
 // ── API route handler ─────────────────────────────────────────────────────

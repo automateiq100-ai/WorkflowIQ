@@ -8,6 +8,7 @@ import {
   restoreFileMetadata, persistFileMetadata,
   restoreCurrentCompany, persistCurrentCompany,
 } from '@/lib/session';
+import { runAIAnalysis, computeAIHash } from '@/lib/ai-trigger';
 
 export default function AppProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
@@ -79,6 +80,20 @@ export default function AppProvider({ children }: { children: React.ReactNode })
       body: JSON.stringify({ theme: state.theme }),
     }).catch(() => {});
   }, [state.theme]);
+
+  // Auto-trigger AI analysis when analysis is done and consent is given
+  useEffect(() => {
+    if (!state.analysed) return;
+    if (!state.aiConsentGiven) return;
+    if (state.aiAnalysisLoading) return;
+
+    const hash = computeAIHash(state);
+    if (state.aiAnalysis && state.aiAnalysisHash === hash) return; // already cached
+
+    dispatch({ type: 'AI_ANALYSIS_LOADING' });
+    runAIAnalysis(state, dispatch, hash);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.analysed, state.aiConsentGiven]);
 
   // Apply theme class to <html> element
   useEffect(() => {

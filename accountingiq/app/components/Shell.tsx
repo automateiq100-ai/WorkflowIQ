@@ -66,7 +66,7 @@ interface UserInfo {
 
 export default function Shell({ user }: { user: UserInfo | null }) {
   const { state, dispatch } = useApp();
-  const { currentView, currentModule, analysed, uploadProgress, consentGiven, aiConsentGiven, theme, currentCompany } = state;
+  const { currentView, currentModule, analysed, uploadProgress, consentGiven, aiConsentGiven, theme, currentCompany, aiAnalysisLoading } = state;
   const [exporting, setExporting] = useState(false);
 
   function navigate(view: ViewId) {
@@ -242,6 +242,7 @@ export default function Shell({ user }: { user: UserInfo | null }) {
                     <div className="mx-4 my-2 border-t" style={{ borderColor: 'var(--border)' }} />
                     {VIEWS.filter(v => ACCOUNTING_POST.includes(v.id)).map(v => {
                       const isAILocked = v.id === 'aiAnalysis' && !aiConsentGiven;
+                      const showPulse = v.id === 'aiAnalysis' && aiAnalysisLoading;
                       return (
                         <NavItem
                           key={v.id}
@@ -249,6 +250,7 @@ export default function Shell({ user }: { user: UserInfo | null }) {
                           active={currentView === v.id}
                           onClick={() => navigate(v.id)}
                           locked={isAILocked}
+                          showPulse={showPulse}
                         />
                       );
                     })}
@@ -375,11 +377,13 @@ function NavItem({
   active,
   onClick,
   locked,
+  showPulse,
 }: {
   view: { id: ViewId; label: string; icon: string };
   active: boolean;
   onClick: () => void;
   locked?: boolean;
+  showPulse?: boolean;
 }) {
   return (
     <button
@@ -393,7 +397,14 @@ function NavItem({
       }}
     >
       <span className="text-base w-4 text-center shrink-0">{locked ? '🔒' : view.icon}</span>
-      <span>{view.label}</span>
+      <span className="flex-1">{view.label}</span>
+      {showPulse && (
+        <span
+          className="ml-auto w-2 h-2 rounded-full animate-pulse shrink-0"
+          style={{ background: 'var(--purple)' }}
+          title="AI analysis running…"
+        />
+      )}
     </button>
   );
 }

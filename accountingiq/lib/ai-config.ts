@@ -53,7 +53,7 @@ export const AI_PROVIDERS: Record<AIProvider, AIProviderConfig> = {
     apiKey: process.env.WORKFLOWIQ_API_KEY ?? '',
     model: process.env.WORKFLOWIQ_MODEL ?? 'gemma4:e4b',
     supportsJsonMode: false,  // Gemma via local proxy — skip response_format param
-    maxTokens: 4096,
+    maxTokens: 8192,
     temperature: 0.2,
     timeoutMs: 180_000,       // 3 min — local Gemma is slower than hosted APIs
   },
