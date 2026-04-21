@@ -282,7 +282,7 @@ export default function AIAnalysisView() {
               <div className="h-2 rounded animate-pulse" style={{ width: `${w - 20}%`, background: 'var(--bg4)' }} />
             </div>
           ))}
-          <p className="text-xs text-center" style={{ color: 'var(--text3)' }}>Analysing with GPT-4o…</p>
+          <p className="text-xs text-center" style={{ color: 'var(--text3)' }}>Analysing with Gemma 4 · 🇮🇳 India…</p>
         </div>
       )}
 
@@ -300,7 +300,7 @@ export default function AIAnalysisView() {
           <div className="text-3xl mb-3">⚡</div>
           <p className="text-sm mb-2" style={{ color: 'var(--text1)' }}>Generate AI-powered analysis</p>
           <p className="text-xs" style={{ color: 'var(--text3)' }}>
-            Sends aggregated scores and metrics to OpenAI. No raw XML, no voucher details, no party names.
+            Processed on India-resident server. No raw XML, no voucher details, no party names.
           </p>
         </div>
       )}
@@ -472,7 +472,7 @@ function AIConsentGate() {
         </h2>
         <p className="text-sm mb-4 leading-relaxed" style={{ color: 'var(--text2)' }}>
           AI Analysis sends aggregated scoring results (no raw XML, no voucher details, no party names)
-          to OpenAI for narrative generation.
+          to an India-resident server for narrative generation. No data leaves India.
         </p>
         <button
           onClick={handleConsent}

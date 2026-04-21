@@ -211,9 +211,17 @@ export async function POST(req: NextRequest) {
   }
 }
 
-/** Strip ```json ... ``` fences that some models add despite instructions */
+/** Robustly extract JSON from model output that may contain reasoning blocks or markdown fences */
 function extractJSON(raw: string): string {
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+  // 1. Strip <think>...</think> reasoning blocks (Gemma chain-of-thought)
+  let s = raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  // 2. Strip markdown fences
+  const fenced = s.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fenced) return fenced[1].trim();
-  return raw.trim();
+  // 3. Extract first complete JSON object or array (handles preamble/postamble)
+  const objMatch = s.match(/(\{[\s\S]*\})/);
+  if (objMatch) return objMatch[1].trim();
+  const arrMatch = s.match(/(\[[\s\S]*\])/);
+  if (arrMatch) return arrMatch[1].trim();
+  return s;
 }

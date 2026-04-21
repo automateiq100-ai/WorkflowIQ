@@ -297,7 +297,7 @@ export default function AgentFixView({ embedded }: { embedded?: boolean }) {
         <div style={{ fontSize: 40, opacity: 0.3 }}>🔒</div>
         <div className="text-sm font-medium" style={{ color: 'var(--text1)' }}>AI consent required</div>
         <div className="text-xs text-center max-w-sm" style={{ color: 'var(--text3)' }}>
-          Fix Planner sends anonymised check findings (no party names, no amounts) to OpenAI GPT-4o.
+          Fix Planner sends anonymised check findings (no party names, no amounts) to Gemma 4 running on an India-resident server.
           Enable AI Analysis consent in the consent modal to continue.
         </div>
       </div>
@@ -380,7 +380,7 @@ export default function AgentFixView({ embedded }: { embedded?: boolean }) {
           <div className="flex flex-col items-center gap-4 py-16">
             <div className="text-2xl animate-spin">⟳</div>
             <div className="text-sm" style={{ color: 'var(--text3)' }}>Generating fix plan…</div>
-            <div className="text-xs" style={{ color: 'var(--text3)' }}>GPT-4o is analysing your check failures and writing Tally steps</div>
+            <div className="text-xs" style={{ color: 'var(--text3)' }}>Gemma 4 · 🇮🇳 India is analysing your check failures and writing Tally steps</div>
           </div>
         )}
 

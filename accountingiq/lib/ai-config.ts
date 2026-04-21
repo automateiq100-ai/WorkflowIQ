@@ -48,10 +48,10 @@ export const AI_PROVIDERS: Record<AIProvider, AIProviderConfig> = {
   },
 
   workflowiq: {
-    label: 'WorkflowIQ Gemma 4',
-    baseURL: 'https://api.workflowiq.in/v1',
+    label: 'Gemma 4 · 🇮🇳 India',
+    baseURL: process.env.WORKFLOWIQ_BASE_URL ?? 'https://api.workflowiq.in/v1',
     apiKey: process.env.WORKFLOWIQ_API_KEY ?? '',
-    model: 'gemma4:e4b',
+    model: process.env.WORKFLOWIQ_MODEL ?? 'gemma4:e4b',
     supportsJsonMode: false,  // Gemma via local proxy — skip response_format param
     maxTokens: 4096,
     temperature: 0.2,

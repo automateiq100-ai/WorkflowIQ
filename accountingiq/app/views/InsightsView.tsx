@@ -174,7 +174,7 @@ function AISummaryPanel({
             className="text-xs px-1.5 py-0.5 rounded font-mono"
             style={{ background: 'var(--bg4)', color: 'var(--text3)' }}
           >
-            GPT-4o
+            Gemma 4 🇮🇳
           </span>
         </div>
         {aiState === 'idle' || aiState === 'error' ? (
@@ -204,7 +204,7 @@ function AISummaryPanel({
           <p className="text-xs" style={{ color: 'var(--text3)' }}>
             Click Generate to get an AI-written narrative summary of these books.
             <span className="block mt-1" style={{ color: 'var(--text3)', opacity: 0.7 }}>
-              Analysis scores and key figures (no raw files) are sent to OpenAI.
+              Analysis scores and key figures (no raw files) are processed on an India-resident server.
             </span>
           </p>
         )}

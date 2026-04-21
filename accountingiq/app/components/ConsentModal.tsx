@@ -87,7 +87,7 @@ export default function ConsentModal() {
               <span className="text-sm leading-relaxed" style={{ color: 'var(--text2)' }}>
                 <strong style={{ color: 'var(--purple)' }}>Optional:</strong>{' '}
                 I understand AI Analysis sends aggregated scoring results (no raw XML, no voucher
-                details, no party names) to OpenAI for narrative generation.
+                details, no party names) to an India-resident AI server for narrative generation. No data leaves India.
               </span>
             </label>
             <p className="text-xs mt-1 ml-7" style={{ color: 'var(--text3)' }}>
