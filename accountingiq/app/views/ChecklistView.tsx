@@ -6,6 +6,7 @@ import { DIM_LABELS, DIM_COLORS, DIM_WEIGHTS } from '@/lib/constants';
 import StatusBadge from '@/app/components/StatusBadge';
 import type { DimKey, FilterMode, Check } from '@/lib/types';
 import { getRemediation } from '@/lib/remediation';
+import { generateFlags, deriveSeverity } from '@/lib/flags';
 
 const DIMS: DimKey[] = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
 
@@ -14,6 +15,7 @@ const FILTER_LABELS: { mode: FilterMode; label: string }[] = [
   { mode: 'fails',   label: 'Fails' },
   { mode: 'missing', label: 'Missing' },
   { mode: 'passed',  label: 'Passed' },
+  { mode: 'flags',   label: 'Flags' },
 ];
 
 function matchesFilter(check: Check, mode: FilterMode): boolean {
@@ -64,7 +66,7 @@ function exportAllCSV(checks: Check[]) {
 
 export default function ChecklistView() {
   const { state, dispatch } = useApp();
-  const { results } = state;
+  const { results, parsedData, files } = state;
   const [filter, setFilter] = useState<FilterMode>('all');
   const [collapsed, setCollapsed] = useState<Set<DimKey>>(new Set());
 
@@ -111,7 +113,9 @@ export default function ChecklistView() {
             Checklist
           </h1>
           <p className="text-xs mt-0.5" style={{ color: 'var(--text3)' }}>
-            {totalCount} check{totalCount !== 1 ? 's' : ''} · 59 total
+            {filter === 'flags'
+              ? `Anomaly flags from failing checks`
+              : `${totalCount} check${totalCount !== 1 ? 's' : ''} · 59 total`}
           </p>
         </div>
 
@@ -149,8 +153,58 @@ export default function ChecklistView() {
         </div>
       </div>
 
-      {/* Dimensions */}
-      <div className="space-y-3">
+      {/* Flags view — only when filter === 'flags' */}
+      {filter === 'flags' && (() => {
+        const dbStats = files.daybook?.chunkedStats ?? null;
+        const allFlags = generateFlags(results, parsedData, dbStats);
+        const severities = ['critical', 'high', 'medium', 'low'] as const;
+        const SEV_COLORS: Record<string, string> = { critical: 'var(--red)', high: 'var(--coral)', medium: 'var(--amber)', low: 'var(--text3)' };
+        const SEV_BG: Record<string, string> = { critical: 'rgba(240,72,72,0.1)', high: 'rgba(242,107,91,0.1)', medium: 'rgba(245,166,35,0.1)', low: 'rgba(92,99,112,0.08)' };
+        if (allFlags.length === 0) {
+          return (
+            <div className="rounded-xl border p-8 text-center" style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}>
+              <p className="text-sm" style={{ color: 'var(--teal)' }}>✓ No anomaly flags found.</p>
+            </div>
+          );
+        }
+        return (
+          <div className="space-y-4">
+            {severities.map(sev => {
+              const group = allFlags.filter(f => f.severity === sev);
+              if (group.length === 0) return null;
+              return (
+                <div key={sev}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-xs font-semibold uppercase tracking-wider px-2 py-0.5 rounded"
+                      style={{ color: SEV_COLORS[sev], background: SEV_BG[sev] }}>
+                      {sev}
+                    </span>
+                    <span className="text-xs" style={{ color: 'var(--text3)' }}>{group.length} flag{group.length !== 1 ? 's' : ''}</span>
+                  </div>
+                  <div className="rounded-xl border overflow-hidden divide-y" style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}>
+                    {group.map(flag => (
+                      <div key={flag.id} className="flex items-start gap-3 px-4 py-3" style={{ borderColor: 'var(--border)' }}>
+                        <span className="text-xs font-mono shrink-0 mt-0.5" style={{ color: 'var(--text3)' }}>{flag.id}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium" style={{ color: 'var(--text1)' }}>{flag.title}</div>
+                          <div className="text-xs mt-0.5" style={{ color: 'var(--text2)' }}>{flag.detail}</div>
+                        </div>
+                        {flag.count !== undefined && (
+                          <div className="text-xs font-mono shrink-0" style={{ color: 'var(--text3)' }}>×{flag.count}</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
+
+      {/* Dimensions — hidden when showing Flags */}
+      {filter !== 'flags' && (
+        <div className="space-y-3">
         {DIMS.map(dim => {
           const dimChecks = filteredChecks.filter(c => c.dim === dim);
           const allDimChecks = checks.filter(c => c.dim === dim);
@@ -210,6 +264,7 @@ export default function ChecklistView() {
           );
         })}
       </div>
+      )}
     </div>
   );
 }

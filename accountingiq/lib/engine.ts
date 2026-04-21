@@ -38,7 +38,7 @@ function na(note: string) {
 }
 
 // Main entry point
-export function analyseFiles(state: AppState): { results: AnalysisResults; parsedData: Partial<ParsedData> } {
+export function analyseFiles(state: AppState): { results: AnalysisResults; parsedData: Partial<ParsedData>; dbStats: ChunkedStats | null } {
   const { files, filters } = state;
   const { start: fyStart, end: fyEnd } = currentFY();
 
@@ -553,6 +553,7 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
   return {
     results: { checks, dimScores, overall, cappedScore, scoreCapped, runAt: Date.now() },
     parsedData,
+    dbStats,
   };
 }
 

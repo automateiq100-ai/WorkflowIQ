@@ -1,10 +1,26 @@
 import OpenAI from 'openai';
 import { NextRequest, NextResponse } from 'next/server';
 import type { DimKey } from '@/lib/types';
+import { getActiveProvider } from '@/lib/ai-config';
 
-// Initialize client inside handler or lazily to avoid build-time errors when key is missing
+// Build client from the active provider config.
+// For non-OpenAI providers the SDK injects X-Stainless-* headers that some
+// proxies/WAFs block with a 403. We pass a custom fetch that strips them.
 function getClient() {
-  return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const p = getActiveProvider();
+  return new OpenAI({
+    apiKey: p.apiKey,
+    baseURL: p.baseURL,
+    fetch: async (url: string | URL | Request, init?: RequestInit) => {
+      const headers = new Headers(init?.headers as HeadersInit | undefined);
+      for (const key of [...headers.keys()]) {
+        if (key.toLowerCase().startsWith('x-stainless') || key.toLowerCase() === 'user-agent') {
+          headers.delete(key);
+        }
+      }
+      return fetch(url as RequestInfo, { ...init, headers });
+    },
+  });
 }
 
 // ── System prompt — kept exactly as specified ──────────────────────────────
@@ -149,8 +165,12 @@ Generate the five-section report as structured JSON matching this schema:
 // ── API route handler ─────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
-  if (!process.env.OPENAI_API_KEY) {
-    return NextResponse.json({ error: 'OPENAI_API_KEY not configured' }, { status: 500 });
+  const provider = getActiveProvider();
+  if (!provider.apiKey) {
+    return NextResponse.json(
+      { error: `API key not configured for provider "${provider.label}". Check .env.local.` },
+      { status: 500 },
+    );
   }
 
   try {
@@ -158,34 +178,42 @@ export async function POST(req: NextRequest) {
     const client = getClient();
 
     const response = await client.chat.completions.create({
-      model: 'gpt-4o',
+      model: provider.model,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: buildUserPrompt(body) },
       ],
-      response_format: { type: 'json_object' },
-      max_tokens: 2500,
-      temperature: 0.2,
+      ...(provider.supportsJsonMode ? { response_format: { type: 'json_object' as const } } : {}),
+      max_tokens: provider.maxTokens,
+      temperature: provider.temperature,
     });
 
     const rawContent = response.choices[0].message.content!;
 
+    // Extract JSON — strip markdown fences if the model wraps it
+    const jsonStr = extractJSON(rawContent);
+
     let parsed: AIResponseBody;
     try {
-      parsed = JSON.parse(rawContent);
+      parsed = JSON.parse(jsonStr);
     } catch {
-      // JSON parse failed — return error
       if (process.env.NODE_ENV === 'development') {
         return NextResponse.json({ error: 'AI response was not valid JSON', raw: rawContent }, { status: 500 });
       }
       return NextResponse.json({ error: 'AI analysis failed — invalid response format' }, { status: 500 });
     }
 
-    // Validate and sanitise
     const validated = validateResponse(parsed, body);
     return NextResponse.json(validated);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';
     return NextResponse.json({ error: message }, { status: 500 });
   }
+}
+
+/** Strip ```json ... ``` fences that some models add despite instructions */
+function extractJSON(raw: string): string {
+  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenced) return fenced[1].trim();
+  return raw.trim();
 }

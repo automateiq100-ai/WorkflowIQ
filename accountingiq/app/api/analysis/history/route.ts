@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
 import { NextRequest, NextResponse } from 'next/server';
 
-export async function POST(request: NextRequest) {
+export async function GET(request: NextRequest) {
   const cookieStore = await cookies();
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -23,31 +23,28 @@ export async function POST(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const body = await request.json();
-  const {
-    overall_score, capped_score, score_capped, dim_scores, checks, company_id,
-    period_type, period_start, period_end, financial_summary,
-  } = body;
+  const { searchParams } = new URL(request.url);
+  const companyId = searchParams.get('company_id');
+  const limit = Math.min(parseInt(searchParams.get('limit') ?? '5', 10), 20);
 
   const admin = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_KEY!,
   );
 
-  const { data, error } = await admin.from('analysis_runs').insert({
-    user_id: user.id,
-    company_id:        company_id        ?? null,
-    overall_score,
-    capped_score,
-    score_capped,
-    dim_scores,
-    checks,
-    period_type:       period_type       ?? null,
-    period_start:      period_start      ?? null,
-    period_end:        period_end        ?? null,
-    financial_summary: financial_summary ?? null,
-  }).select('id, run_at').single();
+  let query = admin
+    .from('analysis_runs')
+    .select('id, run_at, overall_score, capped_score, score_capped, period_type, period_start, period_end')
+    .eq('user_id', user.id)
+    .order('run_at', { ascending: false })
+    .limit(limit);
 
+  if (companyId) {
+    query = query.eq('company_id', companyId);
+  }
+
+  const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ id: data.id, run_at: data.run_at });
+
+  return NextResponse.json({ runs: data ?? [] });
 }

@@ -1,11 +1,14 @@
 'use client';
 
+import { useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
+import ProfilePanel from './ProfilePanel';
 
 interface UserInfo {
   name: string | null;
   email: string;
+  mobile: string | null;
 }
 
 const ALL_TOOLS = [
@@ -25,7 +28,7 @@ const ALL_TOOLS = [
     tagColor: 'var(--blue)',
     icon: '⚖️',
     description: 'Search and analyse thousands of legal cases. AI-powered relevancy scoring and synthesis memos.',
-    href: null, // uses token-hash redirect
+    href: null,
   },
 ];
 
@@ -42,6 +45,9 @@ export default function PortalShell({
   const initials = displayName.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
 
   const visibleTools = ALL_TOOLS.filter(t => selectedTools.includes(t.id));
+
+  // Profile panel state
+  const [profileOpen, setProfileOpen] = useState(false);
 
   async function goToResearchIQ() {
     const supabase = createClient();
@@ -90,13 +96,22 @@ export default function PortalShell({
 
         {/* User */}
         <div className="flex items-center gap-2.5">
-          <div
-            className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
-            style={{ background: 'var(--teal)', color: '#000' }}
+          {/* Profile button */}
+          <button
+            onClick={() => setProfileOpen(true)}
+            className="flex items-center gap-2 px-2 py-1 rounded-lg transition-colors"
+            style={{ color: 'var(--text2)' }}
+            onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg3)')}
+            onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
           >
-            {initials}
-          </div>
-          <div className="text-xs" style={{ color: 'var(--text2)' }}>{displayName}</div>
+            <div
+              className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
+              style={{ background: 'var(--teal)', color: '#000' }}
+            >
+              {initials}
+            </div>
+            <span className="text-xs">{displayName}</span>
+          </button>
           <button
             onClick={handleSignOut}
             className="text-xs ml-1 transition-colors"
@@ -132,7 +147,7 @@ export default function PortalShell({
               You don&apos;t have access to any tools yet.
             </p>
             <p className="text-xs" style={{ color: 'var(--text3)' }}>
-              Contact your administrator or update your tool selection in Profile settings.
+              Contact your administrator to enable tool access for your account.
             </p>
           </div>
         ) : (
@@ -170,6 +185,14 @@ export default function PortalShell({
           </div>
         )}
       </main>
+
+      {/* Profile slide panel */}
+      {profileOpen && (
+        <ProfilePanel
+          user={user}
+          onClose={() => setProfileOpen(false)}
+        />
+      )}
     </div>
   );
 }

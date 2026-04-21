@@ -45,6 +45,7 @@ export default async function PortalPage() {
       user={{
         name: user.user_metadata?.full_name ?? null,
         email: user.email ?? '',
+        mobile: user.user_metadata?.mobile ?? null,
       }}
       selectedTools={selectedTools}
     />

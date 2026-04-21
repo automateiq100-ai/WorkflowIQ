@@ -7,6 +7,8 @@ import type { ViewId, ModuleId } from '@/lib/types';
 import dynamic from 'next/dynamic';
 import { createClient } from '@/lib/supabase/client';
 import { useRouter } from 'next/navigation';
+import { useState } from 'react';
+import ProfilePanel from '@/app/components/ProfilePanel';
 
 // Lazy-load views
 const ConsentModal      = dynamic(() => import('@/app/components/ConsentModal'));
@@ -24,9 +26,14 @@ const ReconciliationView = dynamic(() => import('@/app/views/ReconciliationView'
 const AIAnalysisView      = dynamic(() => import('@/app/views/AIAnalysisView'));
 const CompanySelectorView = dynamic(() => import('@/app/views/CompanySelectorView'));
 
+const CompanyDashboardView = dynamic(() => import('@/app/views/CompanyDashboardView'));
+const DataView             = dynamic(() => import('@/app/views/DataView'));
+const AgentFixView         = dynamic(() => import('@/app/views/AgentFixView'));
+
 const VIEW_COMPONENTS: Record<ViewId, React.ComponentType> = {
-  'company-select': CompanySelectorView,
-  upload:           UploadView,
+  'company-select':    CompanySelectorView,
+  'company-dashboard': CompanyDashboardView,
+  upload:              UploadView,
   dashboard:       DashboardView,
   checklist:       ChecklistView,
   insights:        InsightsView,
@@ -39,14 +46,17 @@ const VIEW_COMPONENTS: Record<ViewId, React.ComponentType> = {
   'mis-report':    MISReportView,
   reconciliation:  ReconciliationView,
   aiAnalysis:      AIAnalysisView,
+  'data-view':     DataView,
+  'agent-fix':     AgentFixView as React.ComponentType,
 };
 
 // Accounting module: always visible
 const ACCOUNTING_ALWAYS: ViewId[] = ['company-select'];
 // Accounting module: visible only when a company is selected
-const ACCOUNTING_COMPANY: ViewId[] = ['upload', 'profile', 'rules'];
+const ACCOUNTING_COMPANY: ViewId[] = ['company-dashboard', 'upload', 'profile', 'rules'];
 // Accounting module: visible only after analysis
-const ACCOUNTING_POST: ViewId[] = ['dashboard', 'checklist', 'insights', 'aiAnalysis', 'health', 'flags', 'reports'];
+// Flags lives inside Checklist, Health inside Dashboard, Insights inside Analysis, Fix Planner inside Data & Fix
+const ACCOUNTING_POST: ViewId[] = ['dashboard', 'checklist', 'aiAnalysis', 'data-view', 'reports'];
 
 interface UserInfo {
   name: string | null;
@@ -57,6 +67,7 @@ interface UserInfo {
 export default function Shell({ user }: { user: UserInfo | null }) {
   const { state, dispatch } = useApp();
   const { currentView, currentModule, analysed, uploadProgress, consentGiven, aiConsentGiven, theme, currentCompany } = state;
+  const [exporting, setExporting] = useState(false);
 
   function navigate(view: ViewId) {
     dispatch({ type: 'SET_VIEW', view });
@@ -75,6 +86,26 @@ export default function Shell({ user }: { user: UserInfo | null }) {
     dispatch({ type: 'SESSION_CLEARED' });
   }
 
+  async function handleExportExcel() {
+    if (!state.results) return;
+    setExporting(true);
+    try {
+      const { exportToExcel } = await import('@/lib/excel');
+      const dbStats = state.files.daybook?.chunkedStats ?? null;
+      exportToExcel({
+        results: state.results,
+        parsedData: state.parsedData,
+        dbStats,
+        companyName: currentCompany?.name ?? 'Analysis',
+        periodLabel: (state.results.runAt
+          ? new Date(state.results.runAt).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })
+          : 'Export'),
+      });
+    } finally {
+      setExporting(false);
+    }
+  }
+
   const ViewComponent = VIEW_COMPONENTS[currentView];
 
   // Which nav items to show based on current module
@@ -90,13 +121,18 @@ export default function Shell({ user }: { user: UserInfo | null }) {
         className="shrink-0 flex items-center border-b px-4"
         style={{ background: 'var(--bg2)', borderColor: 'var(--border)', height: 48 }}
       >
-        {/* Logo */}
-        <div
-          className="text-sm font-semibold tracking-tight mr-6"
-          style={{ color: 'var(--text1)', fontFamily: 'var(--font-dm-serif)' }}
+        {/* Logo / Home button */}
+        <a
+          href="/portal"
+          className="flex items-center gap-1.5 text-sm font-semibold tracking-tight mr-6 transition-opacity"
+          style={{ color: 'var(--text1)', fontFamily: 'var(--font-dm-serif)', textDecoration: 'none' }}
+          title="Back to Portal"
+          onMouseEnter={e => (e.currentTarget.style.opacity = '0.7')}
+          onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
         >
+          <span style={{ fontSize: 16, lineHeight: 1 }}>⌂</span>
           AccountingIQ
-        </div>
+        </a>
 
         {/* Module tabs */}
         <nav className="flex items-center flex-1 gap-1">
@@ -120,6 +156,32 @@ export default function Shell({ user }: { user: UserInfo | null }) {
             );
           })}
         </nav>
+
+        {/* Export Excel — only when analysis is done */}
+        {analysed && state.results && (
+          <button
+            onClick={handleExportExcel}
+            disabled={exporting}
+            title="Download Excel workbook"
+            className="flex items-center gap-1.5 px-3 h-8 rounded-lg border text-xs font-medium transition-all disabled:opacity-40"
+            style={{
+              background: 'var(--bg3)',
+              borderColor: 'var(--border)',
+              color: 'var(--text2)',
+              marginRight: 4,
+            }}
+            onMouseEnter={e => {
+              (e.currentTarget as HTMLElement).style.color = 'var(--teal)';
+              (e.currentTarget as HTMLElement).style.borderColor = 'var(--teal)';
+            }}
+            onMouseLeave={e => {
+              (e.currentTarget as HTMLElement).style.color = 'var(--text2)';
+              (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)';
+            }}
+          >
+            {exporting ? '⟳' : '⬇'} {exporting ? 'Generating…' : 'Excel'}
+          </button>
+        )}
 
         {/* Theme toggle */}
         <button
@@ -248,6 +310,7 @@ export default function Shell({ user }: { user: UserInfo | null }) {
 
 function UserFooter({ user }: { user: UserInfo | null }) {
   const router = useRouter();
+  const [profileOpen, setProfileOpen] = useState(false);
   if (!user) return null;
 
   const displayName = user.name ?? user.email ?? 'User';
@@ -260,28 +323,50 @@ function UserFooter({ user }: { user: UserInfo | null }) {
   }
 
   return (
-    <div className="p-3 flex items-center gap-2.5 border-t" style={{ borderColor: 'var(--border)' }}>
-      <div
-          className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
-          style={{ background: 'var(--teal)', color: '#000' }}
+    <>
+      <div className="p-3 flex items-center gap-2.5 border-t" style={{ borderColor: 'var(--border)' }}>
+        {/* Avatar — clickable to open profile panel */}
+        <button
+          onClick={() => setProfileOpen(true)}
+          className="flex items-center gap-2 flex-1 min-w-0 rounded-lg px-1 py-0.5 transition-colors text-left"
+          style={{ background: 'transparent' }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg3)')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
         >
-          {initials}
-        </div>
-      <div className="flex-1 min-w-0">
-        <div className="text-xs font-medium truncate" style={{ color: 'var(--text1)' }}>
-          {displayName}
-        </div>
+          <div
+            className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold shrink-0"
+            style={{ background: 'var(--teal)', color: '#000' }}
+          >
+            {initials}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs font-medium truncate" style={{ color: 'var(--text1)' }}>
+              {displayName}
+            </div>
+            <div className="text-xs" style={{ color: 'var(--text3)', fontSize: 10 }}>
+              View profile
+            </div>
+          </div>
+        </button>
         <button
           onClick={handleSignOut}
-          className="text-xs transition-colors"
+          className="text-xs transition-colors shrink-0"
           style={{ color: 'var(--text3)' }}
+          title="Sign out"
           onMouseEnter={e => (e.currentTarget.style.color = 'var(--red)')}
           onMouseLeave={e => (e.currentTarget.style.color = 'var(--text3)')}
         >
-          Sign out
+          ⏻
         </button>
       </div>
-    </div>
+
+      {profileOpen && (
+        <ProfilePanel
+          user={{ name: user.name, email: user.email ?? '', mobile: null }}
+          onClose={() => setProfileOpen(false)}
+        />
+      )}
+    </>
   );
 }
 

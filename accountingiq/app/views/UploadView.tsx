@@ -5,7 +5,7 @@ import { useApp } from '@/lib/state';
 import { FILE_LABELS, FILE_DESCRIPTIONS, FILE_TIERS } from '@/lib/constants';
 import { analyseFiles } from '@/lib/engine';
 import { parseDAYBOOK_chunked } from '@/lib/chunkedParser';
-import type { FileKey } from '@/lib/types';
+import type { FileKey, ParsedData } from '@/lib/types';
 
 const CHUNK_THRESHOLD = 10 * 1024 * 1024; // 10 MB
 
@@ -128,7 +128,111 @@ function UploadScreen({
   const [scanning, setScanning] = useState(false);
   const [scanSummary, setScanSummary] = useState<{ total: number; matched: number; skipped: string[] } | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [showRequestModal, setShowRequestModal] = useState(false);
   const requiredLoaded = FILE_TIERS.required.every(k => files[k].hasContent);
+
+  // Period selection
+  const [periodType, setPeriodType] = useState<'monthly' | 'quarterly' | 'yearly' | 'custom'>('yearly');
+
+  // Shared year (FY-starting for quarterly/yearly; calendar year for monthly)
+  const [periodYear, setPeriodYear] = useState<string>(() => {
+    const now = new Date();
+    return String(now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1);
+  });
+  // Monthly-only
+  const [periodMonth, setPeriodMonth] = useState<string>(() =>
+    String(new Date().getMonth() + 1).padStart(2, '0'),
+  );
+  // Quarterly-only
+  const [periodQuarter, setPeriodQuarter] = useState<1 | 2 | 3 | 4>(() => {
+    const m = new Date().getMonth(); // 0-indexed
+    if (m >= 3 && m <= 5) return 1;
+    if (m >= 6 && m <= 8) return 2;
+    if (m >= 9 && m <= 11) return 3;
+    return 4;
+  });
+  // Custom-only
+  const [periodStart, setPeriodStart] = useState('');
+  const [periodEnd, setPeriodEnd] = useState('');
+
+  // DayBook actual date range (YYYYMMDD strings, extracted on load)
+  const [daybookDateRange, setDaybookDateRange] = useState<{ min: string; max: string } | null>(null);
+
+  // ── Period helpers ───────────────────────────────────────────────────────
+
+  function getExpectedRange(): { start: Date; end: Date } | null {
+    const yr = parseInt(periodYear, 10);
+    switch (periodType) {
+      case 'monthly': {
+        const m = parseInt(periodMonth, 10) - 1;
+        return { start: new Date(yr, m, 1), end: new Date(yr, m + 1, 0) };
+      }
+      case 'quarterly': {
+        const qRanges: { start: Date; end: Date }[] = [
+          { start: new Date(yr, 3, 1),  end: new Date(yr, 5, 30) },       // Q1 Apr–Jun
+          { start: new Date(yr, 6, 1),  end: new Date(yr, 8, 30) },       // Q2 Jul–Sep
+          { start: new Date(yr, 9, 1),  end: new Date(yr, 11, 31) },      // Q3 Oct–Dec
+          { start: new Date(yr + 1, 0, 1), end: new Date(yr + 1, 2, 31) }, // Q4 Jan–Mar
+        ];
+        return qRanges[periodQuarter - 1];
+      }
+      case 'yearly':
+        return { start: new Date(yr, 3, 1), end: new Date(yr + 1, 2, 31) };
+      case 'custom':
+        if (!periodStart || !periodEnd) return null;
+        return { start: new Date(periodStart), end: new Date(periodEnd) };
+    }
+  }
+
+  function getPeriodLabel(): string {
+    const yr = parseInt(periodYear, 10);
+    const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    switch (periodType) {
+      case 'monthly':
+        return `${monthNames[parseInt(periodMonth, 10) - 1]} ${yr}`;
+      case 'quarterly':
+        return `Q${periodQuarter} FY ${yr}–${String(yr + 1).slice(2)}`;
+      case 'yearly':
+        return `FY ${yr}–${String(yr + 1).slice(2)}`;
+      case 'custom':
+        return periodStart && periodEnd ? `${periodStart} to ${periodEnd}` : 'Custom';
+    }
+  }
+
+  function getMismatchWarning(): string | null {
+    if (!daybookDateRange) return null;
+    const expected = getExpectedRange();
+    if (!expected) return null;
+
+    // Parse YYYYMMDD → Date
+    const parse8 = (s: string) => new Date(
+      parseInt(s.slice(0, 4), 10),
+      parseInt(s.slice(4, 6), 10) - 1,
+      parseInt(s.slice(6, 8), 10),
+    );
+    const dbMin = parse8(daybookDateRange.min);
+    const dbMax = parse8(daybookDateRange.max);
+    const fmt = (d: Date) =>
+      d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+
+    // Only warn when data extends OUTSIDE the selected period — not when it's shorter
+    if (dbMin < expected.start || dbMax > expected.end) {
+      return `⚠ DayBook contains entries outside the selected period — data: ${fmt(dbMin)} – ${fmt(dbMax)}, selected: ${fmt(expected.start)} – ${fmt(expected.end)}`;
+    }
+    return null;
+  }
+
+  // ── Saved period info for DB ─────────────────────────────────────────────
+
+  function getPeriodForDB(): { period_type: string; period_start: string | null; period_end: string | null } {
+    const expected = getExpectedRange();
+    const toISO = (d: Date) => d.toISOString().slice(0, 10);
+    return {
+      period_type:  periodType,
+      period_start: expected ? toISO(expected.start) : null,
+      period_end:   expected ? toISO(expected.end)   : null,
+    };
+  }
 
   async function processFolder(fileList: FileList) {
     const xmlFiles = Array.from(fileList).filter(f => f.name.toLowerCase().endsWith('.xml'));
@@ -160,6 +264,11 @@ function UploadScreen({
                 key: 'daybook',
                 entry: { name: file.name, size: file.size, hasContent: true, content: null, chunkedStats: stats, sessionExpired: false },
               });
+              // Extract date range from chunked stats
+              if (stats.dateSet && stats.dateSet.length > 0) {
+                const sorted = [...stats.dateSet].sort();
+                setDaybookDateRange({ min: sorted[0], max: sorted[sorted.length - 1] });
+              }
               matched++;
               resolve();
             },
@@ -200,6 +309,11 @@ function UploadScreen({
                 key,
                 entry: { name: file.name, size: file.size, hasContent: true, content: null, chunkedStats: stats, sessionExpired: false },
               });
+              // Extract date range from chunked stats
+              if (stats.dateSet && stats.dateSet.length > 0) {
+                const sorted = [...stats.dateSet].sort();
+                setDaybookDateRange({ min: sorted[0], max: sorted[sorted.length - 1] });
+              }
               matched++;
               resolve();
             },
@@ -211,6 +325,14 @@ function UploadScreen({
           );
         });
       } else {
+        // Extract DayBook date range for non-chunked file
+        if (key === 'daybook') {
+          const dates = Array.from(content.matchAll(/<DATE>(\d{8})<\/DATE>/gi), m => m[1]);
+          if (dates.length > 0) {
+            const sorted = [...dates].sort();
+            setDaybookDateRange({ min: sorted[0], max: sorted[sorted.length - 1] });
+          }
+        }
         dispatch({
           type: 'FILE_LOADED',
           key,
@@ -238,9 +360,23 @@ function UploadScreen({
   }
 
   async function handleAnalyse() {
-    const { results, parsedData } = analyseFiles(state);
-    dispatch({ type: 'ANALYSIS_DONE', results, parsedData });
+    const { results, parsedData, dbStats } = analyseFiles(state);
+    dispatch({ type: 'ANALYSIS_DONE', results, parsedData, dbStats });
+
+    // Extract key financial metrics from parsedData
+    const pd = parsedData as Partial<ParsedData>;
+    const financialSummary = {
+      revenue:      pd.revenue      ?? null,
+      expenses:     pd.expenses     ?? null,
+      netProfit:    pd.bsNetProfit  ?? pd.netProfit ?? null,
+      bankBal:      pd.bankBal      ?? null,
+      debtorBal:    pd.debtorBal    ?? null,
+      creditorBal:  pd.creditorBal  ?? null,
+      currentRatio: (pd.ca && pd.cl) ? +(pd.ca / pd.cl).toFixed(2) : null,
+    };
+
     // Save to DB in the background — don't block UI
+    const periodDB = getPeriodForDB();
     fetch('/api/analysis/save', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -251,6 +387,10 @@ function UploadScreen({
         dim_scores: results.dimScores,
         checks: results.checks,
         company_id: state.currentCompany?.id ?? null,
+        period_type:  periodDB.period_type,
+        period_start: periodDB.period_start,
+        period_end:   periodDB.period_end,
+        financial_summary: financialSummary,
       }),
     }).catch(() => {});
   }
@@ -266,6 +406,27 @@ function UploadScreen({
       <p className="text-sm mb-6" style={{ color: 'var(--text2)' }}>
         Select the folder containing your Tally XML exports — files are identified automatically.
       </p>
+
+      {/* Period selector */}
+      <PeriodSelector
+        periodType={periodType}  setPeriodType={setPeriodType}
+        periodYear={periodYear}  setPeriodYear={setPeriodYear}
+        periodMonth={periodMonth} setPeriodMonth={setPeriodMonth}
+        periodQuarter={periodQuarter} setPeriodQuarter={setPeriodQuarter}
+        periodStart={periodStart}  setPeriodStart={setPeriodStart}
+        periodEnd={periodEnd}    setPeriodEnd={setPeriodEnd}
+        periodLabel={getPeriodLabel()}
+      />
+
+      {/* Mismatch warning */}
+      {getMismatchWarning() && (
+        <div
+          className="rounded-lg px-4 py-3 mb-4 text-xs"
+          style={{ background: 'rgba(245,166,35,0.1)', border: '1px solid var(--amber)', color: 'var(--amber)' }}
+        >
+          {getMismatchWarning()}
+        </div>
+      )}
 
       {/* Folder drop zone */}
       <div
@@ -324,7 +485,7 @@ function UploadScreen({
       <StatusGrid files={files} dispatch={dispatch} state={state} />
 
       {/* Run Analysis */}
-      <div className="mt-6 flex items-center gap-4">
+      <div className="mt-6 flex items-center gap-4 flex-wrap">
         <button
           onClick={handleAnalyse}
           disabled={!requiredLoaded}
@@ -338,7 +499,186 @@ function UploadScreen({
             5 required files needed
           </span>
         )}
+
+        {/* Request from Client — shown when conditional files are missing */}
+        {FILE_TIERS.conditional.some(k => !files[k].hasContent) && (
+          <button
+            onClick={() => setShowRequestModal(true)}
+            className="text-xs px-3 py-2 rounded-lg border transition-colors"
+            style={{ borderColor: 'var(--border)', color: 'var(--text2)', background: 'var(--bg3)' }}
+            onMouseEnter={e => {
+              (e.currentTarget as HTMLElement).style.color = 'var(--teal)';
+              (e.currentTarget as HTMLElement).style.borderColor = 'var(--teal)';
+            }}
+            onMouseLeave={e => {
+              (e.currentTarget as HTMLElement).style.color = 'var(--text2)';
+              (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)';
+            }}
+          >
+            ✉ Request from Client
+          </button>
+        )}
       </div>
+
+      {/* Request from Client modal */}
+      {showRequestModal && (
+        <RequestClientModal
+          files={files}
+          companyName={state.currentCompany?.name ?? 'your company'}
+          onClose={() => setShowRequestModal(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Period selector ───────────────────────────────────────────────────────
+
+const MONTHS = [
+  { value: '01', label: 'January' }, { value: '02', label: 'February' },
+  { value: '03', label: 'March' },   { value: '04', label: 'April' },
+  { value: '05', label: 'May' },     { value: '06', label: 'June' },
+  { value: '07', label: 'July' },    { value: '08', label: 'August' },
+  { value: '09', label: 'September' },{ value: '10', label: 'October' },
+  { value: '11', label: 'November' },{ value: '12', label: 'December' },
+];
+
+function fyYears(): string[] {
+  const cur = new Date().getMonth() >= 3 ? new Date().getFullYear() : new Date().getFullYear() - 1;
+  return Array.from({ length: 6 }, (_, i) => String(cur - 2 + i));
+}
+
+function calYears(): string[] {
+  const cur = new Date().getFullYear();
+  return Array.from({ length: 6 }, (_, i) => String(cur - 2 + i));
+}
+
+const selectStyle: React.CSSProperties = {
+  background: 'var(--bg3)', border: '1px solid var(--border)',
+  color: 'var(--text1)', borderRadius: 8, padding: '6px 10px',
+  fontSize: 12, outline: 'none',
+};
+
+interface PeriodSelectorProps {
+  periodType: 'monthly' | 'quarterly' | 'yearly' | 'custom';
+  setPeriodType: (v: 'monthly' | 'quarterly' | 'yearly' | 'custom') => void;
+  periodYear: string; setPeriodYear: (v: string) => void;
+  periodMonth: string; setPeriodMonth: (v: string) => void;
+  periodQuarter: 1 | 2 | 3 | 4; setPeriodQuarter: (v: 1 | 2 | 3 | 4) => void;
+  periodStart: string; setPeriodStart: (v: string) => void;
+  periodEnd: string;   setPeriodEnd:   (v: string) => void;
+  periodLabel: string;
+}
+
+function PeriodSelector({
+  periodType, setPeriodType,
+  periodYear, setPeriodYear,
+  periodMonth, setPeriodMonth,
+  periodQuarter, setPeriodQuarter,
+  periodStart, setPeriodStart,
+  periodEnd, setPeriodEnd,
+  periodLabel,
+}: PeriodSelectorProps) {
+  const btnBase: React.CSSProperties = {
+    padding: '6px 14px', borderRadius: 8, fontSize: 12,
+    fontWeight: 500, border: '1px solid', cursor: 'pointer', transition: 'all .15s',
+  };
+  const active: React.CSSProperties = { background: 'var(--teal)', color: '#000', borderColor: 'var(--teal)' };
+  const inactive: React.CSSProperties = { background: 'var(--bg3)', color: 'var(--text2)', borderColor: 'var(--border)' };
+
+  return (
+    <div
+      className="rounded-xl border p-4 mb-4"
+      style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}
+    >
+      <div className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'var(--text3)' }}>
+        Analysis Period
+        {periodLabel && (
+          <span className="ml-2 normal-case font-normal" style={{ color: 'var(--teal)' }}>
+            — {periodLabel}
+          </span>
+        )}
+      </div>
+
+      {/* Type pills */}
+      <div className="flex gap-2 mb-3 flex-wrap">
+        {(['monthly', 'quarterly', 'yearly', 'custom'] as const).map(p => (
+          <button key={p} onClick={() => setPeriodType(p)}
+            style={{ ...btnBase, ...(periodType === p ? active : inactive) }}
+          >
+            {p.charAt(0).toUpperCase() + p.slice(1)}
+          </button>
+        ))}
+      </div>
+
+      {/* Type-specific pickers */}
+      {periodType === 'monthly' && (
+        <div className="flex gap-3 flex-wrap items-center">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs" style={{ color: 'var(--text3)' }}>Month</label>
+            <select value={periodMonth} onChange={e => setPeriodMonth(e.target.value)} style={selectStyle}>
+              {MONTHS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+            </select>
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs" style={{ color: 'var(--text3)' }}>Year</label>
+            <select value={periodYear} onChange={e => setPeriodYear(e.target.value)} style={selectStyle}>
+              {calYears().map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+          </div>
+        </div>
+      )}
+
+      {periodType === 'quarterly' && (
+        <div className="flex gap-3 flex-wrap items-center">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs" style={{ color: 'var(--text3)' }}>Quarter</label>
+            <div className="flex gap-1.5">
+              {([1, 2, 3, 4] as const).map(q => (
+                <button key={q} onClick={() => setPeriodQuarter(q)}
+                  style={{ ...btnBase, ...(periodQuarter === q ? active : inactive), padding: '5px 10px' }}
+                >
+                  Q{q}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs" style={{ color: 'var(--text3)' }}>Financial Year starting</label>
+            <select value={periodYear} onChange={e => setPeriodYear(e.target.value)} style={selectStyle}>
+              {fyYears().map(y => (
+                <option key={y} value={y}>{y}–{String(parseInt(y) + 1).slice(2)}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+      )}
+
+      {periodType === 'yearly' && (
+        <div className="flex flex-col gap-1">
+          <label className="text-xs" style={{ color: 'var(--text3)' }}>Financial Year</label>
+          <select value={periodYear} onChange={e => setPeriodYear(e.target.value)} style={selectStyle}>
+            {fyYears().map(y => (
+              <option key={y} value={y}>FY {y}–{String(parseInt(y) + 1).slice(2)}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {periodType === 'custom' && (
+        <div className="flex gap-3 flex-wrap items-center">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs" style={{ color: 'var(--text3)' }}>Start date</label>
+            <input type="date" value={periodStart} onChange={e => setPeriodStart(e.target.value)}
+              style={{ ...selectStyle, padding: '6px 10px' }} />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs" style={{ color: 'var(--text3)' }}>End date</label>
+            <input type="date" value={periodEnd} onChange={e => setPeriodEnd(e.target.value)}
+              style={{ ...selectStyle, padding: '6px 10px' }} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -518,6 +858,122 @@ function FileRow({
           ↑
         </button>
       )}
+    </div>
+  );
+}
+
+// ── Request from Client modal ─────────────────────────────────────────────
+
+function RequestClientModal({
+  files,
+  companyName,
+  onClose,
+}: {
+  files: ReturnType<typeof useApp>['state']['files'];
+  companyName: string;
+  onClose: () => void;
+}) {
+  const missingConditional = FILE_TIERS.conditional.filter(k => !files[k].hasContent);
+  const missingOptional    = FILE_TIERS.optional.filter(k => !files[k].hasContent);
+  const [copied, setCopied] = useState(false);
+
+  const TALLY_PATHS: Partial<Record<FileKey, string>> = {
+    sales:      'Display More Reports → Sales Register',
+    purchase:   'Display More Reports → Purchase Register',
+    bills:      'Display More Reports → Statements of Accounts → Bills Receivable',
+    payables:   'Display More Reports → Statements of Accounts → Bills Payable',
+    cashflow:   'Display More Reports → Cash Flow',
+    faregister: 'Display More Reports → Fixed Assets → Fixed Assets Register',
+    stock:      'Display More Reports → Inventory Books → Stock Summary',
+    bankrecon:  'Display More Reports → Banking → Bank Reconciliation',
+  };
+
+  const conditionalLines = missingConditional
+    .map(k => `  - ${FILE_LABELS[k]} — ${FILE_DESCRIPTIONS[k]}\n    Tally: Gateway of Tally → ${TALLY_PATHS[k] ?? 'Display More Reports'} → Export → XML`)
+    .join('\n\n');
+  const optionalLines = missingOptional.length > 0
+    ? `\nOptional (if applicable):\n${missingOptional
+        .map(k => `  - ${FILE_LABELS[k]} — ${FILE_DESCRIPTIONS[k]}\n    Tally: Gateway of Tally → ${TALLY_PATHS[k] ?? 'Display More Reports'} → Export → XML`)
+        .join('\n\n')}`
+    : '';
+
+  const template = `Subject: Request for additional accounting data — ${companyName}
+
+Dear [Client],
+
+For a complete accounting health analysis of ${companyName}, we require the following additional reports exported from Tally Prime:
+
+${conditionalLines}${optionalLines}
+
+Export steps (Tally Prime):
+Gateway of Tally → Display More Reports → [Report Name] → Export (Alt+E) → XML format
+
+Please share these files at your earliest convenience.
+
+Best regards,
+[Your Name]`;
+
+  function handleCopy() {
+    navigator.clipboard.writeText(template).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: 'rgba(0,0,0,0.6)' }}
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div
+        className="w-full max-w-xl rounded-xl border overflow-hidden"
+        style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b" style={{ borderColor: 'var(--border)' }}>
+          <div>
+            <div className="text-sm font-semibold" style={{ color: 'var(--text1)' }}>Request from Client</div>
+            <div className="text-xs mt-0.5" style={{ color: 'var(--text3)' }}>
+              {missingConditional.length} conditional file{missingConditional.length !== 1 ? 's' : ''} missing
+            </div>
+          </div>
+          <button onClick={onClose} className="text-sm" style={{ color: 'var(--text3)' }}>✕</button>
+        </div>
+
+        {/* Email template */}
+        <div className="p-5">
+          <textarea
+            readOnly
+            value={template}
+            rows={16}
+            className="w-full text-xs font-mono rounded-lg px-3 py-2.5 resize-none"
+            style={{
+              background: 'var(--bg3)',
+              border: '1px solid var(--border)',
+              color: 'var(--text2)',
+              lineHeight: 1.6,
+            }}
+          />
+        </div>
+
+        {/* Actions */}
+        <div className="flex items-center justify-end gap-3 px-5 pb-4">
+          <button
+            onClick={onClose}
+            className="text-xs px-4 py-2 rounded-lg border transition-colors"
+            style={{ borderColor: 'var(--border)', color: 'var(--text2)' }}
+          >
+            Close
+          </button>
+          <button
+            onClick={handleCopy}
+            className="text-xs px-4 py-2 rounded-lg font-semibold transition-opacity"
+            style={{ background: copied ? 'var(--teal)' : 'var(--purple)', color: copied ? '#000' : '#fff' }}
+          >
+            {copied ? '✓ Copied!' : '⎘ Copy to clipboard'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

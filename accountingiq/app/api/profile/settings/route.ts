@@ -39,7 +39,7 @@ export async function GET() {
   const admin = adminClient();
   const { data, error } = await admin
     .from('user_profiles')
-    .select('company_name, company_type, selected_tools, gst_applicable, gst_regular, tds_applicable, has_employees, has_fa_filter, is_goods, full_fy, theme')
+    .select('company_name, company_type, selected_tools, gst_applicable, gst_regular, tds_applicable, has_employees, has_fa_filter, is_goods, full_fy, theme, full_name, mobile')
     .eq('id', user.id)
     .single();
 
@@ -51,6 +51,8 @@ export async function GET() {
     selected_tools: data.selected_tools ?? [],
     filters: dbProfileToFilters(data),
     theme: data.theme ?? 'dark',
+    full_name: data.full_name ?? null,
+    mobile: data.mobile ?? null,
   });
 }
 
@@ -64,6 +66,8 @@ export async function PATCH(request: NextRequest) {
   const updates: Record<string, unknown> = {};
 
   if (body.theme !== undefined) updates.theme = body.theme;
+  if (body.full_name !== undefined) updates.full_name = body.full_name;
+  if (body.mobile !== undefined) updates.mobile = body.mobile;
   if (body.company_name !== undefined) updates.company_name = body.company_name;
   if (body.company_type !== undefined) updates.company_type = body.company_type;
 

@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useApp } from '@/lib/state';
 import { getGrade, DIM_LABELS } from '@/lib/constants';
 import { persistAIConsent } from '@/lib/session';
+import { generateInsights } from '@/lib/insights';
 import type { AIResponse, DimKey, CompanyProfile, AIRequest } from '@/lib/types';
 
 const IMPACT_COLORS: Record<string, string> = {
@@ -28,6 +29,13 @@ function hashInput(s: string): string {
   return hash.toString(36);
 }
 
+const URGENCY_COLORS: Record<string, string> = {
+  critical: 'var(--red)',
+  high:     'var(--coral)',
+  medium:   'var(--amber)',
+  positive: 'var(--teal)',
+};
+
 export default function AIAnalysisView() {
   const { state, dispatch } = useApp();
   const { results, parsedData, files, filters, aiConsentGiven, aiAnalysis, aiAnalysisHash } = state;
@@ -35,11 +43,8 @@ export default function AIAnalysisView() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [generatedAt, setGeneratedAt] = useState<string | null>(null);
-
-  // If user hasn't consented to AI, show consent gate
-  if (!aiConsentGiven) {
-    return <AIConsentGate />;
-  }
+  const [tab, setTab] = useState<'insights' | 'ai'>('insights');
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   if (!results) {
     return (
@@ -103,7 +108,7 @@ export default function AIAnalysisView() {
 
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 30000);
+      const timeout = setTimeout(() => controller.abort(), 180_000); // 3 min for local models
 
       const res = await fetch('/api/ai', {
         method: 'POST',
@@ -136,39 +141,137 @@ export default function AIAnalysisView() {
   // Check if cached analysis matches current data
   const hasCachedAnalysis = aiAnalysis && aiAnalysisHash === currentHash;
 
+  const insights = generateInsights(results, parsedData, filters);
+  const insightGroups = ['critical', 'high', 'medium', 'positive'] as const;
+
   return (
     <div className="p-8 max-w-3xl mx-auto animate-fade-in">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-2xl" style={{ fontFamily: 'var(--font-dm-serif)', color: 'var(--text1)' }}>
-            AI Analysis
+            Analysis
           </h1>
-          <p className="text-xs mt-0.5" style={{ color: 'var(--text3)' }}>
-            {generatedAt ? `Generated ${generatedAt}` : 'Powered by GPT-4o'}
-          </p>
         </div>
-        <div className="flex items-center gap-2">
-          {!hasCachedAnalysis && !loading && (
-            <button
-              onClick={generate}
-              className="text-xs px-4 py-2 rounded-lg font-semibold transition-opacity hover:opacity-80"
-              style={{ background: 'var(--purple)', color: '#fff' }}
-            >
-              Generate Analysis
-            </button>
-          )}
-          {hasCachedAnalysis && (
-            <button
-              onClick={handleRegenerate}
-              className="text-xs px-3 py-1.5 rounded border transition-colors"
-              style={{ borderColor: 'var(--border)', color: 'var(--text2)' }}
-            >
-              Regenerate
-            </button>
-          )}
-        </div>
+        {tab === 'ai' && (
+          <div className="flex items-center gap-2">
+            {!hasCachedAnalysis && !loading && aiConsentGiven && (
+              <button
+                onClick={generate}
+                className="text-xs px-4 py-2 rounded-lg font-semibold transition-opacity hover:opacity-80"
+                style={{ background: 'var(--purple)', color: '#fff' }}
+              >
+                Generate AI Report
+              </button>
+            )}
+            {hasCachedAnalysis && (
+              <button
+                onClick={handleRegenerate}
+                className="text-xs px-3 py-1.5 rounded border transition-colors"
+                style={{ borderColor: 'var(--border)', color: 'var(--text2)' }}
+              >
+                Regenerate
+              </button>
+            )}
+          </div>
+        )}
       </div>
+
+      {/* Tab bar */}
+      <div
+        className="flex rounded-lg border overflow-hidden mb-6"
+        style={{ borderColor: 'var(--border)', width: 'fit-content' }}
+      >
+        {([
+          { id: 'insights', label: 'Insights' },
+          { id: 'ai',       label: aiConsentGiven ? 'AI Report' : 'AI Report 🔒' },
+        ] as const).map(t => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className="px-4 py-2 text-xs font-medium transition-colors"
+            style={{
+              background: tab === t.id ? 'var(--bg4)' : 'var(--bg2)',
+              color: tab === t.id ? 'var(--text1)' : 'var(--text3)',
+              borderRight: '1px solid var(--border)',
+            }}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Insights tab ── */}
+      {tab === 'insights' && (
+        <div className="space-y-4">
+          {insights.length === 0 ? (
+            <div className="rounded-xl border p-8 text-center" style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}>
+              <p className="text-sm" style={{ color: 'var(--teal)' }}>✓ No issues found — all checks passing.</p>
+            </div>
+          ) : (
+            insightGroups.map(urg => {
+              const group = insights.filter(i => i.urgency === urg);
+              if (group.length === 0) return null;
+              return (
+                <div key={urg}>
+                  <div className="text-xs font-semibold uppercase tracking-wider mb-2 px-1"
+                    style={{ color: URGENCY_COLORS[urg] ?? 'var(--text3)' }}>
+                    {urg} — {group.length}
+                  </div>
+                  <div className="space-y-2">
+                    {group.map(ins => (
+                      <div
+                        key={ins.id}
+                        className="rounded-xl border p-4"
+                        style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}
+                      >
+                        <div className="flex items-start gap-3">
+                          <span
+                            className="text-[10px] px-1.5 py-0.5 rounded font-semibold shrink-0 mt-0.5"
+                            style={{ color: URGENCY_COLORS[ins.urgency], background: `${URGENCY_COLORS[ins.urgency]}18` }}
+                          >
+                            {ins.cat}
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-medium mb-1" style={{ color: 'var(--text1)' }}>{ins.finding}</div>
+                            {ins.implication && (
+                              <div className="text-xs mb-1 leading-relaxed" style={{ color: 'var(--text3)' }}>
+                                {ins.implication}
+                              </div>
+                            )}
+                            <div className="text-xs leading-relaxed" style={{ color: 'var(--text2)' }}>
+                              <span style={{ color: 'var(--text3)' }}>Action: </span>{ins.action}
+                            </div>
+                          </div>
+                          {ins.copyText && (
+                            <button
+                              onClick={() => {
+                                navigator.clipboard.writeText(ins.copyText!).catch(() => {});
+                                setCopiedId(ins.id);
+                                setTimeout(() => setCopiedId(null), 1500);
+                              }}
+                              className="shrink-0 text-[10px] px-2 py-1 rounded transition-colors"
+                              style={{ background: 'var(--bg4)', color: copiedId === ins.id ? 'var(--teal)' : 'var(--text3)' }}
+                              title="Copy finding"
+                            >
+                              {copiedId === ins.id ? '✓' : '⎘'}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+
+      {/* ── AI Report tab ── */}
+      {tab === 'ai' && (
+        !aiConsentGiven ? <AIConsentGate /> : (
+        <div>
 
       {/* Loading state */}
       {loading && (
@@ -342,6 +445,9 @@ export default function AIAnalysisView() {
             Verify findings against source data before acting. Not a substitute for professional accounting advice.
           </p>
         </div>
+      )}
+        </div>
+        )
       )}
     </div>
   );

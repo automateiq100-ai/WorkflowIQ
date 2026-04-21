@@ -8,18 +8,19 @@ export type FileKey =
 export type ModuleId = 'accounting' | 'mis' | 'reconciliation';
 
 export type ViewId =
-  | 'company-select'
+  | 'company-select' | 'company-dashboard'
   | 'dashboard' | 'checklist' | 'insights' | 'health'
   | 'flags' | 'upload' | 'profile' | 'reports' | 'rules'
   | 'mis-setup' | 'mis-report'
-  | 'reconciliation' | 'aiAnalysis';
+  | 'reconciliation' | 'aiAnalysis'
+  | 'data-view' | 'agent-fix';
 
 export type Theme = 'dark' | 'light';
 
 export type CheckStatus = 'pass' | 'partial' | 'fail' | 'missing' | 'uncertain' | 'na';
 export type Urgency = 'critical' | 'high' | 'medium' | 'positive';
 export type DimKey = 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G' | 'H';
-export type FilterMode = 'all' | 'fails' | 'missing' | 'passed';
+export type FilterMode = 'all' | 'fails' | 'missing' | 'passed' | 'flags';
 
 export interface FileEntry {
   name: string;
@@ -253,6 +254,9 @@ export interface AppState {
   /** Hash of input data used to generate cached AI analysis */
   aiAnalysisHash: string | null;
   currentCompany: ActiveCompany | null;
+  /** Agentic fix tasks from /api/ai/agent */
+  fixTasks: FixTask[] | null;
+  fixTasksLoading: boolean;
 }
 
 export interface Insight {
@@ -332,4 +336,18 @@ export interface AIResponse {
   }>;
   financialCommentary: string;
   preflight: string[];
+}
+
+// ── Agentic Fix Loop types ──
+
+export interface FixTask {
+  id: string;                 // e.g. "fix-1"
+  title: string;              // Short action title
+  detail: string;             // 1-2 sentence explanation of the problem
+  tallySteps: string[];       // Exact Tally Prime navigation steps
+  checkIds: string[];         // Which checks this resolves
+  effort: 'S' | 'M' | 'L';  // ~15 min / ~1 hr / ~half day
+  estimatedScoreGain: number; // Rough points gain (computed server-side from check.max values)
+  category: string;           // Chart of Accounts | Statutory | Data Integrity | etc.
+  status: 'todo' | 'in-progress' | 'done';
 }

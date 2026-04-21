@@ -65,17 +65,20 @@ export const FILE_DESCRIPTIONS: Record<FileKey, string> = {
 };
 
 export const VIEWS: { id: ViewId; label: string; icon: string; }[] = [
-  { id: 'company-select', label: 'Companies',        icon: '⊙' },
-  { id: 'upload',         label: 'Upload Files',     icon: '⬆' },
+  { id: 'company-select',   label: 'Companies',        icon: '⊙' },
+  { id: 'company-dashboard',label: 'Overview',         icon: '⬡' },
+  { id: 'upload',           label: 'Upload Files',     icon: '⬆' },
   { id: 'profile',        label: 'Company Profile',  icon: '◎' },
   { id: 'dashboard',     label: 'Dashboard',        icon: '⬡' },
   { id: 'checklist',     label: 'Checklist',        icon: '✓' },
   { id: 'insights',      label: 'Key Insights',     icon: '◈' },
-  { id: 'aiAnalysis',    label: 'AI Analysis',      icon: '⚡' },
+  { id: 'aiAnalysis',    label: 'Analysis',         icon: '◈' },
   { id: 'health',        label: 'Financial Health', icon: '⬟' },
   { id: 'flags',         label: 'Anomaly Flags',    icon: '⚑' },
   { id: 'reports',       label: 'Reports',          icon: '▤' },
   { id: 'rules',         label: 'Rules Engine',     icon: '⚙' },
+  { id: 'data-view',     label: 'Data & Fix',       icon: '⊟' },
+  { id: 'agent-fix',     label: 'Fix Planner',      icon: '⚑' },
   { id: 'mis-setup',     label: 'MIS Setup',        icon: '⊞' },
   { id: 'mis-report',    label: 'MIS Report',       icon: '▦' },
   { id: 'reconciliation',label: 'Reconciliation',   icon: '⇌' },
@@ -83,7 +86,7 @@ export const VIEWS: { id: ViewId; label: string; icon: string; }[] = [
 
 
 export const MODULE_VIEWS: Record<ModuleId, ViewId[]> = {
-  accounting: ['company-select', 'upload', 'profile', 'dashboard', 'checklist', 'insights', 'aiAnalysis', 'health', 'flags', 'reports', 'rules'],
+  accounting: ['company-select', 'company-dashboard', 'upload', 'profile', 'dashboard', 'checklist', 'insights', 'aiAnalysis', 'health', 'flags', 'data-view', 'agent-fix', 'reports', 'rules'],
   mis: ['mis-setup', 'mis-report'],
   reconciliation: ['reconciliation'],
 };

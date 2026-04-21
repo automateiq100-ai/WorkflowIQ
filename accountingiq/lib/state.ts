@@ -3,7 +3,7 @@
 import { createContext, useContext, useReducer, type Dispatch } from 'react';
 import type {
   AppState, FileKey, FileEntry, AnalysisResults, CompanyProfile,
-  ParsedData, ViewId, ModuleId, Theme, MISSetup, AIResponse, ActiveCompany,
+  ParsedData, ChunkedStats, ViewId, ModuleId, Theme, MISSetup, AIResponse, ActiveCompany, FixTask,
 } from './types';
 import { MODULE_VIEWS } from './constants';
 
@@ -54,6 +54,8 @@ const INITIAL_STATE: AppState = {
   aiAnalysis: null,
   aiAnalysisHash: null,
   currentCompany: null,
+  fixTasks: null,
+  fixTasksLoading: false,
 };
 
 // ── actions ───────────────────────────────────────────────────────────────
@@ -66,14 +68,18 @@ export type Action =
   | { type: 'FILE_LOADED'; key: FileKey; entry: Partial<FileEntry> }
   | { type: 'FILE_REMOVED'; key: FileKey }
   | { type: 'UPLOAD_PROGRESS'; message: string | null }
-  | { type: 'ANALYSIS_DONE'; results: AnalysisResults; parsedData: Partial<ParsedData> }
+  | { type: 'ANALYSIS_DONE'; results: AnalysisResults; parsedData: Partial<ParsedData>; dbStats: ChunkedStats | null }
   | { type: 'FILTERS_UPDATED'; filters: CompanyProfile }
   | { type: 'MIS_SETUP_UPDATED'; misSetup: Partial<MISSetup> }
   | { type: 'AI_ANALYSIS_DONE'; analysis: AIResponse; hash: string }
   | { type: 'AI_ANALYSIS_CLEAR' }
   | { type: 'SESSION_CLEARED' }
   | { type: 'COMPANY_SELECTED'; company: ActiveCompany; filters: CompanyProfile }
-  | { type: 'COMPANY_DESELECTED' };
+  | { type: 'COMPANY_DESELECTED' }
+  | { type: 'FIX_TASKS_LOADING' }
+  | { type: 'FIX_TASKS_LOADED'; tasks: FixTask[] }
+  | { type: 'FIX_TASK_STATUS'; id: string; status: FixTask['status'] }
+  | { type: 'FIX_TASKS_CLEAR' };
 
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
@@ -123,6 +129,10 @@ function reducer(state: AppState, action: Action): AppState {
         analysed: true,
         uploadProgress: null,
         currentView: state.currentView === 'upload' ? 'dashboard' : state.currentView,
+        // Persist computed DayBook stats for small files (< 10 MB chunk threshold)
+        files: action.dbStats && !state.files.daybook.chunkedStats
+          ? { ...state.files, daybook: { ...state.files.daybook, chunkedStats: action.dbStats } }
+          : state.files,
       };
 
     case 'FILTERS_UPDATED':
@@ -138,7 +148,7 @@ function reducer(state: AppState, action: Action): AppState {
       return { ...state, aiAnalysis: null, aiAnalysisHash: null };
 
     case 'SESSION_CLEARED':
-      return { ...INITIAL_STATE, consentGiven: false, aiConsentGiven: false, theme: state.theme, currentCompany: null, currentView: 'company-select' };
+      return { ...INITIAL_STATE, consentGiven: false, aiConsentGiven: false, theme: state.theme, currentCompany: null, currentView: 'company-select', fixTasks: null, fixTasksLoading: false };
 
     case 'COMPANY_SELECTED':
       return {
@@ -151,7 +161,9 @@ function reducer(state: AppState, action: Action): AppState {
         analysed: false,
         aiAnalysis: null,
         aiAnalysisHash: null,
-        currentView: 'upload',
+        fixTasks: null,
+        fixTasksLoading: false,
+        currentView: 'company-dashboard',
       };
 
     case 'COMPANY_DESELECTED':
@@ -165,7 +177,26 @@ function reducer(state: AppState, action: Action): AppState {
         analysed: false,
         aiAnalysis: null,
         aiAnalysisHash: null,
+        fixTasks: null,
+        fixTasksLoading: false,
       };
+
+    case 'FIX_TASKS_LOADING':
+      return { ...state, fixTasksLoading: true };
+
+    case 'FIX_TASKS_LOADED':
+      return { ...state, fixTasks: action.tasks, fixTasksLoading: false };
+
+    case 'FIX_TASK_STATUS':
+      return {
+        ...state,
+        fixTasks: state.fixTasks?.map(t =>
+          t.id === action.id ? { ...t, status: action.status } : t
+        ) ?? null,
+      };
+
+    case 'FIX_TASKS_CLEAR':
+      return { ...state, fixTasks: null, fixTasksLoading: false };
 
     default:
       return state;

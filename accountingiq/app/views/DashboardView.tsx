@@ -4,8 +4,9 @@ import { useApp } from '@/lib/state';
 import { getGrade, DIM_LABELS, DIM_WEIGHTS, DIM_COLORS } from '@/lib/constants';
 import { generateFlags } from '@/lib/flags';
 import { generateInsights } from '@/lib/insights';
+import { generateHealthSignals } from '@/lib/health';
 import ScoreRing from '@/app/components/ScoreRing';
-import type { DimKey, Check } from '@/lib/types';
+import type { DimKey, Check, ParsedData, ChunkedStats } from '@/lib/types';
 import { useEffect, useState } from 'react';
 
 interface FirstRun {
@@ -323,7 +324,7 @@ export default function DashboardView() {
               Critical Flags
             </div>
             <button
-              onClick={() => dispatch({ type: 'SET_VIEW', view: 'flags' })}
+              onClick={() => dispatch({ type: 'SET_VIEW', view: 'checklist' })}
               className="text-xs"
               style={{ color: 'var(--teal)' }}
             >
@@ -360,7 +361,7 @@ export default function DashboardView() {
               Key Insights
             </div>
             <button
-              onClick={() => dispatch({ type: 'SET_VIEW', view: 'insights' })}
+              onClick={() => dispatch({ type: 'SET_VIEW', view: 'aiAnalysis' })}
               className="text-xs"
               style={{ color: 'var(--teal)' }}
             >
@@ -433,6 +434,9 @@ export default function DashboardView() {
           })}
         </div>
       </div>
+
+      {/* Financial Health signals */}
+      <HealthSection parsedData={parsedData} dbStats={dbStatsRef} />
     </div>
   );
 }
@@ -445,6 +449,56 @@ function StatCard({ label, value, unit, color, tooltip }: { label: string; value
         {value}
         {unit && <span className="text-sm font-normal ml-1" style={{ color: 'var(--text3)' }}>{unit}</span>}
       </div>
+    </div>
+  );
+}
+
+// ── Financial Health collapsible section ──────────────────────────────────
+
+function HealthSection({ parsedData, dbStats }: { parsedData: Partial<ParsedData>; dbStats: ChunkedStats | null }) {
+  const [open, setOpen] = useState(true);
+  const signals = generateHealthSignals(parsedData, dbStats);
+  if (signals.length === 0) return null;
+
+  const URGENCY: Record<string, string> = {
+    critical: 'var(--red)',
+    high:     'var(--coral)',
+    medium:   'var(--amber)',
+    positive: 'var(--teal)',
+  };
+
+  return (
+    <div className="mt-6 rounded-xl border overflow-hidden" style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}>
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center justify-between px-5 py-3 border-b text-left"
+        style={{ borderColor: 'var(--border)' }}
+      >
+        <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text3)' }}>
+          Financial Health
+        </span>
+        <span className="text-xs" style={{ color: 'var(--text3)' }}>{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div className="grid gap-3 p-4" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))' }}>
+          {signals.map((s, i) => (
+            <div key={i} className="rounded-lg border px-4 py-3" style={{ background: 'var(--bg3)', borderColor: 'var(--border)' }}>
+              <div className="flex items-center gap-1.5 mb-1">
+                <span className="text-[10px] px-1 py-0.5 rounded font-medium"
+                  style={{
+                    color: URGENCY[(s as { urgency?: string }).urgency ?? ''] ?? 'var(--text3)',
+                    background: `${URGENCY[(s as { urgency?: string }).urgency ?? ''] ?? '#888'}18`,
+                  }}>
+                  {s.category}
+                </span>
+              </div>
+              <div className="text-xs mb-0.5" style={{ color: 'var(--text3)' }}>{s.signal}</div>
+              <div className="text-lg font-bold" style={{ color: 'var(--text1)' }}>{s.value}</div>
+              <div className="text-[11px] mt-0.5" style={{ color: 'var(--text3)' }}>{s.note}</div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
