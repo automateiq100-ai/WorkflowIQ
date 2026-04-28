@@ -206,6 +206,13 @@ export interface ParsedData {
   /** Near-duplicate ledger pair names for fail labels */
   dupPairDetails: Array<[string, string]>;
 
+  // Strict Master / financial statement trees for Data View
+  masterEntries?: MasterEntry[];
+  pandlStatement?: ParsedStatement;
+  pandlRows?: FlatFinancialRow[];
+  bsheetStatement?: ParsedStatement;
+  bsheetRows?: FlatFinancialRow[];
+
   // P&L
   revenue: number;
   directRevenue: number;

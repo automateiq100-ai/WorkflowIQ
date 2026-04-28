@@ -16,6 +16,9 @@ import {
   isSiblingVariant,
   stemClean,
   similarity,
+  parseMasterMap,
+  parsePandLStatement,
+  parseBSheetStatement,
 } from '../parser';
 
 // ── parseAmt ──────────────────────────────────────────────────────────────
@@ -175,6 +178,126 @@ describe('parsePandL — Bug 2 revenue deduplication', () => {
     `;
     const result = parsePandL(xml);
     expect(result.revenue).toBe(2390224);
+  });
+});
+
+// ── Strict Tally statement hierarchy parsing ──────────────────────────────
+
+describe('strict Tally XML parsing', () => {
+  const masterXml = `
+    <ENVELOPE>
+      <GROUP NAME="Sales Accounts"><PARENT>Primary</PARENT></GROUP>
+      <GROUP NAME="Current Assets"><PARENT></PARENT></GROUP>
+      <GROUP NAME="Zero Group"><PARENT>Primary</PARENT></GROUP>
+      <LEDGER NAME="Sales Account"><PARENT>Sales Accounts</PARENT></LEDGER>
+      <LEDGER NAME="Cash"><PARENT>Current Assets</PARENT></LEDGER>
+      <LEDGER NAME="Zero Ledger"><PARENT>Zero Group</PARENT></LEDGER>
+    </ENVELOPE>
+  `;
+
+  it('builds master map entries with parent and origin type', () => {
+    const master = parseMasterMap(masterXml);
+
+    expect(master.get('sales accounts')).toEqual({
+      name: 'Sales Accounts',
+      parent: 'Primary',
+      type: 'group',
+    });
+    expect(master.get('current assets')).toEqual({
+      name: 'Current Assets',
+      parent: 'Primary',
+      type: 'group',
+    });
+    expect(master.get('sales account')).toEqual({
+      name: 'Sales Account',
+      parent: 'Sales Accounts',
+      type: 'ledger',
+    });
+  });
+
+  it('uses BSMAINAMT as a main node and BSSUBAMT as its child', () => {
+    const master = parseMasterMap(masterXml);
+    const stmt = parseBSheetStatement(`
+      <ENVELOPE>
+        <BSNAME><DSPACCNAME><DSPDISPNAME>Current Assets</DSPDISPNAME></DSPACCNAME></BSNAME>
+        <BSAMT><BSSUBAMT></BSSUBAMT><BSMAINAMT>5000</BSMAINAMT></BSAMT>
+        <BSNAME><DSPACCNAME><DSPDISPNAME>Cash</DSPDISPNAME></DSPACCNAME></BSNAME>
+        <BSAMT><BSSUBAMT>5000</BSSUBAMT><BSMAINAMT></BSMAINAMT></BSAMT>
+      </ENVELOPE>
+    `, master);
+
+    expect(stmt.nodes).toHaveLength(1);
+    expect(stmt.nodes[0].name).toBe('Current Assets');
+    expect(stmt.nodes[0].nodeType).toBe('main');
+    expect(stmt.nodes[0].children[0].name).toBe('Cash');
+    expect(stmt.nodes[0].children[0].nodeType).toBe('sub');
+  });
+
+  it('uses PLSUBAMT as a child of the most recent main account', () => {
+    const master = parseMasterMap(masterXml);
+    const stmt = parsePandLStatement(`
+      <ENVELOPE>
+        <DSPACCNAME><DSPDISPNAME>Sales Accounts</DSPDISPNAME></DSPACCNAME>
+        <PLAMT><PLSUBAMT></PLSUBAMT><BSMAINAMT>1000</BSMAINAMT></PLAMT>
+        <DSPACCNAME><DSPDISPNAME>Sales Account</DSPDISPNAME></DSPACCNAME>
+        <PLAMT><PLSUBAMT>1000</PLSUBAMT><BSMAINAMT></BSMAINAMT></PLAMT>
+      </ENVELOPE>
+    `, master);
+
+    expect(stmt.nodes[0].name).toBe('Sales Accounts');
+    expect(stmt.nodes[0].children).toHaveLength(1);
+    expect(stmt.nodes[0].children[0].name).toBe('Sales Account');
+    expect(stmt.nodes[0].children[0].nodeType).toBe('sub');
+  });
+
+  it('uses master map as zero-balance tie-breaker', () => {
+    const master = parseMasterMap(masterXml);
+    const stmt = parseBSheetStatement(`
+      <ENVELOPE>
+        <BSNAME><DSPACCNAME><DSPDISPNAME>Zero Group</DSPDISPNAME></DSPACCNAME></BSNAME>
+        <BSAMT><BSSUBAMT></BSSUBAMT><BSMAINAMT></BSMAINAMT></BSAMT>
+        <BSNAME><DSPACCNAME><DSPDISPNAME>Zero Ledger</DSPDISPNAME></DSPACCNAME></BSNAME>
+        <BSAMT><BSSUBAMT></BSSUBAMT><BSMAINAMT></BSMAINAMT></BSAMT>
+      </ENVELOPE>
+    `, master);
+
+    expect(stmt.nodes[0].nodeType).toBe('main');
+    expect(stmt.nodes[0].children[0].nodeType).toBe('sub');
+  });
+
+  it('defaults missing zero-balance master entries to main and labels them computed', () => {
+    const stmt = parseBSheetStatement(`
+      <ENVELOPE>
+        <BSNAME><DSPACCNAME><DSPDISPNAME>Unknown Structural Line</DSPDISPNAME></DSPACCNAME></BSNAME>
+        <BSAMT><BSSUBAMT></BSSUBAMT><BSMAINAMT></BSMAINAMT></BSAMT>
+      </ENVELOPE>
+    `, new Map());
+
+    expect(stmt.nodes[0].nodeType).toBe('main');
+    expect(stmt.nodes[0].inMaster).toBe(false);
+    expect(stmt.nodes[0].masterParent).toBe('Computed / Not in Master');
+  });
+
+  it('classifies computed P&L reporting lines only by amount tags', () => {
+    const master = parseMasterMap(masterXml);
+    const stmt = parsePandLStatement(`
+      <ENVELOPE>
+        <DSPACCNAME><DSPDISPNAME>Cost of Sales :</DSPDISPNAME></DSPACCNAME>
+        <PLAMT><PLSUBAMT></PLSUBAMT><BSMAINAMT>-630000</BSMAINAMT></PLAMT>
+        <DSPACCNAME><DSPDISPNAME>Opening Stock</DSPDISPNAME></DSPACCNAME>
+        <PLAMT><PLSUBAMT>-10000</PLSUBAMT><BSMAINAMT></BSMAINAMT></PLAMT>
+        <DSPACCNAME><DSPDISPNAME>Less: Closing Stock</DSPDISPNAME></DSPACCNAME>
+        <PLAMT><PLSUBAMT>-31111</PLSUBAMT><BSMAINAMT></BSMAINAMT></PLAMT>
+      </ENVELOPE>
+    `, master);
+
+    expect(stmt.nodes[0].name).toBe('Cost of Sales :');
+    expect(stmt.nodes[0].nodeType).toBe('main');
+    expect(stmt.nodes[0].masterParent).toBe('Computed / Not in Master');
+    expect(stmt.nodes[0].children.map(n => [n.name, n.nodeType])).toEqual([
+      ['Opening Stock', 'sub'],
+      ['Less: Closing Stock', 'sub'],
+    ]);
   });
 });
 

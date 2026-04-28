@@ -6,7 +6,7 @@ import type {
 import { DIM_WEIGHTS } from './constants';
 import {
   parseTrialBalance, parsePandL, parseBSheet, parseGrpSum, parseDayBook, parseTallyDate,
-  parseCashFlow, parseLedgerGroups,
+  parseCashFlow, parseLedgerGroups, parseMasterMap, parsePandLStatement, parseBSheetStatement, flattenStatement,
 } from './parser';
 
 // FY dates — default to current Indian FY
@@ -78,11 +78,15 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
   const hasPL       = files.pandl.hasContent;
   const hasBS       = files.bsheet.hasContent;
   const hasGrp      = files.grpsum.hasContent;
+  const hasMaster   = files.master.hasContent;
 
   // Parse each XML
   const tbResult  = hasTB  ? parseTrialBalance(files.trialbal.content!) : null;
   const plResult  = hasPL  ? parsePandL(files.pandl.content!)           : null;
   const bsResult  = hasBS  ? parseBSheet(files.bsheet.content!)         : null;
+  const masterMap = hasMaster && files.master.content ? parseMasterMap(files.master.content) : new Map();
+  const pandlStatement = hasPL ? parsePandLStatement(files.pandl.content!, masterMap) : null;
+  const bsheetStatement = hasBS ? parseBSheetStatement(files.bsheet.content!, masterMap) : null;
 
   // Build ledger→parent map from DayBook (All Masters format) for group checks
   const ledgerGroups = files.daybook.content ? parseLedgerGroups(files.daybook.content) : new Map<string, string>();
@@ -121,6 +125,9 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     ...(bsResult  ?? {}),
     ...(grpResult ?? {}),
     ...(cfResult  ?? {}),
+    masterEntries: Array.from(masterMap.values()),
+    ...(pandlStatement ? { pandlStatement, pandlRows: flattenStatement(pandlStatement) } : {}),
+    ...(bsheetStatement ? { bsheetStatement, bsheetRows: flattenStatement(bsheetStatement) } : {}),
   };
 
   // Bug 2 fix: prefer bsNetProfit from Balance Sheet over P&L-derived netProfit

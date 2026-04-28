@@ -1,5 +1,6 @@
 'use client';
 
+import { XMLParser } from 'fast-xml-parser';
 import type {
   TBLedger, ParsedData, ChunkedStats,
   MasterEntry, MasterItemType, FinancialNode, FinancialNodeType,
@@ -40,6 +41,97 @@ export function decodeEntities(s: string): string {
     .replace(/&gt;/g, '>')
     .replace(/&apos;/g, "'")
     .replace(/&quot;/g, '"');
+}
+
+// ── Ordered XML helpers for Tally display reports ────────────────────────
+
+type OrderedXmlNode = Record<string, unknown>;
+
+const ORDERED_XML = new XMLParser({
+  preserveOrder: true,
+  ignoreAttributes: false,
+  attributeNamePrefix: '',
+  textNodeName: '#text',
+  trimValues: false,
+  parseTagValue: false,
+  parseAttributeValue: false,
+});
+
+function parseOrderedXml(xml: string): OrderedXmlNode[] {
+  try {
+    const parsed = ORDERED_XML.parse(xml);
+    return Array.isArray(parsed) ? parsed as OrderedXmlNode[] : [];
+  } catch {
+    return [];
+  }
+}
+
+function orderedElementName(node: OrderedXmlNode): string | null {
+  return Object.keys(node).find(k => k !== ':@' && k !== '#text') ?? null;
+}
+
+function orderedChildren(node: OrderedXmlNode, name?: string): OrderedXmlNode[] {
+  const elementName = name ?? orderedElementName(node);
+  if (!elementName) return [];
+  const value = node[elementName];
+  return Array.isArray(value) ? value as OrderedXmlNode[] : [];
+}
+
+function orderedAttrs(node: OrderedXmlNode): Record<string, string> {
+  const attrs = node[':@'];
+  return attrs && typeof attrs === 'object' && !Array.isArray(attrs)
+    ? attrs as Record<string, string>
+    : {};
+}
+
+function orderedText(nodes: OrderedXmlNode[] | unknown): string {
+  if (nodes == null) return '';
+  if (typeof nodes === 'string' || typeof nodes === 'number' || typeof nodes === 'boolean') {
+    return String(nodes);
+  }
+  if (Array.isArray(nodes)) {
+    return nodes.map(orderedText).join('');
+  }
+  if (typeof nodes === 'object') {
+    const node = nodes as OrderedXmlNode;
+    const text = node['#text'];
+    const childText = Object.entries(node)
+      .filter(([key]) => key !== ':@' && key !== '#text')
+      .map(([, value]) => orderedText(value))
+      .join('');
+    return `${typeof text === 'string' || typeof text === 'number' ? text : ''}${childText}`;
+  }
+  return '';
+}
+
+function findOrderedText(nodes: OrderedXmlNode[], tag: string): string {
+  const wanted = tag.toUpperCase();
+  for (const node of nodes) {
+    const name = orderedElementName(node);
+    if (!name) continue;
+    const children = orderedChildren(node, name);
+    if (name.toUpperCase() === wanted) {
+      return decodeEntities(orderedText(children).trim());
+    }
+    const nested = findOrderedText(children, tag);
+    if (nested) return nested;
+  }
+  return '';
+}
+
+function collectOrderedElements(nodes: OrderedXmlNode[], tag: string, out: OrderedXmlNode[] = []): OrderedXmlNode[] {
+  const wanted = tag.toUpperCase();
+  for (const node of nodes) {
+    const name = orderedElementName(node);
+    if (!name) continue;
+    if (name.toUpperCase() === wanted) out.push(node);
+    collectOrderedElements(orderedChildren(node, name), tag, out);
+  }
+  return out;
+}
+
+function normalizeMasterKey(name: string): string {
+  return decodeEntities(name).trim().toLowerCase();
 }
 
 /** Extract amount — tries multiple tags in fallback order.
@@ -509,7 +601,7 @@ export function parseBSheet(xml: string): {
     } else if (name.includes('sundry debtor') || name.includes('trade receiv') || name.includes('debtor')) {
       debtorBal += Math.abs(amt);
     } else if (name.includes('sundry creditor') || name.includes('trade payable') || name.includes('creditor')) {
-      creditorBal += Math.abs(amt);
+      creditorBal += amt;
     } else if (name.includes('closing stock') || name.includes('stock-in-trade') || name.includes('stock in trade')) {
       closingStock = amt;
     } else if (name === 'cash' || name.includes('cash in hand') || name.includes('cash-in-hand')) {
@@ -787,6 +879,23 @@ export function assembleParsedData(
 
 export function parseMasterMap(xml: string): Map<string, MasterEntry> {
   const map = new Map<string, MasterEntry>();
+  const ordered = parseOrderedXml(xml);
+
+  function readEntries(tag: 'GROUP' | 'LEDGER', type: MasterItemType) {
+    for (const node of collectOrderedElements(ordered, tag)) {
+      const attrs = orderedAttrs(node);
+      const rawName = attrs.NAME ?? attrs['@_NAME'] ?? attrs.name ?? '';
+      const name = decodeEntities(String(rawName).trim());
+      if (!name || name === 'undefined') continue;
+      const parent = findOrderedText(orderedChildren(node), 'PARENT').trim() || 'Primary';
+      map.set(normalizeMasterKey(name), { name, parent, type });
+    }
+  }
+
+  readEntries('GROUP', 'group');
+  readEntries('LEDGER', 'ledger');
+
+  if (map.size > 0) return map;
 
   const groupRe = /<GROUP\s+NAME="([^"]+)"[^>]*>([\s\S]*?)<\/GROUP>/gi;
   let m: RegExpExecArray | null;
@@ -794,7 +903,7 @@ export function parseMasterMap(xml: string): Map<string, MasterEntry> {
     const name = decodeEntities(m[1].trim());
     if (!name || name === 'undefined') continue;
     const parent = xmlText(m[2], 'PARENT').trim() || 'Primary';
-    map.set(name.toLowerCase(), { name, parent, type: 'group' });
+    map.set(normalizeMasterKey(name), { name, parent, type: 'group' });
   }
 
   const ledgerRe = /<LEDGER\s+NAME="([^"]+)"[^>]*>([\s\S]*?)<\/LEDGER>/gi;
@@ -802,7 +911,7 @@ export function parseMasterMap(xml: string): Map<string, MasterEntry> {
     const name = decodeEntities(m[1].trim());
     if (!name || name === 'undefined') continue;
     const parent = xmlText(m[2], 'PARENT').trim() || 'Primary';
-    map.set(name.toLowerCase(), { name, parent, type: 'ledger' });
+    map.set(normalizeMasterKey(name), { name, parent, type: 'ledger' });
   }
 
   return map;
@@ -837,7 +946,7 @@ function resolveNode(
 } {
   const hasMain = mainAmt.trim() !== '';
   const hasSub  = subAmt.trim()  !== '';
-  const entry   = masterMap.get(name.toLowerCase().trim());
+  const entry   = masterMap.get(normalizeMasterKey(name));
 
   let nodeType: FinancialNodeType;
   if (hasMain && !hasSub) {
@@ -854,6 +963,118 @@ function resolveNode(
     inMaster: !!entry,
     masterType:   entry?.type   ?? null,
     masterParent: entry?.parent ?? 'Computed / Not in Master',
+  };
+}
+
+interface StatementToken {
+  name: string;
+  mainAmt: string;
+  subAmt: string;
+}
+
+function readDisplayName(node: OrderedXmlNode): string {
+  const name = orderedElementName(node);
+  if (!name) return '';
+  if (name.toUpperCase() === 'DSPDISPNAME') {
+    return decodeEntities(orderedText(orderedChildren(node, name)).trim());
+  }
+  return findOrderedText(orderedChildren(node, name), 'DSPDISPNAME');
+}
+
+function readAmountBlock(node: OrderedXmlNode, subTag: 'BSSUBAMT' | 'PLSUBAMT') {
+  const children = orderedChildren(node);
+  return {
+    mainAmt: findOrderedText(children, 'BSMAINAMT'),
+    subAmt: findOrderedText(children, subTag),
+  };
+}
+
+function collectStatementTokens(
+  nodes: OrderedXmlNode[],
+  statement: 'pandl' | 'bsheet',
+  out: StatementToken[] = [],
+): StatementToken[] {
+  function nextElementIndex(start: number): number {
+    for (let j = start + 1; j < nodes.length; j++) {
+      if (orderedElementName(nodes[j])) return j;
+    }
+    return -1;
+  }
+
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    const nextIndex = nextElementIndex(i);
+    const next = nextIndex >= 0 ? nodes[nextIndex] : undefined;
+    const name = orderedElementName(node);
+    const nextName = next ? orderedElementName(next) : null;
+    const upperName = name?.toUpperCase();
+    const upperNext = nextName?.toUpperCase();
+
+    if (next && statement === 'pandl' && upperName === 'DSPACCNAME' && upperNext === 'PLAMT') {
+      const displayName = readDisplayName(node);
+      const amounts = readAmountBlock(next, 'PLSUBAMT');
+      out.push({ name: displayName, ...amounts });
+      i = nextIndex;
+      continue;
+    }
+
+    if (next && upperName === 'BSNAME' && upperNext === 'BSAMT') {
+      const displayName = readDisplayName(node);
+      const amounts = readAmountBlock(next, 'BSSUBAMT');
+      out.push({ name: displayName, ...amounts });
+      i = nextIndex;
+      continue;
+    }
+
+    // Lightweight fallback for compact test fixtures that omit BSNAME/DSPACCNAME wrappers.
+    if (next && upperName === 'DSPDISPNAME' && upperNext === 'BSAMT') {
+      const displayName = readDisplayName(node);
+      const amounts = readAmountBlock(next, 'BSSUBAMT');
+      out.push({ name: displayName, ...amounts });
+      i = nextIndex;
+      continue;
+    }
+
+    collectStatementTokens(orderedChildren(node, name ?? undefined), statement, out);
+  }
+
+  return out;
+}
+
+function buildStatement(
+  statement: 'pandl' | 'bsheet',
+  xml: string,
+  masterMap: Map<string, MasterEntry>,
+): ParsedStatement {
+  _nodeSeq = 0;
+  const ordered = parseOrderedXml(xml);
+  const companyName = findOrderedText(ordered, 'SVCURRENTCOMPANY') || xmlText(xml, 'SVCURRENTCOMPANY');
+  const tokens = collectStatementTokens(ordered, statement);
+  const nodes: FinancialNode[] = [];
+  let current: FinancialNode | null = null;
+
+  for (const token of tokens) {
+    const name = decodeEntities(token.name.trim());
+    if (!name || name === 'undefined') continue;
+    const amount = parseAmt(token.mainAmt || token.subAmt);
+    const resolved = resolveNode(name, token.mainAmt, token.subAmt, masterMap);
+    const node = makeNode(name, amount, resolved);
+
+    if (resolved.nodeType === 'main') {
+      nodes.push(node);
+      current = node;
+    } else if (current) {
+      current.children.push(node);
+    } else {
+      nodes.push(node);
+    }
+  }
+
+  return {
+    statement,
+    companyName,
+    nodes,
+    totals: statementTotals(nodes),
   };
 }
 
@@ -902,61 +1123,7 @@ export function parsePandLStatement(
   xml: string,
   masterMap: Map<string, MasterEntry>,
 ): ParsedStatement {
-  _nodeSeq = 0;
-  const companyName = xmlText(xml, 'SVCURRENTCOMPANY');
-  const nodes: FinancialNode[] = [];
-  let current: FinancialNode | null = null;
-
-  const tokenRe = new RegExp(
-    // Token A: DSPACCNAME + PLAMT
-    '<DSPACCNAME>\\s*<DSPDISPNAME>([^<]+)</DSPDISPNAME>\\s*</DSPACCNAME>\\s*<PLAMT[^>]*>([\\s\\S]*?)</PLAMT>'
-    + '|'
-    // Token B: BSNAME + BSAMT
-    + '<BSNAME>([\\s\\S]*?)</BSNAME>\\s*<BSAMT[^>]*>([\\s\\S]*?)</BSAMT>',
-    'gi',
-  );
-
-  let m: RegExpExecArray | null;
-  while ((m = tokenRe.exec(xml)) !== null) {
-    let name: string;
-    let mainAmt: string;
-    let subAmt: string;
-
-    if (m[1] !== undefined) {
-      // Token A
-      name    = decodeEntities(m[1].trim());
-      const plBlock = m[2];
-      mainAmt = xmlText(plBlock, 'BSMAINAMT');
-      subAmt  = xmlText(plBlock, 'PLSUBAMT');
-    } else {
-      // Token B
-      name    = decodeEntities(xmlText(m[3], 'DSPDISPNAME'));
-      mainAmt = xmlText(m[4], 'BSMAINAMT');
-      subAmt  = xmlText(m[4], 'BSSUBAMT');
-    }
-
-    if (!name || name === 'undefined') continue;
-
-    const amount   = parseAmt(mainAmt || subAmt);
-    const resolved = resolveNode(name, mainAmt, subAmt, masterMap);
-    const node     = makeNode(name, amount, resolved);
-
-    if (resolved.nodeType === 'main') {
-      nodes.push(node);
-      current = node;
-    } else if (current) {
-      current.children.push(node);
-    } else {
-      nodes.push(node); // orphan fallback
-    }
-  }
-
-  return {
-    statement: 'pandl',
-    companyName,
-    nodes,
-    totals: statementTotals(nodes),
-  };
+  return buildStatement('pandl', xml, masterMap);
 }
 
 // ── Phase 2-4: Balance Sheet parser ──────────────────────────────────────
@@ -970,39 +1137,7 @@ export function parseBSheetStatement(
   xml: string,
   masterMap: Map<string, MasterEntry>,
 ): ParsedStatement {
-  _nodeSeq = 0;
-  const companyName = xmlText(xml, 'SVCURRENTCOMPANY');
-  const nodes: FinancialNode[] = [];
-  let current: FinancialNode | null = null;
-
-  const pairRe = /<DSPDISPNAME>([^<]+)<\/DSPDISPNAME>[\s\S]*?<BSAMT\b[^>]*>([\s\S]*?)<\/BSAMT>/gi;
-  let m: RegExpExecArray | null;
-  while ((m = pairRe.exec(xml)) !== null) {
-    const name    = decodeEntities(m[1].trim());
-    if (!name || name === 'undefined') continue;
-    const amtBlock = m[2];
-    const mainAmt  = xmlText(amtBlock, 'BSMAINAMT');
-    const subAmt   = xmlText(amtBlock, 'BSSUBAMT');
-    const amount   = parseAmt(mainAmt || subAmt);
-    const resolved = resolveNode(name, mainAmt, subAmt, masterMap);
-    const node     = makeNode(name, amount, resolved);
-
-    if (resolved.nodeType === 'main') {
-      nodes.push(node);
-      current = node;
-    } else if (current) {
-      current.children.push(node);
-    } else {
-      nodes.push(node);
-    }
-  }
-
-  return {
-    statement: 'bsheet',
-    companyName,
-    nodes,
-    totals: statementTotals(nodes),
-  };
+  return buildStatement('bsheet', xml, masterMap);
 }
 
 // ── Utility: flatten a ParsedStatement into a 2-D row array ──────────────

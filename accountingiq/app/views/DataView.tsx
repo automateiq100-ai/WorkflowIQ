@@ -2,7 +2,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { useApp } from '@/lib/state';
-import type { TBLedger, ParsedData, ChunkedStats, PLSection, Voucher } from '@/lib/types';
+import type { TBLedger, ParsedData, ChunkedStats, PLSection, Voucher, FinancialNode, ParsedStatement } from '@/lib/types';
 import AgentFixView from '@/app/views/AgentFixView';
 
 // ── Bill parser ────────────────────────────────────────────────────────────
@@ -158,6 +158,80 @@ function formatDate(raw: string): string {
     return `${day} ${months[mo] ?? raw.slice(4,6)} ${y}`;
   }
   return raw;
+}
+
+function StrictStatementRow({ node, depth = 0 }: { node: FinancialNode; depth?: number }) {
+  const [open, setOpen] = useState(depth === 0);
+  const hasChildren = node.children.length > 0;
+  const isMain = node.nodeType === 'main';
+
+  return (
+    <>
+      <tr
+        onClick={() => hasChildren && setOpen(v => !v)}
+        style={{
+          borderBottom: '1px solid var(--border)',
+          cursor: hasChildren ? 'pointer' : 'default',
+          background: isMain ? 'rgba(255,255,255,0.025)' : 'transparent',
+        }}
+      >
+        <td
+          className={isMain ? 'py-2.5 font-semibold' : 'py-1.5 text-xs'}
+          style={{
+            color: isMain ? 'var(--text1)' : 'var(--text2)',
+            paddingLeft: `${1.5 + depth * 1.25}rem`,
+            userSelect: 'none',
+          }}
+        >
+          {hasChildren && <span style={{ marginRight: 6, fontSize: 10, color: 'var(--text3)' }}>{open ? '▼' : '▶'}</span>}
+          {!hasChildren && <span style={{ display: 'inline-block', width: depth > 0 ? 16 : 0 }} />}
+          {node.name}
+          {!node.inMaster && (
+            <span className="text-xs font-normal ml-2" style={{ color: 'var(--text3)' }}>
+              Computed / Not in Master
+            </span>
+          )}
+        </td>
+        <td className={isMain ? 'px-6 py-2.5 text-right font-mono font-bold' : 'px-6 py-1.5 text-right font-mono text-xs'} style={{ color: node.amount >= 0 ? 'var(--teal)' : 'var(--coral)' }}>
+          {formatAmount(node.amount)}
+        </td>
+        <td className="px-6 py-1.5 text-xs" style={{ color: 'var(--text3)' }}>
+          {node.nodeType === 'main' ? 'Group' : 'Ledger'}
+        </td>
+        <td className="px-6 py-1.5 text-xs" style={{ color: 'var(--text3)' }}>
+          {node.masterParent}
+        </td>
+      </tr>
+      {open && node.children.map(child => (
+        <StrictStatementRow key={child.id} node={child} depth={depth + 1} />
+      ))}
+    </>
+  );
+}
+
+function StrictStatementTable({ statement }: { statement: ParsedStatement }) {
+  return (
+    <div className="flex flex-col gap-3 max-w-4xl">
+      <div className="overflow-auto rounded-xl border shadow-sm" style={{ borderColor: 'var(--border)', background: 'var(--bg2)' }}>
+        <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ background: 'var(--bg3)', borderBottom: '2px solid var(--border)' }}>
+              <th className="px-6 py-3 text-left text-xs uppercase tracking-wider" style={{ color: 'var(--text3)', fontWeight: 700 }}>Particulars</th>
+              <th className="px-6 py-3 text-right text-xs uppercase tracking-wider" style={{ color: 'var(--text3)', fontWeight: 700 }}>Amount (₹)</th>
+              <th className="px-6 py-3 text-left text-xs uppercase tracking-wider" style={{ color: 'var(--text3)', fontWeight: 700 }}>Type</th>
+              <th className="px-6 py-3 text-left text-xs uppercase tracking-wider" style={{ color: 'var(--text3)', fontWeight: 700 }}>Master Parent</th>
+            </tr>
+          </thead>
+          <tbody>
+            {statement.nodes.map(node => <StrictStatementRow key={node.id} node={node} />)}
+            {statement.nodes.length === 0 && (
+              <tr><td colSpan={4} className="px-3 py-8 text-center text-sm" style={{ color: 'var(--text3)' }}>No statement rows parsed</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 }
 
 // ── Tab types ──────────────────────────────────────────────────────────────
@@ -371,6 +445,11 @@ function PLGroupRow({ label, total, children, color, note }: {
 }
 
 function PLTab({ pd }: { pd: Record<string, unknown> }) {
+  const strictStatement = pd.pandlStatement as ParsedStatement | undefined;
+  if (strictStatement?.nodes?.length) {
+    return <StrictStatementTable statement={strictStatement} />;
+  }
+
   const plSections = (pd.plSections as PLSection[] | undefined) ?? [];
   const directRevenue  = (pd.directRevenue as number) ?? 0;
   const otherIncome    = (pd.otherIncome as number) ?? 0;
@@ -497,6 +576,11 @@ function BSGroupRow({ label, amount, children, color }: {
 }
 
 function BSTab({ pd }: { pd: Record<string, unknown> }) {
+  const strictStatement = pd.bsheetStatement as ParsedStatement | undefined;
+  if (strictStatement?.nodes?.length) {
+    return <StrictStatementTable statement={strictStatement} />;
+  }
+
   // In Tally BS export convention:
   // Assets: BSSUBAMT with positive = Dr = asset (show as positive)
   //         But in the BSheet.xml, Tally stores ASSETS as NEGATIVE (Cr convention for the ledger side)
