@@ -28,6 +28,13 @@ export default function MISDashboardTab() {
   const netProfit = isRealData ? (parsedData.netProfit || 0) : 1850000;
   const margin = revenue > 0 ? ((netProfit / revenue) * 100).toFixed(1) : '14.8';
   const cashBalance = isRealData ? (parsedData.bsCashBankTotal || 0) : 3450000;
+
+  // BUG 22 fix: use parsed debtors/creditors/current ratio from Balance Sheet
+  const debtorBal   = isRealData ? (parsedData.debtorBal   || 0) : revenue * 0.15;
+  const creditorBal = isRealData ? (parsedData.creditorBal || 0) : revenue * 0.12;
+  const ca          = isRealData ? (parsedData.ca          || 0) : 0;
+  const cl          = isRealData ? (parsedData.cl          || 0) : 0;
+  const currentRatioVal = ca > 0 && Math.abs(cl) > 0 ? (ca / Math.abs(cl)).toFixed(1) : null;
   
   // Real or mock chart data
   const monthlyData = [
@@ -166,20 +173,22 @@ export default function MISDashboardTab() {
         <div className="col-span-2 rounded-xl border p-5" style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}>
           <div className="flex items-center justify-between mb-6">
             <h3 className="text-sm font-semibold" style={{ color: 'var(--text1)' }}>Working Capital Snapshot</h3>
-            <span className="text-xs px-2 py-0.5 rounded border" style={{ background: 'var(--bg4)', borderColor: 'var(--border)', color: 'var(--text2)' }}>Current Ratio: 1.4x</span>
+            <span className="text-xs px-2 py-0.5 rounded border" style={{ background: 'var(--bg4)', borderColor: 'var(--border)', color: 'var(--text2)' }}>
+              {currentRatioVal ? `Current Ratio: ${currentRatioVal}x` : 'Current Ratio: —'}
+            </span>
           </div>
           
           <div className="grid grid-cols-3 gap-6 h-48">
             <div className="flex flex-col justify-center space-y-4">
               <div>
                 <div className="text-xs mb-1" style={{ color: 'var(--text3)' }}>Receivables (Debtors)</div>
-                <div className="text-lg font-semibold" style={{ color: 'var(--blue)' }}>₹{fmt(revenue * 0.15)}</div>
+                <div className="text-lg font-semibold" style={{ color: 'var(--blue)' }}>₹{fmt(debtorBal)}</div>
                 <div className="text-xs mt-1" style={{ color: 'var(--text2)' }}>DSO: 45 Days</div>
               </div>
               <div className="h-px w-full" style={{ background: 'var(--border)' }}></div>
               <div>
                 <div className="text-xs mb-1" style={{ color: 'var(--text3)' }}>Payables (Creditors)</div>
-                <div className="text-lg font-semibold" style={{ color: 'var(--coral)' }}>₹{fmt(revenue * 0.12)}</div>
+                <div className="text-lg font-semibold" style={{ color: 'var(--coral)' }}>₹{fmt(creditorBal)}</div>
                 <div className="text-xs mt-1" style={{ color: 'var(--text2)' }}>DPO: 38 Days</div>
               </div>
             </div>

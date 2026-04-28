@@ -270,12 +270,18 @@ export default function DashboardView() {
           <ScoreRing score={cappedScore} color={grade.color} grade={grade.label} />
         </div>
 
-        {/* Bug 6 fix: responsive grid with NA + uncertain tiles */}
+        {/* Bug 6 fix: responsive grid with NA + uncertain tiles. BUG 19: clickable to checklist. */}
         <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))' }}>
-          <StatCard label="Checks Passed" value={passed}  unit={`/ ${applicable}`} color="var(--green)" tooltip={`${checks.length} total (${naCt} N/A)`} />
-          <StatCard label="Checks Failed" value={failed}  unit=""                      color="var(--red)" />
-          <StatCard label="Partial"        value={partialCt} unit=""                      color="var(--amber)" />
-          <StatCard label="Not Applicable"  value={naCt} unit="" color="var(--text3)" />
+          <div className="cursor-pointer" onClick={() => dispatch({ type: 'SET_VIEW', view: 'checklist' })}>
+            <StatCard label="Checks Passed" value={passed} unit={`/ ${applicable}`} color="var(--green)" tooltip={`${checks.length} total (${naCt} N/A)`} />
+          </div>
+          <div className="cursor-pointer" onClick={() => dispatch({ type: 'SET_VIEW', view: 'checklist' })}>
+            <StatCard label="Checks Failed" value={failed} unit="" color="var(--red)" />
+          </div>
+          <div className="cursor-pointer" onClick={() => dispatch({ type: 'SET_VIEW', view: 'checklist' })}>
+            <StatCard label="Partial" value={partialCt} unit="" color="var(--amber)" />
+          </div>
+          <StatCard label="Not Applicable" value={naCt} unit="" color="var(--text3)" />
           {uncertainCt > 0 && (
             <StatCard label="Needs Data" value={uncertainCt} unit="" color="var(--text2)" />
           )}

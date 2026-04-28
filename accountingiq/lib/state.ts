@@ -25,7 +25,7 @@ export const DEFAULT_FILTERS: CompanyProfile = {
 const FILE_KEYS: FileKey[] = [
   'daybook','trialbal','pandl','bsheet','grpsum',
   'sales','purchase','bills','payables','cashflow',
-  'faregister','stock','bankrecon',
+  'faregister','stock','bankrecon','master',
 ];
 
 function initialFiles(): Record<FileKey, FileEntry> {

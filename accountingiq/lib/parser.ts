@@ -1,6 +1,10 @@
 'use client';
 
-import type { TBLedger, ParsedData, ChunkedStats } from './types';
+import type {
+  TBLedger, ParsedData, ChunkedStats,
+  MasterEntry, MasterItemType, FinancialNode, FinancialNodeType,
+  ParsedStatement, FlatFinancialRow,
+} from './types';
 
 // ── XML helpers ──────────────────────────────────────────────────────────
 
@@ -96,7 +100,7 @@ export function parseTrialBalance(xml: string): {
     const nameBlock = m[1];
     const infoBlock = m[2];
     const name = xmlText(nameBlock, 'DSPDISPNAME');
-    if (!name) continue;
+    if (!name || name === 'undefined') continue;
     const closingStr = xmlText(infoBlock, 'DSPCLAMTA');
     const closing = parseAmt(closingStr);
     // Bug 1 fix: preserve sign. Dr = positive, Cr = negative in Tally TB convention
@@ -110,6 +114,7 @@ export function parseTrialBalance(xml: string): {
     const minLen = Math.min(names.length, amounts.length);
     for (let i = 0; i < minLen; i++) {
       const name = names[i];
+      if (!name || name === 'undefined') continue;
       const closing = parseAmt(amounts[i]);
       tbLedgers.push({ name, nl: name.toLowerCase(), closing, dr: closing >= 0 });
     }
@@ -121,7 +126,7 @@ export function parseTrialBalance(xml: string): {
     while ((m = ledgerRe.exec(xml)) !== null) {
       const block = m[1];
       const name = xmlText(block, 'NAME') || xmlText(block, 'LEDGERNAME');
-      if (!name) continue;
+      if (!name || name === 'undefined') continue;
       const closingStr = xmlText(block, 'CLOSINGBALANCE') || xmlText(block, 'CLOSINGBAL');
       const closing = parseAmt(closingStr);
       tbLedgers.push({ name, nl: name.toLowerCase(), closing, dr: closing >= 0 });
@@ -151,9 +156,11 @@ export function parseTrialBalance(xml: string): {
     }
     if (n.includes('capital') || n.includes('owner') || n.includes('proprietor') || n.includes('partner')) capFound = true;
     if (n.includes('bank') || /hdfc|icici|sbi|axis|kotak|yes bank/.test(n)) bankFound = true;
-    if (n === 'cash' || n.includes('cash in hand') || n.includes('petty cash')) cashFound = true;
-    if (n.includes('sundry debtor') || n.includes('trade receiv')) debtorFound = true;
-    if (n.includes('sundry creditor') || n.includes('trade payable')) creditorFound = true;
+    if (n === 'cash' || n.includes('cash in hand') || n.includes('petty cash') || n.includes('cash a/c') || n.includes('cash account')) cashFound = true;
+    // BUG 5 fix: broadened patterns — "Sundry Debtors" group row in TB may not appear; match any debtor-related name
+    if (n.includes('debtor') || n.includes('receivable')) debtorFound = true;
+    // BUG 5 fix: broadened patterns — match any creditor-related name
+    if (n.includes('creditor') || n.includes('payable')) creditorFound = true;
     if (n.includes('output gst') || n.includes('output cgst') || n.includes('output sgst') || n.includes('output igst') || n.includes('gst payable') || n.includes('cgst payable') || n.includes('sgst payable') || n.includes('igst payable')) outputGSTAmt += Math.abs(l.closing);
     if (n.includes('input gst') || n.includes('input cgst') || n.includes('input sgst') || n.includes('input igst') || n.includes('itc') || n.includes('gst receivable')) inputITCAmt += Math.abs(l.closing);
     if (n.includes('tds payable') || n.includes('tds on') || (n.includes('tax deducted') && n.includes('source'))) tdsLedgerFound = true;
@@ -178,7 +185,7 @@ export function parseTrialBalance(xml: string): {
     }
   }
 
-  const hasOpeningBal = xml.toLowerCase().includes('dspopaamt') || xml.toLowerCase().includes('openingbalance') || xml.toLowerCase().includes('opening stock');
+  const hasOpeningBal = xml.toLowerCase().includes('dspopamta') || xml.toLowerCase().includes('openingbalance') || xml.toLowerCase().includes('opening stock');
   const tbTotal = tbLedgers.reduce((s, l) => s + Math.abs(l.closing), 0);
 
   return {
@@ -212,8 +219,10 @@ function stemClean(s: string): string {
   return s.toLowerCase().replace(/[^\w\s]/g, '').trim().split(/\s+/).map(stem).join('');
 }
 
-/** Trailing-token sibling exception pattern */
-const SIBLING_TOKEN_RE = /^(a|b|c|d|e|[0-9]+%?|cgst|sgst|igst|cr|dr|v[0-9]+|9%|18%|12%|5%)$/i;
+/** Trailing-token sibling exception pattern.
+ * BUG 7 fix: restrict numeric token to 1-2 digits only.
+ * "ABC Traders 123" has a 3-digit suffix → NOT a sibling variant → dup detection applies. */
+const SIBLING_TOKEN_RE = /^(a|b|c|d|e|\d{1,2}%?|cgst|sgst|igst|cr|dr|v\d+|9%|18%|12%|5%)$/i;
 
 /** Check if two names differ only by a trailing sibling token */
 function isSiblingVariant(a: string, b: string): boolean {
@@ -304,91 +313,141 @@ export { isDuplicate, isSiblingVariant, stemClean, similarity };
 
 // ── P&L parser ────────────────────────────────────────────────────────────
 
+export interface PLSection {
+  name: string;
+  total: number;
+  children: Array<{ name: string; amount: number }>;
+}
+
 /**
- * Bug 2 fix: Only sum group-level totals (BSMAINAMT inside <PLAMT>) for revenue/expense.
- * Exclude GST/TDS ledgers from revenue even if they appear under Income groups.
- * Revenue = sum of group-level lines matching Sales Accounts / Direct Incomes / Indirect Incomes.
- * Ledgers matching /(cgst|sgst|igst|output tax|duties and taxes|tds)/i are excluded.
+ * Group-aware P&L parser. Returns structured PLSection[] for the UI to render
+ * as expandable dropdowns, plus numeric totals for engine checks.
  *
- * Revenue includes Other Income (per Indirect Incomes group) = ₹224.
- * Reference dataset: Revenue = 2390224 (Sales Accounts 2390000 + Indirect Incomes 224).
+ * - "Sales Accounts" → Revenue from operations
+ * - "Purchase Accounts" → Cost of materials consumed
+ * - "Indirect Incomes" → Other Income
+ * - "Indirect Expenses" / "Cost of Sales" → Other expenses
  */
 export function parsePandL(xml: string): {
   revenue: number;
+  directRevenue: number;
+  otherIncome: number;
+  costOfMaterials: number;
   expenses: number;
   netProfit: number;
   depFound: boolean;
   depAmt: number;
   openingStock: number;
+  plSections: PLSection[];
 } {
   const xmlLower = xml.toLowerCase();
 
-  // GST exclusion pattern — never include these in revenue even if under Income groups
-  const GST_EXCLUSION = /(cgst|sgst|igst|output\s*tax|duties\s*(and|&)\s*taxes|tds)/i;
+  // ── Group-aware tokeniser ──
+  // Pattern: group header = <DSPACCNAME>...<DSPDISPNAME>...</DSPDISPNAME>...</DSPACCNAME> followed by <PLAMT>
+  // Child ledger = <BSNAME>...</BSNAME> followed by <BSAMT>...</BSAMT>
+  const tokenRe = /<DSPACCNAME>\s*<DSPDISPNAME>([^<]+)<\/DSPDISPNAME>\s*<\/DSPACCNAME>\s*<PLAMT[^>]*>([\s\S]*?)<\/PLAMT>|<BSNAME>([\s\S]*?)<\/BSNAME>\s*<BSAMT[^>]*>([\s\S]*?)<\/BSAMT>/gi;
+  const plSections: PLSection[] = [];
+  let current: PLSection | null = null;
+  let m: RegExpExecArray | null;
 
-  let revenue = 0;
+  while ((m = tokenRe.exec(xml)) !== null) {
+    if (m[1] !== undefined) {
+      // Group header
+      const name = decodeEntities(m[1].trim());
+      const plBlock = m[2];
+      const mainAmt = xmlText(plBlock, 'BSMAINAMT');
+      const subAmt  = xmlText(plBlock, 'PLSUBAMT');
+      const total   = parseAmt(mainAmt || subAmt);
+      current = { name, total, children: [] };
+      plSections.push(current);
+    } else if (m[3] !== undefined && current) {
+      // Child ledger under most recent group
+      const childName = (m[3].match(/<DSPDISPNAME>([^<]+)<\/DSPDISPNAME>/) || [])[1]?.trim() ?? '';
+      const subAmtStr = xmlText(m[4], 'BSSUBAMT');
+      if (childName && subAmtStr) {
+        current.children.push({ name: decodeEntities(childName), amount: parseAmt(subAmtStr) });
+      }
+    }
+  }
+
+  // ── Compute schedule line items from sections ──
+  let directRevenue = 0;
+  let otherIncome = 0;
+  let costOfMaterials = 0;
   let expenses = 0;
+  let depAmt = 0;
   let openingStock = 0;
 
-  // Strategy: walk through the P&L XML and identify group-level lines.
-  // Group lines are DSPDISPNAME entries that have a non-empty BSMAINAMT inside <PLAMT>.
-  // Sub-ledger lines have BSSUBAMT inside <BSAMT> (or empty BSMAINAMT with a BSSUBAMT).
-  // We ONLY sum group-level BSMAINAMT values to avoid double-counting.
-
-  // Find all DSPDISPNAME + PLAMT pairs (group-level lines)
-  const groupRe = /<DSPDISPNAME>([^<]+)<\/DSPDISPNAME>[\s\S]*?<PLAMT\b[^>]*>[\s\S]*?<BSMAINAMT>([\-\d.,]*)<\/BSMAINAMT>[\s\S]*?<\/PLAMT>/gi;
-  let mg: RegExpExecArray | null;
-  while ((mg = groupRe.exec(xml)) !== null) {
-    const name = decodeEntities(mg[1].trim());
-    const nameLower = name.toLowerCase();
-    const amtStr = mg[2].trim();
-    const amt = parseAmt(amtStr);
-    if (!amtStr || amt === 0) continue; // skip empty BSMAINAMT (sub-ledger containers)
-
-    // Exclude GST/TDS from revenue
-    if (GST_EXCLUSION.test(name)) continue;
-
-    if (nameLower.includes('sales') || nameLower.includes('revenue') || nameLower.includes('income')) {
-      revenue += Math.abs(amt);
-    } else if (nameLower.includes('expense') || nameLower.includes('cost of') || nameLower.includes('purchase') || nameLower.includes('depreciation')) {
-      expenses += Math.abs(amt);
+  for (const sec of plSections) {
+    const nl = sec.name.toLowerCase();
+    const absTotal = Math.abs(sec.total);
+    if (nl.includes('sales') && !nl.includes('cost of sales')) {
+      directRevenue += absTotal;
+    } else if (nl.includes('purchase') || nl.includes('cost of sales') || nl.includes('direct expense') || nl.includes('manufacturing')) {
+      costOfMaterials += absTotal;
+    } else if (nl.includes('indirect income') || nl.includes('direct income') || (nl.includes('income') && !nl.includes('expense'))) {
+      otherIncome += absTotal;
+    } else if (nl.includes('expense') || nl.includes('indirect expense')) {
+      expenses += absTotal;
+      // Pick depreciation from children
+      for (const ch of sec.children) {
+        if (ch.name.toLowerCase().includes('depreciation')) depAmt += Math.abs(ch.amount);
+      }
+    } else if (sec.total !== 0) {
+      // Sign-based fallback for non-standard group names (e.g. "COMMISSION", "Brokerage Paid")
+      // Negative BSMAINAMT = debit side = cost/expense; Positive = credit side = income
+      if (sec.total < 0) {
+        expenses += Math.abs(sec.total);
+      } else {
+        otherIncome += sec.total;
+      }
+    }
+    // Opening stock from children
+    for (const ch of sec.children) {
+      if (ch.name.toLowerCase().includes('opening stock')) openingStock += Math.abs(ch.amount);
     }
   }
 
-  // Sub-ledger lines: DSPDISPNAME + BSSUBAMT (for individual line items like Opening Stock)
-  const subRe = /<DSPDISPNAME>([^<]+)<\/DSPDISPNAME>[\s\S]*?<BSSUBAMT>([\-\d.,]+)<\/BSSUBAMT>/gi;
-  while ((mg = subRe.exec(xml)) !== null) {
-    const name = decodeEntities(mg[1].trim()).toLowerCase();
-    const amt = Math.abs(parseAmt(mg[2]));
-    if (!amt) continue;
-    if (name.includes('opening stock')) {
-      openingStock = amt;
+  // Fallback to old regex approach if section parse yielded nothing
+  if (plSections.length === 0) {
+    const GST_EXCLUSION = /(cgst|sgst|igst|output\s*tax|duties\s*(and|&)\s*taxes|tds)/i;
+    const STOP = '(?:(?!<DSPDISPNAME>)[\\s\\S])';
+    const groupRe = new RegExp(
+      `<DSPDISPNAME>([^<]+)<\\/DSPDISPNAME>${STOP}*?<PLAMT\\b[^>]*>${STOP}*?<BSMAINAMT>([\\-\\d.,]*)<\\/BSMAINAMT>${STOP}*?<\\/PLAMT>`,
+      'gi',
+    );
+    let mg: RegExpExecArray | null;
+    while ((mg = groupRe.exec(xml)) !== null) {
+      const name = decodeEntities(mg[1].trim());
+      const nameLower = name.toLowerCase();
+      const amt = parseAmt(mg[2].trim());
+      if (!amt || GST_EXCLUSION.test(name)) continue;
+      if (nameLower.includes('sales') && !nameLower.includes('cost of sales')) directRevenue += Math.abs(amt);
+      else if (nameLower.includes('purchase') || nameLower.includes('cost of sales') || nameLower.includes('direct expense') || nameLower.includes('manufacturing')) costOfMaterials += Math.abs(amt);
+      else if (nameLower.includes('income')) otherIncome += Math.abs(amt);
+      else if (nameLower.includes('expense') || nameLower.includes('depreciation')) expenses += Math.abs(amt);
+    }
+    if (directRevenue === 0 && otherIncome === 0) {
+      directRevenue = Math.abs(parseAmt(xmlText(xml, 'REVENUE') || xmlText(xml, 'NETSALES') || xmlText(xml, 'TOTALSALES')));
+      expenses = Math.abs(parseAmt(xmlText(xml, 'TOTALEXPENSES') || xmlText(xml, 'TOTALEXPENSE')));
+      openingStock = Math.abs(parseAmt(xmlText(xml, 'OPENINGSTOCK')));
     }
   }
 
-  // Classic import-format fallback
-  if (revenue === 0) {
-    revenue = Math.abs(parseAmt(xmlText(xml, 'REVENUE') || xmlText(xml, 'NETSALES') || xmlText(xml, 'TOTALSALES')));
-    expenses = Math.abs(parseAmt(xmlText(xml, 'TOTALEXPENSES') || xmlText(xml, 'TOTALEXPENSE')));
-    openingStock = Math.abs(parseAmt(xmlText(xml, 'OPENINGSTOCK')));
-  }
+  const revenue = directRevenue + otherIncome;
+  const totalExpenses = costOfMaterials + expenses;
+  const netProfit = parseAmt(xmlText(xml, 'NETPROFIT') || xmlText(xml, 'PROFITLOSS') || xmlText(xml, 'NETLOSS')) || (revenue - totalExpenses);
 
-  // Net Profit: try dedicated tags first, fall back to revenue - expenses.
-  // Bug 2: prefer BS-sourced net profit (handled in engine.ts via bsNetProfit).
-  // This P&L-derived figure is a fallback only.
-  const netProfit = parseAmt(xmlText(xml, 'NETPROFIT') || xmlText(xml, 'PROFITLOSS') || xmlText(xml, 'NETLOSS')) || (revenue - expenses);
-
-  // Depreciation
   const depFound = xmlLower.includes('depreciation') || xmlLower.includes('dep exp');
-  let depAmt = 0;
-  if (depFound) {
+  if (depFound && depAmt === 0) {
     const idx = xmlLower.indexOf('depreciation');
     const slice = xml.slice(Math.max(0, idx - 200), idx + 300);
     depAmt = Math.abs(parseAmt(xmlText(slice, 'BSSUBAMT') || xmlText(slice, 'AMOUNT')));
   }
 
-  return { revenue, expenses, netProfit, depFound, depAmt, openingStock };
+  return { revenue, directRevenue, otherIncome, costOfMaterials, expenses: totalExpenses, netProfit, depFound, depAmt, openingStock, plSections };
 }
+
 
 // ── Balance Sheet parser ──────────────────────────────────────────────────
 
@@ -410,10 +469,13 @@ export function parseBSheet(xml: string): {
   fixedAssets: number;
   bsCashBankTotal: number;
   bsNetProfit: number | null;
+  otherCurrentAssets: Array<{ name: string; amount: number }>;
 } {
   let ca = 0, cl = 0, bankBal = 0, debtorBal = 0, creditorBal = 0;
   let closingStock = 0, fixedAssets = 0, cashBal = 0;
   let bsNetProfit: number | null = null;
+  const otherCurrentAssets: Array<{ name: string; amount: number }> = [];
+  let inCurrentAssets = false;
 
   // Tally display-report format: BSNAME blocks with DSPDISPNAME + BSAMT(BSSUBAMT/BSMAINAMT)
   // Walk through DSPDISPNAME+amount pairs — use BSMAINAMT when non-empty, else BSSUBAMT
@@ -431,19 +493,31 @@ export function parseBSheet(xml: string): {
 
     // Bug 2: capture "Profit & Loss A/c" BSMAINAMT for net profit
     if ((name.includes('profit') && name.includes('loss')) || name.includes('profit & loss')) {
-      if (mainAmt) {
-        bsNetProfit = parseAmt(mainAmt);
-      }
+      if (mainAmt) { bsNetProfit = parseAmt(mainAmt); }
+      inCurrentAssets = false;
+    } else if (name.includes('current assets')) {
+      ca = amt;
+      inCurrentAssets = true;
+    } else if (name.includes('current liabilities')) {
+      cl = amt;
+      inCurrentAssets = false;
+    } else if (name.includes('fixed asset')) {
+      fixedAssets = amt;
+      inCurrentAssets = false;
+    } else if (name.includes('bank')) {
+      bankBal += amt;
+    } else if (name.includes('sundry debtor') || name.includes('trade receiv') || name.includes('debtor')) {
+      debtorBal += Math.abs(amt);
+    } else if (name.includes('sundry creditor') || name.includes('trade payable') || name.includes('creditor')) {
+      creditorBal += Math.abs(amt);
+    } else if (name.includes('closing stock') || name.includes('stock-in-trade') || name.includes('stock in trade')) {
+      closingStock = amt;
+    } else if (name === 'cash' || name.includes('cash in hand') || name.includes('cash-in-hand')) {
+      cashBal += amt;
+    } else if (inCurrentAssets && subAmt && Math.abs(parseAmt(subAmt)) > 0) {
+      // Uncategorized sub-item under Current Assets (e.g. Input GST, Advance Tax, Prepaid)
+      otherCurrentAssets.push({ name: rawName, amount: Math.abs(parseAmt(subAmt)) });
     }
-
-    if (name.includes('current assets')) ca = amt;
-    else if (name.includes('current liabilities')) cl = amt;
-    else if (name.includes('fixed asset')) fixedAssets = amt;
-    else if (name.includes('bank')) bankBal += amt;
-    else if (name.includes('sundry debtor') || name.includes('trade receiv')) debtorBal += amt;
-    else if (name.includes('sundry creditor') || name.includes('trade payable')) creditorBal += amt;
-    else if (name.includes('closing stock') || name.includes('stock-in-trade') || name.includes('stock in trade')) closingStock = amt;
-    else if (name === 'cash' || name.includes('cash in hand') || name.includes('cash-in-hand')) cashBal += amt;
   }
 
   // Classic import-format fallback — also retain signs
@@ -459,28 +533,127 @@ export function parseBSheet(xml: string): {
   }
 
   const bsCashBankTotal = bankBal + cashBal;
-  return { ca, cl, bankBal, debtorBal, creditorBal, closingStock, fixedAssets, bsCashBankTotal, bsNetProfit };
+  return { ca, cl, bankBal, debtorBal, creditorBal, closingStock, fixedAssets, bsCashBankTotal, bsNetProfit, otherCurrentAssets };
+}
+
+// ── Cash Flow Statement parser ────────────────────────────────────────────
+
+export interface CashFlowSection {
+  name: string;
+  total: number;
+  children: Array<{ name: string; amount: number }>;
+}
+
+const OPERATING_GROUPS = ['current assets', 'current liabilities', 'indirect income', 'indirect expense', 'sundry debtor', 'sundry creditor', 'direct income', 'direct expense', 'suspense'];
+const INVESTING_GROUPS = ['fixed asset', 'investment', 'capital work'];
+const FINANCING_GROUPS = ['capital account', 'loans', 'secured loan', 'unsecured loan', 'bank od', 'bank overdraft', 'reserves'];
+
+export function parseCashFlow(xml: string): {
+  cashFlowSections: CashFlowSection[];
+  operatingCF: number;
+  investingCF: number;
+  financingCF: number;
+  netCashFlow: number;
+} {
+  const cashFlowSections: CashFlowSection[] = [];
+  let current: CashFlowSection | null = null;
+
+  // Same display-report structure as BSheet but uses CFBAMT/CFBSUBAMT/CFBMAINAMT
+  const pairRe = /<DSPDISPNAME>([^<]+)<\/DSPDISPNAME>[\s\S]*?<CFBAMT\b[^>]*>([\s\S]*?)<\/CFBAMT>/gi;
+  let m: RegExpExecArray | null;
+
+  while ((m = pairRe.exec(xml)) !== null) {
+    const rawName = decodeEntities(m[1].trim());
+    if (!rawName || rawName === 'undefined') continue;
+    const amtBlock = m[2];
+    const mainAmt = xmlText(amtBlock, 'CFBMAINAMT');
+    const subAmt  = xmlText(amtBlock, 'CFBSUBAMT');
+
+    if (mainAmt) {
+      // Group header (CFBMAINAMT set, CFBSUBAMT empty)
+      const total = parseAmt(mainAmt);
+      current = { name: rawName, total, children: [] };
+      cashFlowSections.push(current);
+    } else if (subAmt && current) {
+      // Child ledger
+      current.children.push({ name: rawName, amount: parseAmt(subAmt) });
+    } else if (subAmt) {
+      // Child with no parent yet — create implicit section
+      current = { name: rawName, total: parseAmt(subAmt), children: [] };
+      cashFlowSections.push(current);
+    }
+  }
+
+  let operatingCF = 0, investingCF = 0, financingCF = 0;
+
+  for (const sec of cashFlowSections) {
+    const nl = sec.name.toLowerCase();
+    const contribution = sec.total !== 0 ? sec.total : sec.children.reduce((s, c) => s + c.amount, 0);
+    if (OPERATING_GROUPS.some(g => nl.includes(g))) {
+      operatingCF += contribution;
+    } else if (INVESTING_GROUPS.some(g => nl.includes(g))) {
+      investingCF += contribution;
+    } else if (FINANCING_GROUPS.some(g => nl.includes(g))) {
+      financingCF += contribution;
+    } else {
+      operatingCF += contribution; // default to operating
+    }
+  }
+
+  const netCashFlow = operatingCF + investingCF + financingCF;
+  return { cashFlowSections, operatingCF, investingCF, financingCF, netCashFlow };
+}
+
+// ── Ledger group map (from All Masters DayBook/Sales/Purchase XML) ─────────
+
+/** Parse LEDGER PARENT assignments from an All Masters IMPORTDATA XML.
+ *  Returns Map<ledgerNameLower, parentGroupLower> for group membership checks. */
+export function parseLedgerGroups(xml: string): Map<string, string> {
+  const map = new Map<string, string>();
+  const ledgerRe = /<LEDGER\s+NAME="([^"]+)"[^>]*>([\s\S]*?)<\/LEDGER>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = ledgerRe.exec(xml)) !== null) {
+    const ledgerName = decodeEntities(m[1].trim()).toLowerCase();
+    const parent = xmlText(m[2], 'PARENT').toLowerCase();
+    if (ledgerName && parent) map.set(ledgerName, parent);
+  }
+  return map;
 }
 
 // ── Group Summary parser ──────────────────────────────────────────────────
 
-export function parseGrpSum(xml: string): {
+export function parseGrpSum(_xml: string, ledgerGroups?: Map<string, string>): {
   salesWrongGroup: boolean;
   purchaseWrongGroup: boolean;
   dutiesUnderExpense: boolean;
 } {
-  // Extract all DSPDISPNAME account names from GrpSum display-report format
-  const names = xmlAll(xml, 'DSPDISPNAME').map(n => n.toLowerCase());
+  if (!ledgerGroups || ledgerGroups.size === 0) {
+    return { salesWrongGroup: false, purchaseWrongGroup: false, dutiesUnderExpense: false };
+  }
 
-  // "Duties & Taxes" or GST/TDS ledgers appearing under "Indirect Expenses" group
-  const xmlLower = xml.toLowerCase();
-  const dutiesUnderExpense =
-    (xmlLower.includes('duties') || xmlLower.includes('gst') || xmlLower.includes('tds')) &&
-    xmlLower.includes('indirect expense');
+  let salesWrongGroup = false;
+  let purchaseWrongGroup = false;
+  let dutiesUnderExpense = false;
 
-  // salesWrongGroup / purchaseWrongGroup require structural parent-child parsing;
-  // kept as false stubs until Group Summary structure is fully parsed
-  return { salesWrongGroup: false, purchaseWrongGroup: false, dutiesUnderExpense };
+  for (const [ledger, parent] of ledgerGroups) {
+    if (ledger.includes('sales') || ledger.includes('revenue from')) {
+      if (!parent.includes('sales account') && !parent.includes('direct income') && !parent.includes('income')) {
+        salesWrongGroup = true;
+      }
+    }
+    if (ledger.includes('purchase') || ledger.includes('cost of goods')) {
+      if (!parent.includes('purchase account') && !parent.includes('direct expense') && !parent.includes('cost of sales')) {
+        purchaseWrongGroup = true;
+      }
+    }
+    if (ledger.includes('cgst') || ledger.includes('sgst') || ledger.includes('igst') || ledger.includes('output gst') || ledger.includes('tds payable')) {
+      if (parent.includes('indirect expense') || parent.includes('direct expense')) {
+        dutiesUnderExpense = true;
+      }
+    }
+  }
+
+  return { salesWrongGroup, purchaseWrongGroup, dutiesUnderExpense };
 }
 
 // ── DayBook standard (non-chunked) parsing ────────────────────────────────
@@ -495,6 +668,7 @@ export function parseDayBook(xml: string, fyStart: Date, fyEnd: Date): ChunkedSt
     totalDebit: 0, totalCredit: 0, salesVoucherTotal: 0,
     purchVoucherTotal: 0, cashBankNetMovement: 0,
     taxVoucherTotal: 0, journalNetAmt: 0, outOfFY: 0,
+    vouchers: [],
   };
 
   const dateSet = new Set<string>();
@@ -567,6 +741,19 @@ export function processVoucher(
       dateSet.add(dateStr);
     }
   }
+
+  // Push the actual transaction detail (limit to 50000 to prevent crashing on massive DBs)
+  if (!stats.vouchers) stats.vouchers = [];
+  if (stats.vouchers.length < 50000) {
+    stats.vouchers.push({
+      date: dateStr || '',
+      vno: vno || '',
+      type: vtype || '',
+      party: party || '',
+      amount: amt,
+      narration: narration || '',
+    });
+  }
 }
 
 // ── Assemble ParsedData from parsed pieces ────────────────────────────────
@@ -576,11 +763,279 @@ export function assembleParsedData(
   plResult: ReturnType<typeof parsePandL> | null,
   bsResult: ReturnType<typeof parseBSheet> | null,
   grpResult: ReturnType<typeof parseGrpSum> | null,
+  cfResult: ReturnType<typeof parseCashFlow> | null,
 ): Partial<ParsedData> {
   return {
     ...(tbResult ?? {}),
     ...(plResult ?? {}),
     ...(bsResult ?? {}),
     ...(grpResult ?? {}),
+    ...(cfResult ?? {}),
   };
+}
+
+// ── Phase 1: Master Map (Chart of Accounts) ──────────────────────────────
+//
+// Parses a Tally "All Masters" XML export (Master.xml / DayBook.xml) and
+// builds a canonical name→entry map that downstream statement parsers use
+// to resolve zero-balance hierarchy tie-breakers.
+//
+// Rules:
+//  • GROUP blocks  → type = 'group'
+//  • LEDGER blocks → type = 'ledger' (overrides same-keyed group if duplicate)
+//  • Empty <PARENT> → defaults to "Primary"
+
+export function parseMasterMap(xml: string): Map<string, MasterEntry> {
+  const map = new Map<string, MasterEntry>();
+
+  const groupRe = /<GROUP\s+NAME="([^"]+)"[^>]*>([\s\S]*?)<\/GROUP>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = groupRe.exec(xml)) !== null) {
+    const name = decodeEntities(m[1].trim());
+    if (!name || name === 'undefined') continue;
+    const parent = xmlText(m[2], 'PARENT').trim() || 'Primary';
+    map.set(name.toLowerCase(), { name, parent, type: 'group' });
+  }
+
+  const ledgerRe = /<LEDGER\s+NAME="([^"]+)"[^>]*>([\s\S]*?)<\/LEDGER>/gi;
+  while ((m = ledgerRe.exec(xml)) !== null) {
+    const name = decodeEntities(m[1].trim());
+    if (!name || name === 'undefined') continue;
+    const parent = xmlText(m[2], 'PARENT').trim() || 'Primary';
+    map.set(name.toLowerCase(), { name, parent, type: 'ledger' });
+  }
+
+  return map;
+}
+
+// ── Phase 2-4 internal helpers ────────────────────────────────────────────
+
+/**
+ * Determines whether an account name is a MAIN (group) or SUB (ledger) node
+ * and resolves its master-map metadata, following the four-phase rules exactly.
+ *
+ * Priority order:
+ *  1. BSMAINAMT set (and sub empty)  → 'main'
+ *  2. BSSUBAMT / PLSUBAMT set        → 'sub'
+ *  3. Both empty (zero-balance)      → master map tie-breaker:
+ *       GROUP entry  → 'main'
+ *       LEDGER entry → 'sub'
+ *       Not in map   → 'main' (default per spec)
+ *
+ * masterParent is "Computed / Not in Master" for any name absent from the map.
+ */
+function resolveNode(
+  name: string,
+  mainAmt: string,
+  subAmt: string,
+  masterMap: Map<string, MasterEntry>,
+): {
+  nodeType: FinancialNodeType;
+  inMaster: boolean;
+  masterType: MasterItemType | null;
+  masterParent: string;
+} {
+  const hasMain = mainAmt.trim() !== '';
+  const hasSub  = subAmt.trim()  !== '';
+  const entry   = masterMap.get(name.toLowerCase().trim());
+
+  let nodeType: FinancialNodeType;
+  if (hasMain && !hasSub) {
+    nodeType = 'main';
+  } else if (hasSub) {
+    nodeType = 'sub';
+  } else {
+    // Zero-balance: master map tie-breaker
+    nodeType = (!entry || entry.type === 'group') ? 'main' : 'sub';
+  }
+
+  return {
+    nodeType,
+    inMaster: !!entry,
+    masterType:   entry?.type   ?? null,
+    masterParent: entry?.parent ?? 'Computed / Not in Master',
+  };
+}
+
+let _nodeSeq = 0;
+
+function makeNode(
+  name: string,
+  amount: number,
+  resolved: ReturnType<typeof resolveNode>,
+): FinancialNode {
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  const id = `${slug}-${++_nodeSeq}`;
+  return {
+    id,
+    name,
+    amount,
+    nodeType:    resolved.nodeType,
+    inMaster:    resolved.inMaster,
+    masterType:  resolved.masterType,
+    masterParent: resolved.masterParent,
+    children: [],
+  };
+}
+
+function statementTotals(nodes: FinancialNode[]) {
+  let credit = 0, debit = 0;
+  for (const n of nodes) {
+    if (n.amount >= 0) credit += n.amount;
+    else               debit  += Math.abs(n.amount);
+  }
+  return { credit, debit, net: credit - debit };
+}
+
+// ── Phase 2-4: P&L Statement parser ──────────────────────────────────────
+//
+// Two token types appear interleaved in PandL.xml (in document order):
+//   A) <DSPACCNAME><DSPDISPNAME>…</DSPDISPNAME></DSPACCNAME> <PLAMT>…</PLAMT>
+//      → Group header row. BSMAINAMT set = MAIN; PLSUBAMT set = SUB.
+//   B) <BSNAME>…<DSPDISPNAME>…</DSPDISPNAME>…</BSNAME> <BSAMT>…</BSAMT>
+//      → Ledger child row.  BSSUBAMT set = SUB; BSMAINAMT set = MAIN (rare).
+//
+// The "current group" pointer advances whenever a MAIN node is encountered.
+// SUB nodes are appended to the current group's children[].
+
+export function parsePandLStatement(
+  xml: string,
+  masterMap: Map<string, MasterEntry>,
+): ParsedStatement {
+  _nodeSeq = 0;
+  const companyName = xmlText(xml, 'SVCURRENTCOMPANY');
+  const nodes: FinancialNode[] = [];
+  let current: FinancialNode | null = null;
+
+  const tokenRe = new RegExp(
+    // Token A: DSPACCNAME + PLAMT
+    '<DSPACCNAME>\\s*<DSPDISPNAME>([^<]+)</DSPDISPNAME>\\s*</DSPACCNAME>\\s*<PLAMT[^>]*>([\\s\\S]*?)</PLAMT>'
+    + '|'
+    // Token B: BSNAME + BSAMT
+    + '<BSNAME>([\\s\\S]*?)</BSNAME>\\s*<BSAMT[^>]*>([\\s\\S]*?)</BSAMT>',
+    'gi',
+  );
+
+  let m: RegExpExecArray | null;
+  while ((m = tokenRe.exec(xml)) !== null) {
+    let name: string;
+    let mainAmt: string;
+    let subAmt: string;
+
+    if (m[1] !== undefined) {
+      // Token A
+      name    = decodeEntities(m[1].trim());
+      const plBlock = m[2];
+      mainAmt = xmlText(plBlock, 'BSMAINAMT');
+      subAmt  = xmlText(plBlock, 'PLSUBAMT');
+    } else {
+      // Token B
+      name    = decodeEntities(xmlText(m[3], 'DSPDISPNAME'));
+      mainAmt = xmlText(m[4], 'BSMAINAMT');
+      subAmt  = xmlText(m[4], 'BSSUBAMT');
+    }
+
+    if (!name || name === 'undefined') continue;
+
+    const amount   = parseAmt(mainAmt || subAmt);
+    const resolved = resolveNode(name, mainAmt, subAmt, masterMap);
+    const node     = makeNode(name, amount, resolved);
+
+    if (resolved.nodeType === 'main') {
+      nodes.push(node);
+      current = node;
+    } else if (current) {
+      current.children.push(node);
+    } else {
+      nodes.push(node); // orphan fallback
+    }
+  }
+
+  return {
+    statement: 'pandl',
+    companyName,
+    nodes,
+    totals: statementTotals(nodes),
+  };
+}
+
+// ── Phase 2-4: Balance Sheet parser ──────────────────────────────────────
+//
+// BSheet.xml emits a flat stream of <DSPDISPNAME> + <BSAMT> pairs.
+// Classification rules are identical to the P&L but use only BSMAINAMT /
+// BSSUBAMT (no PLSUBAMT).  Zero-balance pairs (both tags empty) use the
+// master map tie-breaker.
+
+export function parseBSheetStatement(
+  xml: string,
+  masterMap: Map<string, MasterEntry>,
+): ParsedStatement {
+  _nodeSeq = 0;
+  const companyName = xmlText(xml, 'SVCURRENTCOMPANY');
+  const nodes: FinancialNode[] = [];
+  let current: FinancialNode | null = null;
+
+  const pairRe = /<DSPDISPNAME>([^<]+)<\/DSPDISPNAME>[\s\S]*?<BSAMT\b[^>]*>([\s\S]*?)<\/BSAMT>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = pairRe.exec(xml)) !== null) {
+    const name    = decodeEntities(m[1].trim());
+    if (!name || name === 'undefined') continue;
+    const amtBlock = m[2];
+    const mainAmt  = xmlText(amtBlock, 'BSMAINAMT');
+    const subAmt   = xmlText(amtBlock, 'BSSUBAMT');
+    const amount   = parseAmt(mainAmt || subAmt);
+    const resolved = resolveNode(name, mainAmt, subAmt, masterMap);
+    const node     = makeNode(name, amount, resolved);
+
+    if (resolved.nodeType === 'main') {
+      nodes.push(node);
+      current = node;
+    } else if (current) {
+      current.children.push(node);
+    } else {
+      nodes.push(node);
+    }
+  }
+
+  return {
+    statement: 'bsheet',
+    companyName,
+    nodes,
+    totals: statementTotals(nodes),
+  };
+}
+
+// ── Utility: flatten a ParsedStatement into a 2-D row array ──────────────
+//
+// Produces a flat array suitable for:
+//   • Excel export via lib/excel.ts
+//   • Table UI components with depth-based indentation
+//
+// Depth 0 = top-level MAIN account, 1 = direct child, etc.
+
+export function flattenStatement(stmt: ParsedStatement): FlatFinancialRow[] {
+  const rows: FlatFinancialRow[] = [];
+
+  function walk(node: FinancialNode, parentGroup: string, depth: number) {
+    rows.push({
+      id:          node.id,
+      name:        node.name,
+      amount:      node.amount,
+      nodeType:    node.nodeType,
+      depth,
+      parentGroup,
+      inMaster:    node.inMaster,
+      masterType:  node.masterType,
+      masterParent: node.masterParent,
+    });
+    for (const child of node.children) {
+      walk(child, node.name, depth + 1);
+    }
+  }
+
+  for (const node of stmt.nodes) {
+    walk(node, node.masterParent, 0);
+  }
+
+  return rows;
 }

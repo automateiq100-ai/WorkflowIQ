@@ -1,9 +1,98 @@
 // All TypeScript interfaces for AccountingIQ
+import type { PLSection, CashFlowSection } from './parser';
+export type { PLSection, CashFlowSection };
 
 export type FileKey =
   | 'daybook' | 'trialbal' | 'pandl' | 'bsheet' | 'grpsum'   // required
   | 'sales' | 'purchase' | 'bills' | 'payables' | 'cashflow'   // conditional
-  | 'faregister' | 'stock' | 'bankrecon';                       // optional
+  | 'faregister' | 'stock' | 'bankrecon'                        // optional
+  | 'master';                                                    // Chart of Accounts (All Masters export)
+
+// ── Master Map types (Phase 1) ────────────────────────────────────────────
+
+/** Whether a Tally master entry originated from a GROUP or LEDGER tag. */
+export type MasterItemType = 'group' | 'ledger';
+
+/**
+ * One entry from the Master.xml Chart of Accounts.
+ * Groups are account containers; Ledgers are leaf accounts.
+ */
+export interface MasterEntry {
+  name: string;
+  /** Parent group name. "Primary" when the item has no parent (top-level Tally group). */
+  parent: string;
+  type: MasterItemType;
+}
+
+// ── Structured Financial Statement types (Phase 2-4) ─────────────────────
+
+/** Classification of a node inside a parsed P&L or Balance Sheet. */
+export type FinancialNodeType = 'main' | 'sub';
+
+/**
+ * One account node in the hierarchical output of parsePandLStatement /
+ * parseBSheetStatement.
+ *
+ * - `nodeType === 'main'`  →  Group (parent container, value from BSMAINAMT)
+ * - `nodeType === 'sub'`   →  Ledger (child account, value from BSSUBAMT / PLSUBAMT)
+ *
+ * Sign convention mirrors Tally display reports:
+ *   positive = Credit balance (income / liabilities)
+ *   negative = Debit balance  (expenses / assets)
+ */
+export interface FinancialNode {
+  /** Unique slug suitable for React keys and Excel row IDs. */
+  id: string;
+  name: string;
+  /** Signed amount: positive = Cr, negative = Dr (Tally convention). */
+  amount: number;
+  nodeType: FinancialNodeType;
+  /** true when the name was found in the Master Map from Phase 1. */
+  inMaster: boolean;
+  /** GROUP or LEDGER per Master Map, null when not in master. */
+  masterType: MasterItemType | null;
+  /**
+   * Parent group from Master Map.
+   * "Computed / Not in Master" for Tally-generated structural lines
+   * (e.g. "Cost of Sales :", "Opening Stock") that have no master entry.
+   */
+  masterParent: string;
+  children: FinancialNode[];
+}
+
+/** Aggregated totals for a parsed statement. */
+export interface StatementTotals {
+  /** Sum of nodes with positive amounts (Credit side). */
+  credit: number;
+  /** Sum of absolute values of nodes with negative amounts (Debit side). */
+  debit: number;
+  /** credit − debit (positive = net income / surplus). */
+  net: number;
+}
+
+/** Complete parsed output of a P&L or Balance Sheet statement. */
+export interface ParsedStatement {
+  statement: 'pandl' | 'bsheet';
+  companyName: string;
+  /** Top-level main-account nodes; each carries `.children` for sub-accounts. */
+  nodes: FinancialNode[];
+  totals: StatementTotals;
+}
+
+/** Flat row produced by flattenStatement() — suitable for Excel export or table UIs. */
+export interface FlatFinancialRow {
+  id: string;
+  name: string;
+  amount: number;
+  nodeType: FinancialNodeType;
+  /** Indentation depth: 0 = top-level group, 1 = direct child, etc. */
+  depth: number;
+  /** Name of the immediate parent group in the financial statement tree. */
+  parentGroup: string;
+  inMaster: boolean;
+  masterType: MasterItemType | null;
+  masterParent: string;
+}
 
 export type ModuleId = 'accounting' | 'mis' | 'reconciliation';
 
@@ -57,6 +146,16 @@ export interface ChunkedStats {
   taxVoucherTotal: number;
   journalNetAmt: number;
   outOfFY: number;
+  vouchers: Voucher[];
+}
+
+export interface Voucher {
+  date: string;
+  vno: string;
+  type: string;
+  party: string;
+  amount: number;
+  narration: string;
 }
 
 export interface Check {
@@ -109,10 +208,14 @@ export interface ParsedData {
 
   // P&L
   revenue: number;
+  directRevenue: number;
+  otherIncome: number;
+  costOfMaterials: number;
   expenses: number;
   netProfit: number;
   depFound: boolean;
   depAmt: number;
+  plSections: PLSection[];
   openingStock: number;
 
   // Balance Sheet (signed values — Bug 1)
@@ -131,6 +234,13 @@ export interface ParsedData {
   salesWrongGroup: boolean;
   purchaseWrongGroup: boolean;
   dutiesUnderExpense: boolean;
+
+  // Cash Flow Statement
+  cashFlowSections: CashFlowSection[];
+  operatingCF: number;
+  investingCF: number;
+  financingCF: number;
+  netCashFlow: number;
 }
 
 export interface TBLedger {

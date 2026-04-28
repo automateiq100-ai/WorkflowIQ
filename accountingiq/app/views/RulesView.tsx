@@ -5,7 +5,7 @@ import { useApp } from '@/lib/state';
 import type { Rule, DimKey } from '@/lib/types';
 import { DIM_LABELS } from '@/lib/constants';
 
-const STORAGE_KEY = 'aiq_rules_v1';
+const STORAGE_KEY = 'aiq_rules_v2';
 
 // Built-in rules — one per engine check (all 60 checks across 8 dimensions)
 const BUILTIN_RULES: Rule[] = [
@@ -189,6 +189,11 @@ export default function RulesView() {
     setDeleteConfirm(null);
   };
 
+  const resetToDefaults = () => {
+    localStorage.removeItem(STORAGE_KEY);
+    setRules(BUILTIN_RULES);
+  };
+
   const filtered = rules.filter(r => {
     const matchDim = filter === 'all' || r.dimension === filter;
     const matchSearch = !search || r.name.toLowerCase().includes(search.toLowerCase()) || r.description.toLowerCase().includes(search.toLowerCase());
@@ -217,14 +222,24 @@ export default function RulesView() {
             {enabledCount} active · {disabledCount} disabled · {customCount} custom
           </p>
         </div>
-        <button
-          onClick={openAdd}
-          id="add-rule-btn"
-          className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all"
-          style={{ background: 'var(--teal)', color: '#000' }}
-        >
-          + Add Rule
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={resetToDefaults}
+            className="px-3 py-2 rounded-lg text-sm border transition-colors"
+            style={{ borderColor: 'var(--border)', color: 'var(--text2)' }}
+            title="Reset all rules to built-in defaults (clears customisations)"
+          >
+            Reset to defaults
+          </button>
+          <button
+            onClick={openAdd}
+            id="add-rule-btn"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all"
+            style={{ background: 'var(--teal)', color: '#000' }}
+          >
+            + Add Rule
+          </button>
+        </div>
       </div>
 
       {/* Score impact banner */}

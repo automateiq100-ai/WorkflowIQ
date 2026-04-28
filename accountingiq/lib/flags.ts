@@ -73,11 +73,15 @@ export function generateFlags(
     }
 
     if (dbStats.outOfFY > 0) {
+      const months = Object.keys(dbStats.monthCounts ?? {}).sort();
+      const rangeNote = months.length >= 2
+        ? ` (data range: ${months[0]} to ${months[months.length - 1]})`
+        : '';
       flags.push({
         id: 'flag-out-of-fy',
         severity: 'medium',
         title: 'Vouchers Outside Financial Year',
-        detail: `${dbStats.outOfFY} voucher(s) have dates outside the current financial year.`,
+        detail: `${dbStats.outOfFY} voucher(s) have dates outside the detected financial year${rangeNote}.`,
         count: dbStats.outOfFY,
       });
     }
@@ -115,11 +119,16 @@ export function generateFlags(
 
   // Structural flags from parsedData
   if (parsedData.suspenseCount && parsedData.suspenseCount > 0) {
+    const suspenseList = (parsedData.suspenseLedgers ?? [])
+      .map(s => `'${s.name}' (₹${Math.abs(s.amount).toLocaleString('en-IN', { maximumFractionDigits: 0 })})`)
+      .join(', ');
     flags.push({
       id: 'flag-suspense',
       severity: 'critical',
       title: 'Suspense Accounts with Non-Zero Balances',
-      detail: `${parsedData.suspenseCount} suspense / temporary account(s) have non-zero closing balances.`,
+      detail: suspenseList
+        ? `${parsedData.suspenseCount} suspense/misc ledger(s) with non-zero balances: ${suspenseList}.`
+        : `${parsedData.suspenseCount} suspense / temporary account(s) have non-zero closing balances.`,
       count: parsedData.suspenseCount,
     });
   }

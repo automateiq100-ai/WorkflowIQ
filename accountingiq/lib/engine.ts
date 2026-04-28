@@ -5,7 +5,8 @@ import type {
 } from './types';
 import { DIM_WEIGHTS } from './constants';
 import {
-  parseTrialBalance, parsePandL, parseBSheet, parseGrpSum, parseDayBook,
+  parseTrialBalance, parsePandL, parseBSheet, parseGrpSum, parseDayBook, parseTallyDate,
+  parseCashFlow, parseLedgerGroups,
 } from './parser';
 
 // FY dates — default to current Indian FY
@@ -16,6 +17,33 @@ function currentFY(): { start: Date; end: Date } {
     start: new Date(year, 3, 1),     // 1 April
     end:   new Date(year + 1, 2, 31), // 31 March
   };
+}
+
+// BUG 1 fix: detect FY from the actual voucher data instead of the system clock.
+// Uses MAJORITY VOTE — sums voucher counts per FY and picks the FY with the most activity.
+// This is robust against stray entries from an older period pulling detection backwards.
+// (The "earliest month" approach failed when a single opening-balance entry from Jan 2025
+// caused the engine to conclude FY 2024-25 even though bulk data was FY 2025-26.)
+function fyFromData(monthCounts: Record<string, number>): { start: Date; end: Date } {
+  const entries = Object.entries(monthCounts);
+  if (!entries.length) return currentFY();
+
+  // Tally's "YYYY-MM" key → Indian FY start year (April = start of FY)
+  const fyVouchers: Record<number, number> = {};
+  for (const [monthKey, count] of entries) {
+    const [yr, mo] = monthKey.split('-').map(Number);
+    const fyYear = mo >= 4 ? yr : yr - 1; // Apr 2025 → FY 2025; Jan 2025 → FY 2024
+    fyVouchers[fyYear] = (fyVouchers[fyYear] ?? 0) + count;
+  }
+
+  // Pick the FY whose months contain the most vouchers
+  const best = Object.entries(fyVouchers).reduce(
+    (acc, cur) => (Number(cur[1]) > Number(acc[1]) ? cur : acc),
+    ['0', 0] as [string, number],
+  );
+  const fyYear = parseInt(best[0]);
+  if (!fyYear) return currentFY();
+  return { start: new Date(fyYear, 3, 1), end: new Date(fyYear + 1, 2, 31) };
 }
 
 function pass(pts: number, max: number, note: string) {
@@ -40,7 +68,9 @@ function na(note: string) {
 // Main entry point
 export function analyseFiles(state: AppState): { results: AnalysisResults; parsedData: Partial<ParsedData>; dbStats: ChunkedStats | null } {
   const { files, filters } = state;
-  const { start: fyStart, end: fyEnd } = currentFY();
+  const fyDefaults = currentFY();
+  let fyStart = fyDefaults.start;
+  let fyEnd   = fyDefaults.end;
 
   // Detect which files are available
   const hasDaybook  = files.daybook.hasContent;
@@ -53,9 +83,15 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
   const tbResult  = hasTB  ? parseTrialBalance(files.trialbal.content!) : null;
   const plResult  = hasPL  ? parsePandL(files.pandl.content!)           : null;
   const bsResult  = hasBS  ? parseBSheet(files.bsheet.content!)         : null;
-  const grpResult = hasGrp ? parseGrpSum(files.grpsum.content!)         : null;
 
-  // DayBook stats
+  // Build ledger→parent map from DayBook (All Masters format) for group checks
+  const ledgerGroups = files.daybook.content ? parseLedgerGroups(files.daybook.content) : new Map<string, string>();
+  const grpResult = hasGrp ? parseGrpSum(files.grpsum.content!, ledgerGroups) : null;
+
+  const hasCF      = files.cashflow.hasContent;
+  const cfResult   = hasCF ? parseCashFlow(files.cashflow.content!)     : null;
+
+  // DayBook stats — parse with default FY first to get monthCounts
   let dbStats: ChunkedStats | null = null;
   if (hasDaybook) {
     if (files.daybook.chunkedStats) {
@@ -65,12 +101,26 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     }
   }
 
+  // BUG 1 fix: auto-detect FY from the data, then recount outOfFY with correct bounds.
+  // This prevents false "outside FY" flags when user's data is an older financial year.
+  if (dbStats && Object.keys(dbStats.monthCounts).length > 0) {
+    const detected = fyFromData(dbStats.monthCounts);
+    fyStart = detected.start;
+    fyEnd   = detected.end;
+    dbStats.outOfFY = (dbStats.dateSet ?? []).reduce((count: number, dateStr: string) => {
+      const dt = parseTallyDate(dateStr);
+      if (!dt) return count;
+      return (dt < fyStart || dt > fyEnd) ? count + 1 : count;
+    }, 0);
+  }
+
   // Assemble parsedData
   const parsedData: Partial<ParsedData> = {
     ...(tbResult  ?? {}),
     ...(plResult  ?? {}),
     ...(bsResult  ?? {}),
     ...(grpResult ?? {}),
+    ...(cfResult  ?? {}),
   };
 
   // Bug 2 fix: prefer bsNetProfit from Balance Sheet over P&L-derived netProfit
@@ -243,7 +293,8 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     : totalVouchers === 0 ? uncertain(6, 'No vouchers parsed')
     : missingVno === 0 ? pass(6, 6, 'All vouchers numbered')
     : missingVno === totalVouchers ? uncertain(6, 'All vouchers missing numbers — possible parsing issue')
-    : missingVno < 5 ? partial(2, 6, `${missingVno} vouchers missing numbers`)
+    : missingVno === 1 ? partial(5, 6, '1 voucher missing number')
+    : missingVno < 5  ? partial(3, 6, `${missingVno} vouchers missing numbers`)
     : fail(6, `${missingVno} of ${totalVouchers} vouchers missing numbers`),
     'Vouchers with missing voucher numbers');
 
@@ -268,8 +319,7 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
 
   c('C5', 'C', 'No wrong-type postings',
     !hasDaybook ? uncertain(6, 'Requires DayBook')
-    : wrongType === 0 ? pass(6, 6, 'No wrong-type postings detected')
-    : fail(6, `${wrongType} wrong-type postings detected`),
+    : uncertain(6, 'Wrong-type detection requires voucher ledger analysis — pending implementation'),
     'Wrong-type voucher postings detected');
 
   c('C6', 'C', 'Zero-amount vouchers below 2%',
@@ -294,6 +344,7 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     !hasTB ? missing(10, 'Trial Balance not uploaded')
     : tbCr === 0 ? uncertain(10, 'Could not extract Dr/Cr totals')
     : tbDiffPct < 0.001 ? pass(10, 10, `Dr = Cr ≈ ₹${fmt(tbCr)} (diff: ₹${fmt(tbDiff)})`)
+    : tbDiffPct < 0.003 ? partial(8, 10, `Negligible imbalance: ₹${fmt(tbDiff)} (${(tbDiffPct*100).toFixed(2)}%)`)
     : tbDiffPct < 0.01  ? partial(5, 10, `Minor imbalance: ₹${fmt(tbDiff)} (${(tbDiffPct*100).toFixed(2)}%)`)
     : fail(10, `TB imbalance: ₹${fmt(tbDiff)} (${(tbDiffPct*100).toFixed(2)}%)`),
     'Trial Balance does not tally — Dr ≠ Cr');
@@ -309,7 +360,7 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     'Balance Sheet equation broken — Assets ≠ Liabilities + Equity');
 
   c('D4', 'D', 'TB total ≈ BS total assets',
-    hasTB && hasBS ? pass(4, 4, `TB total: ₹${fmt(tbTotal)}`)
+    hasTB && hasBS ? pass(4, 4, `TB Dr side: ₹${fmt(tbDr)}`)
     : uncertain(4, 'Requires Trial Balance and Balance Sheet'),
     'Trial Balance total does not match Balance Sheet total');
 
@@ -419,7 +470,7 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     : !hasDaybook ? uncertain(3, 'Requires DayBook')
     : pass(3, 3, 'DayBook present — FY coverage assumed'));
 
-  c('F3', 'F', 'Narration on > 70% of vouchers',
+  c('F3', 'F', 'Narration on > 90% of vouchers (partial: 70–90%)',
     !hasDaybook ? uncertain(4, 'Requires DayBook')
     : totalVouchers === 0 ? uncertain(4, 'No vouchers parsed')
     : narratedPct >= 0.90 ? pass(4, 4, `${(narratedPct*100).toFixed(1)}% vouchers have narration`)
@@ -478,10 +529,10 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
 
   c('H1', 'H', 'DayBook Dr+Cr totals = Trial Balance totals',
     !(hasDaybook && hasTB) ? uncertain(10, 'Requires DayBook and Trial Balance')
-    : tbTotal === 0 ? uncertain(10, 'TB totals not extracted')
+    : tbDr === 0 ? uncertain(10, 'TB totals not extracted')
     : dbTotalForH === 0 ? uncertain(10, 'DayBook totals not computed')
-    : Math.abs(dbTotalForH - tbTotal) / tbTotal < 0.01 ? pass(10, 10, `DB ≈ TB ₹${fmt(tbTotal)}`)
-    : fail(10, `DB total ₹${fmt(dbTotalForH)} ≠ TB total ₹${fmt(tbTotal)} (>${(Math.abs(dbTotalForH-tbTotal)/tbTotal*100).toFixed(1)}%)`),
+    : Math.abs(dbTotalForH - tbDr) / tbDr < 0.01 ? pass(10, 10, `DB ≈ TB Dr ₹${fmt(tbDr)}`)
+    : fail(10, `DB total ₹${fmt(dbTotalForH)} ≠ TB Dr ₹${fmt(tbDr)} (>${(Math.abs(dbTotalForH-tbDr)/tbDr*100).toFixed(1)}%)`),
     'DayBook totals do not match Trial Balance');
 
   c('H2', 'H', 'Sales vouchers total = TB Sales ledger',
@@ -508,9 +559,7 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
 
   c('H5', 'H', 'Tax vouchers = Duties & Taxes TB ledger',
     !(gstApplicable || tdsApplicable) ? na('Not applicable')
-    : !(hasDaybook && hasTB) ? uncertain(6, 'Requires DayBook and Trial Balance')
-    : taxVoucherTotal === 0 ? uncertain(6, 'Tax voucher total not computed')
-    : pass(6, 6, `Tax vouchers: ₹${fmt(taxVoucherTotal)}`));
+    : uncertain(6, 'Tax voucher reconciliation requires tax-specific XML export (not yet available)'));
 
   c('H6', 'H', 'Journal entry net = P&L adjustment lines',
     !(hasDaybook && hasPL) ? uncertain(5, 'Requires DayBook and P&L')
@@ -518,7 +567,7 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     : Math.abs(journalNetAmt - netProfit) / (Math.abs(netProfit) || 1) < 0.05 ? pass(5, 5, 'Journal net aligns with P&L')
     : partial(1, 5, `Journal net ₹${fmt(journalNetAmt)} vs P&L profit ₹${fmt(netProfit)} (>5%)`));
 
-  c('H7', 'H', 'Net income−expense vouchers ≈ P&L net profit',
+  c('H7', 'H', 'DayBook sales total ≈ P&L revenue',
     !(hasDaybook && hasPL) ? uncertain(5, 'Requires DayBook and P&L')
     : revenue === 0 ? uncertain(5, 'Revenue not extracted from P&L')
     : Math.abs(dbSales - revenue) / (revenue || 1) < 0.05 ? pass(5, 5, `Sales ≈ Revenue ₹${fmt(revenue)}`)

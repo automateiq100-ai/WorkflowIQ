@@ -29,7 +29,7 @@ export const DIM_COLORS: Record<DimKey, string> = {
 export const FILE_TIERS = {
   required:    ['daybook', 'trialbal', 'pandl', 'bsheet', 'grpsum'] as FileKey[],
   conditional: ['sales', 'purchase', 'bills', 'payables', 'cashflow'] as FileKey[],
-  optional:    ['faregister', 'stock', 'bankrecon'] as FileKey[],
+  optional:    ['faregister', 'stock', 'bankrecon', 'master'] as FileKey[],
 };
 
 export const FILE_LABELS: Record<FileKey, string> = {
@@ -46,6 +46,7 @@ export const FILE_LABELS: Record<FileKey, string> = {
   faregister: 'Fixed Asset Register',
   stock: 'Stock Summary',
   bankrecon: 'Bank Reconciliation',
+  master: 'Chart of Accounts',
 };
 
 export const FILE_DESCRIPTIONS: Record<FileKey, string> = {
@@ -62,6 +63,7 @@ export const FILE_DESCRIPTIONS: Record<FileKey, string> = {
   faregister: 'Fixed asset schedule',
   stock: 'Stock summary / closing stock',
   bankrecon: 'Bank reconciliation statement',
+  master: 'Chart of Accounts (All Masters export)',
 };
 
 export const VIEWS: { id: ViewId; label: string; icon: string; }[] = [

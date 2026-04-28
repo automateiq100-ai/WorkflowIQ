@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useApp } from '@/lib/state';
-import type { TBLedger, ParsedData, ChunkedStats } from '@/lib/types';
+import type { TBLedger, ParsedData, ChunkedStats, PLSection, Voucher } from '@/lib/types';
 import AgentFixView from '@/app/views/AgentFixView';
 
 // ── Bill parser ────────────────────────────────────────────────────────────
@@ -16,26 +16,127 @@ interface Bill {
   type: 'receivable' | 'payable';
 }
 
+/** Parse a bill date string like '1-Apr-2025' or '20250401' into a Date, or null. */
+function parseBillDate(s: string): Date | null {
+  if (!s) return null;
+  // Handle 'D-Mon-YYYY' or 'DD-Mon-YYYY'
+  const m1 = s.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
+  if (m1) {
+    const months: Record<string, number> = { Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11 };
+    const mo = months[m1[2]];
+    if (mo === undefined) return null;
+    return new Date(parseInt(m1[3]), mo, parseInt(m1[1]));
+  }
+  // Handle 'YYYYMMDD'
+  if (/^\d{8}$/.test(s)) {
+    return new Date(parseInt(s.slice(0,4)), parseInt(s.slice(4,6))-1, parseInt(s.slice(6,8)));
+  }
+  return null;
+}
+
+/** Extract text content from the first matching tag (case-insensitive). */
+function tagVal(inner: string, ...tags: string[]): string {
+  for (const tag of tags) {
+    const m = inner.match(new RegExp(`<${tag}[^>]*>\\s*([\\s\\S]*?)\\s*<\\/${tag}>`, 'i'));
+    if (m) return m[1].trim();
+  }
+  return '';
+}
+
 function parseBills(xml: string, type: 'receivable' | 'payable'): Bill[] {
+  const today = new Date();
+  today.setHours(0,0,0,0);
   const bills: Bill[] = [];
-  // Match each DSPBILLDETAILS block
-  const blockRe = /<DSPBILLDETAILS[^>]*>([\s\S]*?)<\/DSPBILLDETAILS>/gi;
-  let block;
-  while ((block = blockRe.exec(xml)) !== null) {
-    const inner = block[1];
-    const party   = inner.match(/<DSPBILLPARTY[^>]*>\s*([\s\S]*?)\s*<\/DSPBILLPARTY>/i)?.[1]?.trim() ?? '';
-    const ref     = inner.match(/<DSPBILLREF[^>]*>\s*([\s\S]*?)\s*<\/DSPBILLREF>/i)?.[1]?.trim() ?? '';
-    const amtStr  = inner.match(/<DSPBILLFINAL[^>]*>\s*([\s\S]*?)\s*<\/DSPBILLFINAL>/i)?.[1]?.trim() ?? '0';
-    const dueStr  = inner.match(/<DSPBILLDUE[^>]*>\s*([\s\S]*?)\s*<\/DSPBILLDUE>/i)?.[1]?.trim() ?? '';
-    const overdueStr = inner.match(/<DSPBILLOVERDUE[^>]*>\s*([\s\S]*?)\s*<\/DSPBILLOVERDUE>/i)?.[1]?.trim() ?? '';
 
-    const amount = parseFloat(amtStr.replace(/,/g, '')) || 0;
-    const overdue = overdueStr.toLowerCase() === 'yes' || overdueStr === '1' || parseInt(overdueStr) > 0;
+  /** Push a bill if it has at least a party name or bill reference. */
+  function pushBill(party: string, ref: string, amtRaw: string, dueStr: string, overdueRaw: string) {
+    const amount = parseFloat(amtRaw.replace(/,/g, '')) || 0;
+    if (!party && !ref && amount === 0) return;
+    const dueDt = parseBillDate(dueStr);
+    const overdue = overdueRaw.toLowerCase() === 'yes' || overdueRaw === '1'
+      || (dueDt ? dueDt < today : false);
+    bills.push({ party, billRef: ref, amount: Math.abs(amount), dueDate: dueStr, overdue, type });
+  }
 
-    if (party || ref) {
-      bills.push({ party, billRef: ref, amount: Math.abs(amount), dueDate: dueStr, overdue, type });
+  // ── Format 1: DSPBILLDETAILS block (most common Tally display-report) ──
+  const fmt1Re = /<DSPBILLDETAILS[^>]*>([\s\S]*?)<\/DSPBILLDETAILS>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = fmt1Re.exec(xml)) !== null) {
+    const i = m[1];
+    pushBill(
+      tagVal(i, 'DSPBILLPARTY', 'DSPPARTYNAME', 'DSPBILLLEDGERNAME'),
+      tagVal(i, 'DSPBILLREF', 'DSPBILLNAME', 'DSPBILLREFNAME'),
+      tagVal(i, 'DSPBILLFINAL', 'DSPBILLFINALAMT', 'DSPBILLPENDAMT', 'DSPCLAMTA', 'DSPCURRENTBAL'),
+      tagVal(i, 'DSPBILLDUE', 'DSPBILLDUEDATE'),
+      tagVal(i, 'DSPBILLOVERDUE'),
+    );
+  }
+
+  // ── Format 2: DSPBILLEDDETAILS block (alternate Tally version) ──
+  if (bills.length === 0) {
+    const fmt2Re = /<DSPBILLEDDETAILS[^>]*>([\s\S]*?)<\/DSPBILLEDDETAILS>/gi;
+    while ((m = fmt2Re.exec(xml)) !== null) {
+      const i = m[1];
+      pushBill(
+        tagVal(i, 'DSPBILLPARTY', 'DSPPARTYNAME', 'DSPBILLLEDGERNAME'),
+        tagVal(i, 'DSPBILLREF', 'DSPBILLNAME', 'DSPBILLREFNAME'),
+        tagVal(i, 'DSPBILLFINAL', 'DSPBILLFINALAMT', 'DSPBILLPENDAMT', 'DSPCLAMTA', 'DSPCURRENTBAL'),
+        tagVal(i, 'DSPBILLDUE', 'DSPBILLDUEDATE'),
+        tagVal(i, 'DSPBILLOVERDUE'),
+      );
     }
   }
+
+  // ── Format 3: DSPBILLDETS / DSPBILLSDETAILS block ──
+  if (bills.length === 0) {
+    const fmt3Re = /<DSPBILLS?DETAILS?[^>]*>([\s\S]*?)<\/DSPBILLS?DETAILS?>/gi;
+    while ((m = fmt3Re.exec(xml)) !== null) {
+      const i = m[1];
+      pushBill(
+        tagVal(i, 'DSPBILLPARTY', 'DSPPARTYNAME', 'DSPBILLLEDGERNAME'),
+        tagVal(i, 'DSPBILLREF', 'DSPBILLNAME', 'DSPBILLREFNAME'),
+        tagVal(i, 'DSPBILLFINAL', 'DSPBILLFINALAMT', 'DSPBILLPENDAMT', 'DSPCLAMTA', 'DSPCURRENTBAL'),
+        tagVal(i, 'DSPBILLDUE', 'DSPBILLDUEDATE'),
+        tagVal(i, 'DSPBILLOVERDUE'),
+      );
+    }
+  }
+
+  // ── Format 4: LEDGER > BILLALLOCATIONS (data export format) ──
+  if (bills.length === 0) {
+    const ledgerRe = /<LEDGER\b[^>]*NAME="([^"]*)"[^>]*>([\s\S]*?)<\/LEDGER>/gi;
+    while ((m = ledgerRe.exec(xml)) !== null) {
+      const partyName = m[1].trim();
+      const ledgerBody = m[2];
+      const allocRe = /<BILLALLOCATIONS[^>]*>([\s\S]*?)<\/BILLALLOCATIONS>/gi;
+      let am: RegExpExecArray | null;
+      while ((am = allocRe.exec(ledgerBody)) !== null) {
+        const i = am[1];
+        const ref = tagVal(i, 'NAME', 'BILLNAME');
+        const amtRaw = tagVal(i, 'AMOUNT', 'BILLAMOUNT');
+        const dueStr = tagVal(i, 'DUEDATE', 'BILLDATE');
+        if (ref || amtRaw) {
+          pushBill(partyName, ref, amtRaw, dueStr, '');
+        }
+      }
+    }
+  }
+
+  // ── Format 5: flat BILLFIXED structure ──
+  if (bills.length === 0) {
+    const fmt5Re = /<BILLFIXED>([\s\S]*?)(?=<BILLFIXED>|<\/ENVELOPE>|$)/gi;
+    while ((m = fmt5Re.exec(xml)) !== null) {
+      const chunk = m[0];
+      pushBill(
+        tagVal(chunk, 'BILLPARTY'),
+        tagVal(chunk, 'BILLREF'),
+        tagVal(chunk, 'BILLFINAL'),
+        tagVal(chunk, 'BILLDUE'),
+        tagVal(chunk, 'BILLOVERDUE'),
+      );
+    }
+  }
+
   return bills;
 }
 
@@ -45,13 +146,18 @@ function formatAmount(n: number): string {
   return `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
 }
 
-function formatDate(d: string): string {
-  if (!d || d.length < 8) return d || '—';
-  // YYYYMMDD → DD Mon YYYY
-  const y = d.slice(0, 4), m = d.slice(4, 6), day = d.slice(6, 8);
-  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const mi = parseInt(m, 10) - 1;
-  return `${day} ${months[mi] ?? m} ${y}`;
+function formatDate(raw: string): string {
+  if (!raw) return '—';
+  // Try 'D-Mon-YYYY' or 'DD-Mon-YYYY' (e.g. '1-Apr-2025')
+  const m1 = raw.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
+  if (m1) return `${m1[1].padStart(2,'0')} ${m1[2]} ${m1[3]}`;
+  // Try YYYYMMDD
+  if (raw.length >= 8 && /^\d{8}/.test(raw)) {
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const y = raw.slice(0,4), mo = parseInt(raw.slice(4,6),10)-1, day = raw.slice(6,8);
+    return `${day} ${months[mo] ?? raw.slice(4,6)} ${y}`;
+  }
+  return raw;
 }
 
 // ── Tab types ──────────────────────────────────────────────────────────────
@@ -232,57 +338,124 @@ function TBTab({ ledgers, failedChecks }: {
 
 // ── P&L tab ────────────────────────────────────────────────────────────────
 
-function PLTab({ pd }: { pd: Record<string, unknown> }) {
-  const revenue    = (pd.revenue as number) ?? 0;
-  const expenses   = (pd.expenses as number) ?? 0;
-  const netProfit  = (pd.netProfit as number) ?? 0;
-  const bsNet      = pd.bsNetProfit as number | null;
-  const dep        = (pd.depAmt as number) ?? 0;
-  const openStock  = (pd.openingStock as number) ?? 0;
-  const closeStock = (pd.closingStock as number) ?? 0;
-  const gstOut     = (pd.outputGSTAmt as number) ?? 0;
-  const gstIn      = (pd.inputITCAmt as number) ?? 0;
-  const margin     = revenue > 0 ? ((netProfit / revenue) * 100) : null;
+/** Expandable row for a P&L group that has children in the XML */
+function PLGroupRow({ label, total, children, color, note }: {
+  label: string; total: number; children: Array<{name:string;amount:number}>;
+  color?: string; note?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const hasChildren = children.length > 0;
+  return (
+    <>
+      <tr
+        onClick={() => hasChildren && setOpen(v => !v)}
+        style={{ borderBottom: '1px solid var(--border)', cursor: hasChildren ? 'pointer' : 'default', background: 'rgba(255,255,255,0.02)' }}
+      >
+        <td className="px-6 py-2.5 font-semibold" style={{ color: 'var(--text1)', userSelect: 'none' }}>
+          {hasChildren && <span style={{ marginRight: 6, fontSize: 10, color: 'var(--text3)' }}>{open ? '▼' : '▶'}</span>}
+          {label}
+          {note && <span className="text-xs font-normal ml-2" style={{ color: 'var(--text3)' }}>{note}</span>}
+        </td>
+        <td className="px-6 py-2.5 text-right font-mono font-bold" style={{ color: color ?? 'var(--text1)' }}>
+          {formatAmount(total)}
+        </td>
+      </tr>
+      {open && children.map(ch => (
+        <tr key={ch.name} style={{ borderBottom: '1px solid var(--border)', background: 'transparent' }}>
+          <td className="py-1.5 text-xs" style={{ color: 'var(--text2)', paddingLeft: '2.5rem' }}>{ch.name}</td>
+          <td className="px-6 py-1.5 text-right font-mono text-xs" style={{ color: 'var(--text2)' }}>{formatAmount(ch.amount)}</td>
+        </tr>
+      ))}
+    </>
+  );
+}
 
-  const rows: [string, number | null, string?][] = [
-    ['Revenue / Turnover', revenue, 'var(--teal)'],
-    ['Total Expenses', expenses, 'var(--coral)'],
-    ['Net Profit (P&L derived)', netProfit, netProfit >= 0 ? 'var(--green)' : 'var(--red)'],
-    ['Net Profit (Balance Sheet)', bsNet, bsNet != null ? (bsNet >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--text3)'],
-    ['Depreciation', dep, 'var(--text2)'],
-    ['Opening Stock', openStock, 'var(--text2)'],
-    ['Closing Stock', closeStock, 'var(--text2)'],
-    ['GST Output Tax', gstOut, 'var(--text2)'],
-    ['GST Input ITC', gstIn, 'var(--text2)'],
-  ];
+function PLTab({ pd }: { pd: Record<string, unknown> }) {
+  const plSections = (pd.plSections as PLSection[] | undefined) ?? [];
+  const directRevenue  = (pd.directRevenue as number) ?? 0;
+  const otherIncome    = (pd.otherIncome as number) ?? 0;
+  const costOfMaterials = (pd.costOfMaterials as number) ?? 0;
+  const expenses       = (pd.expenses as number) ?? 0;
+  const netProfit      = (pd.netProfit as number) ?? 0;
+  const totalIncome    = directRevenue + otherIncome;
+  const totalExpenses  = expenses;
+
+  // Map sections from XML to schedule groups
+  const salesSections  = plSections.filter(s => s.name.toLowerCase().includes('sales') && !s.name.toLowerCase().includes('cost of sales'));
+  const purchSections  = plSections.filter(s => {
+    const nl = s.name.toLowerCase();
+    return nl.includes('purchase') || nl.includes('cost of sales') || nl.includes('direct expense') || nl.includes('manufacturing');
+  });
+  const incomeSections = plSections.filter(s => !s.name.toLowerCase().includes('sales') && !s.name.toLowerCase().includes('purchase') && (s.name.toLowerCase().includes('income')));
+  const expSections    = plSections.filter(s => !salesSections.includes(s) && !purchSections.includes(s) && !incomeSections.includes(s));
+
+  // Divider row
+  const Divider = ({ label }: { label: string }) => (
+    <tr style={{ background: 'var(--bg3)', borderBottom: '1px solid var(--border)' }}>
+      <td colSpan={2} className="px-6 py-2 text-xs font-bold uppercase tracking-widest" style={{ color: 'var(--text3)' }}>{label}</td>
+    </tr>
+  );
 
   return (
-    <div className="flex flex-col gap-4 max-w-xl">
-      {margin !== null && (
-        <div className="px-4 py-3 rounded-lg" style={{ background: 'var(--bg3)', border: '1px solid var(--border)' }}>
-          <div className="text-xs" style={{ color: 'var(--text3)' }}>Net Profit Margin</div>
-          <div className="text-2xl font-bold" style={{ color: margin >= 0 ? 'var(--teal)' : 'var(--red)' }}>
-            {margin.toFixed(1)}%
-          </div>
-        </div>
-      )}
-      <div className="overflow-auto rounded-lg" style={{ border: '1px solid var(--border)' }}>
+    <div className="flex flex-col gap-4 max-w-2xl">
+      <div className="overflow-auto rounded-xl border shadow-sm" style={{ borderColor: 'var(--border)', background: 'var(--bg2)' }}>
         <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
-          <thead style={{ background: 'var(--bg3)' }}>
-            <tr>
-              <th className="px-4 py-2 text-left text-xs" style={{ color: 'var(--text3)', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>Line Item</th>
-              <th className="px-4 py-2 text-right text-xs" style={{ color: 'var(--text3)', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>Amount</th>
+          <thead>
+            <tr style={{ background: 'var(--bg3)', borderBottom: '2px solid var(--border)' }}>
+              <th className="px-6 py-3 text-left text-xs uppercase tracking-wider" style={{ color: 'var(--text3)', fontWeight: 700 }}>Particulars</th>
+              <th className="px-6 py-3 text-right text-xs uppercase tracking-wider" style={{ color: 'var(--text3)', fontWeight: 700 }}>Amount (₹)</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map(([label, val, color], i) => (
-              <tr key={label} style={{ background: i % 2 === 0 ? 'var(--bg)' : 'var(--bg2)', borderBottom: '1px solid var(--border)' }}>
-                <td className="px-4 py-2" style={{ color: 'var(--text2)' }}>{label}</td>
-                <td className="px-4 py-2 text-right font-mono text-xs" style={{ color: color ?? 'var(--text1)' }}>
-                  {val != null ? formatAmount(val) : '—'}
-                </td>
+            <Divider label="I  Revenue from operations" />
+            {salesSections.length > 0 ? salesSections.map(s => (
+              <PLGroupRow key={s.name} label={s.name} total={Math.abs(s.total)} children={s.children.map(c => ({ name: c.name, amount: Math.abs(c.amount) }))} color="var(--teal)" />
+            )) : (
+              <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                <td className="px-6 py-2.5" style={{ color: 'var(--text2)' }}>Sales Accounts</td>
+                <td className="px-6 py-2.5 text-right font-mono font-bold" style={{ color: 'var(--teal)' }}>{formatAmount(directRevenue)}</td>
               </tr>
+            )}
+            <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(20,184,166,0.06)' }}>
+              <td className="px-6 py-2.5 font-bold" style={{ color: 'var(--text1)' }}>Total Revenue from Operations (I)</td>
+              <td className="px-6 py-2.5 text-right font-mono font-bold" style={{ color: 'var(--teal)' }}>{formatAmount(directRevenue)}</td>
+            </tr>
+
+            <Divider label="II  Other Income" />
+            {incomeSections.length > 0 ? incomeSections.map(s => (
+              <PLGroupRow key={s.name} label={s.name} total={Math.abs(s.total)} children={s.children.map(c => ({ name: c.name, amount: Math.abs(c.amount) }))} color="var(--green)" />
+            )) : (
+              <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                <td className="px-6 py-2.5" style={{ color: 'var(--text2)' }}>Other Income</td>
+                <td className="px-6 py-2.5 text-right font-mono font-bold" style={{ color: 'var(--green)' }}>{formatAmount(otherIncome)}</td>
+              </tr>
+            )}
+            <tr style={{ borderBottom: '2px solid var(--border)', background: 'rgba(20,184,166,0.08)' }}>
+              <td className="px-6 py-2.5 font-bold" style={{ color: 'var(--text1)' }}>III  Total Income (I + II)</td>
+              <td className="px-6 py-2.5 text-right font-mono font-bold" style={{ color: 'var(--teal)' }}>{formatAmount(totalIncome)}</td>
+            </tr>
+
+            <Divider label="IV  Expenses" />
+            {purchSections.length > 0 ? purchSections.map(s => (
+              <PLGroupRow key={s.name} label="Cost of materials consumed" total={Math.abs(s.total)} children={s.children.map(c => ({ name: c.name, amount: Math.abs(c.amount) }))} color="var(--coral)" note={`(${s.name})`} />
+            )) : (
+              <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                <td className="px-6 py-2.5" style={{ color: 'var(--text2)' }}>Cost of materials consumed</td>
+                <td className="px-6 py-2.5 text-right font-mono" style={{ color: 'var(--coral)' }}>{formatAmount(costOfMaterials)}</td>
+              </tr>
+            )}
+            {expSections.map(s => (
+              <PLGroupRow key={s.name} label={s.name} total={Math.abs(s.total)} children={s.children.map(c => ({ name: c.name, amount: Math.abs(c.amount) }))} color="var(--coral)" />
             ))}
+            <tr style={{ borderBottom: '2px solid var(--border)', background: 'rgba(242,107,91,0.06)' }}>
+              <td className="px-6 py-2.5 font-bold" style={{ color: 'var(--text1)' }}>Total Expenses (IV)</td>
+              <td className="px-6 py-2.5 text-right font-mono font-bold" style={{ color: 'var(--coral)' }}>{formatAmount(totalExpenses)}</td>
+            </tr>
+
+            <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(255,255,255,0.04)' }}>
+              <td className="px-6 py-3 font-bold" style={{ color: 'var(--text1)' }}>V  Profit / (Loss) before tax (III − IV)</td>
+              <td className="px-6 py-3 text-right font-mono font-bold" style={{ color: netProfit >= 0 ? 'var(--green)' : 'var(--red)', fontSize: '1rem' }}>{formatAmount(totalIncome - totalExpenses)}</td>
+            </tr>
           </tbody>
         </table>
       </div>
@@ -292,68 +465,105 @@ function PLTab({ pd }: { pd: Record<string, unknown> }) {
 
 // ── Balance Sheet tab ──────────────────────────────────────────────────────
 
-function BSTab({ pd }: { pd: Record<string, unknown> }) {
-  const ca      = (pd.ca as number) ?? 0;
-  const cl      = (pd.cl as number) ?? 0;
-  const bankBal = (pd.bankBal as number) ?? 0;
-  const debtors = (pd.debtorBal as number) ?? 0;
-  const creds   = (pd.creditorBal as number) ?? 0;
-  const fa      = (pd.fixedAssets as number) ?? 0;
-  const bsNet   = pd.bsNetProfit as number | null;
-  const currentRatio = cl !== 0 ? ca / Math.abs(cl) : null;
+/** Expandable balance sheet group row */
+function BSGroupRow({ label, amount, children, color }: {
+  label: string; amount: number; children?: Array<{name:string;amount:number}>;
+  color?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const hasChildren = (children?.length ?? 0) > 0;
+  return (
+    <>
+      <tr
+        onClick={() => hasChildren && setOpen(v => !v)}
+        style={{ borderBottom: '1px solid var(--border)', cursor: hasChildren ? 'pointer' : 'default' }}
+      >
+        <td className="px-6 py-2.5" style={{ color: 'var(--text1)', fontWeight: 500, userSelect: 'none' }}>
+          {hasChildren && <span style={{ marginRight: 6, fontSize: 10, color: 'var(--text3)' }}>{open ? '▼' : '▶'}</span>}
+          {label}
+        </td>
+        <td className="px-6 py-2.5 text-right font-mono" style={{ color: color ?? 'var(--text1)', fontWeight: hasChildren ? 600 : 400 }}>
+          {formatAmount(amount)}
+        </td>
+      </tr>
+      {open && children?.map(ch => (
+        <tr key={ch.name} style={{ borderBottom: '1px solid var(--border)', background: 'transparent' }}>
+          <td className="py-1.5 text-xs" style={{ color: 'var(--text2)', paddingLeft: '2.5rem' }}>{ch.name}</td>
+          <td className="px-6 py-1.5 text-right font-mono text-xs" style={{ color: 'var(--text2)' }}>{formatAmount(ch.amount)}</td>
+        </tr>
+      ))}
+    </>
+  );
+}
 
-  const sections = [
-    {
-      title: 'Assets',
-      rows: [
-        ['Fixed Assets', fa, 'var(--blue)'],
-        ['Current Assets', ca, 'var(--teal)'],
-        ['Debtors / Receivables', debtors, 'var(--text2)'],
-        ['Bank & Cash Balance', bankBal, 'var(--green)'],
-      ] as [string, number, string][],
-    },
-    {
-      title: 'Liabilities',
-      rows: [
-        ['Current Liabilities', cl, 'var(--coral)'],
-        ['Creditors / Payables', creds, 'var(--text2)'],
-        ['Net Profit (BS)', bsNet ?? 0, bsNet != null ? (bsNet >= 0 ? 'var(--green)' : 'var(--red)') : 'var(--text3)'],
-      ] as [string, number, string][],
-    },
-  ];
+function BSTab({ pd }: { pd: Record<string, unknown> }) {
+  // In Tally BS export convention:
+  // Assets: BSSUBAMT with positive = Dr = asset (show as positive)
+  //         But in the BSheet.xml, Tally stores ASSETS as NEGATIVE (Cr convention for the ledger side)
+  //         So we negate: display value = -rawValue for assets
+  const ca      = -(pd.ca as number ?? 0);          // negate: negative in Tally = asset
+  const fa      = Math.abs((pd.fixedAssets as number) ?? 0);
+  const stock   = Math.abs((pd.closingStock as number) ?? 0);
+  const bankBal = Math.abs((pd.bankBal as number) ?? 0);
+  const debtors = Math.abs((pd.debtorBal as number) ?? 0);
+  const cl      = Math.abs((pd.cl as number) ?? 0);
+  const bsNet   = (pd.bsNetProfit as number) ?? 0;
+  const creds   = Math.abs((pd.creditorBal as number) ?? 0);
+  const bsCashBankTotal = Math.abs((pd.bsCashBankTotal as number) ?? 0);
+
+  // Others in current assets = CA total - known items
+  const knownCA = stock + debtors + bankBal;
+  const otherCA = Math.max(0, ca - knownCA);
+
+  const BSSection = ({ title, children }: { title: string; children: React.ReactNode }) => (
+    <div className="flex flex-col gap-2">
+      <div className="text-xs font-bold uppercase tracking-widest px-1 mt-2" style={{ color: 'var(--text3)' }}>{title}</div>
+      <div className="overflow-auto rounded-xl border shadow-sm" style={{ borderColor: 'var(--border)', background: 'var(--bg2)' }}>
+        <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
+          <tbody>{children}</tbody>
+        </table>
+      </div>
+    </div>
+  );
+
+  const Divider = ({ label }: { label: string }) => (
+    <tr style={{ background: 'var(--bg3)', borderBottom: '1px solid var(--border)' }}>
+      <td colSpan={2} className="px-6 py-1.5 text-xs font-semibold" style={{ color: 'var(--text3)' }}>{label}</td>
+    </tr>
+  );
+
+  const TotalRow = ({ label, value, color }: { label: string; value: number; color: string }) => (
+    <tr style={{ background: 'rgba(255,255,255,0.04)', borderTop: '2px solid var(--border)' }}>
+      <td className="px-6 py-3 font-bold" style={{ color: 'var(--text1)' }}>{label}</td>
+      <td className="px-6 py-3 text-right font-mono font-bold" style={{ color, fontSize: '1rem' }}>{formatAmount(value)}</td>
+    </tr>
+  );
 
   return (
-    <div className="flex flex-col gap-4 max-w-xl">
-      {currentRatio !== null && (
-        <div className="flex gap-3">
-          <div className="px-4 py-3 rounded-lg flex-1" style={{ background: 'var(--bg3)', border: '1px solid var(--border)' }}>
-            <div className="text-xs" style={{ color: 'var(--text3)' }}>Current Ratio</div>
-            <div className="text-2xl font-bold" style={{ color: currentRatio >= 1.5 ? 'var(--teal)' : currentRatio >= 1 ? 'var(--amber)' : 'var(--red)' }}>
-              {currentRatio.toFixed(2)}x
-            </div>
-            <div className="text-xs mt-0.5" style={{ color: 'var(--text3)' }}>Ideal: ≥ 1.5</div>
-          </div>
-        </div>
-      )}
-      {sections.map(sec => (
-        <div key={sec.title}>
-          <div className="text-xs font-semibold px-1 mb-1" style={{ color: 'var(--text3)' }}>{sec.title.toUpperCase()}</div>
-          <div className="overflow-auto rounded-lg" style={{ border: '1px solid var(--border)' }}>
-            <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
-              <tbody>
-                {sec.rows.map(([label, val, color], i) => (
-                  <tr key={label} style={{ background: i % 2 === 0 ? 'var(--bg)' : 'var(--bg2)', borderBottom: '1px solid var(--border)' }}>
-                    <td className="px-4 py-2" style={{ color: 'var(--text2)' }}>{label}</td>
-                    <td className="px-4 py-2 text-right font-mono text-xs" style={{ color }}>
-                      {formatAmount(val)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      ))}
+    <div className="flex flex-col gap-4 max-w-2xl">
+      <BSSection title="ASSETS">
+        <Divider label="Non-current assets" />
+        <BSGroupRow label="(a) Property, Plant and Equipment" amount={fa} color="var(--blue)" />
+        <BSGroupRow label="(b) Capital work-in-progress" amount={0} color="var(--text2)" />
+        <Divider label="Current assets" />
+        <BSGroupRow label="(a) Inventories" amount={stock} color="var(--text2)" />
+        <BSGroupRow label="(b) Trade receivables" amount={debtors} color="var(--text2)" />
+        <BSGroupRow label="(c) Cash and cash equivalents" amount={bsCashBankTotal || bankBal} color="var(--green)" />
+        {otherCA > 1 && <BSGroupRow label="(d) Others" amount={otherCA} color="var(--text2)" />}
+        <TotalRow label="Total Assets" value={ca + fa} color="var(--teal)" />
+      </BSSection>
+
+      <BSSection title="EQUITY AND LIABILITIES">
+        <Divider label="Equity" />
+        <BSGroupRow label="(a) Equity Share capital" amount={0} color="var(--text2)" />
+        <BSGroupRow label="(b) Other Equity (Profit & Loss)" amount={bsNet} color={bsNet >= 0 ? 'var(--green)' : 'var(--red)'} />
+        <Divider label="Non-current liabilities" />
+        <BSGroupRow label="(a) Borrowings" amount={0} color="var(--text2)" />
+        <Divider label="Current liabilities" />
+        <BSGroupRow label="(a) Trade payables" amount={creds} color="var(--text2)" />
+        <BSGroupRow label="(b) Other current liabilities" amount={cl - creds > 0 ? cl - creds : 0} color="var(--text2)" />
+        <TotalRow label="Total Equity and Liabilities" value={bsNet + cl} color="var(--coral)" />
+      </BSSection>
     </div>
   );
 }
@@ -461,6 +671,12 @@ function BillsTab({ billsXml, payablesXml }: { billsXml: string | null; payables
 // ── DayBook Stats tab ──────────────────────────────────────────────────────
 
 function DayBookTab({ stats }: { stats: ChunkedStats | null }) {
+  const [showTxns, setShowTxns] = useState(false);
+  const [page, setPage] = useState(1);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [filterType, setFilterType] = useState('All');
+  const limit = 100;
+
   if (!stats) {
     return (
       <div className="flex items-center justify-center py-16" style={{ color: 'var(--text3)' }}>
@@ -553,7 +769,122 @@ function DayBookTab({ stats }: { stats: ChunkedStats | null }) {
           </div>
         </div>
       )}
+
+      {/* Transactions Toggle */}
+      {stats.vouchers && stats.vouchers.length > 0 && (
+        <div className="mt-4 border-t pt-6" style={{ borderColor: 'var(--border)' }}>
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <div className="text-sm font-semibold" style={{ color: 'var(--text1)' }}>Raw Transactions</div>
+              <div className="text-xs" style={{ color: 'var(--text3)' }}>{stats.vouchers.length.toLocaleString('en-IN')} vouchers extracted from DayBook</div>
+            </div>
+            <button 
+              onClick={() => setShowTxns(!showTxns)}
+              className="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+              style={{ background: showTxns ? 'var(--bg3)' : 'var(--teal)', color: showTxns ? 'var(--text1)' : '#000' }}
+            >
+              {showTxns ? 'Hide Transactions' : 'View Transactions'}
+            </button>
+          </div>
+
+          {showTxns && (() => {
+            // Apply filtering and searching
+            const filteredVouchers = stats.vouchers!.filter(v => {
+              if (filterType !== 'All' && v.type.toLowerCase() !== filterType.toLowerCase()) return false;
+              if (searchTerm) {
+                const term = searchTerm.toLowerCase();
+                return (
+                  v.party.toLowerCase().includes(term) ||
+                  v.vno.toLowerCase().includes(term) ||
+                  v.narration.toLowerCase().includes(term) ||
+                  v.amount.toString().includes(term)
+                );
+              }
+              return true;
+            });
+            const totalPages = Math.ceil(filteredVouchers.length / limit);
+            const currentVouchers = filteredVouchers.slice((page - 1) * limit, page * limit);
+
+            // Get unique voucher types for the filter dropdown
+            const voucherTypes = ['All', ...Array.from(new Set(stats.vouchers!.map(v => v.type))).filter(Boolean).sort()];
+
+            return (
+              <div className="flex flex-col gap-3 animate-fade-in">
+                {/* Search & Filter Bar */}
+                <div className="flex gap-3">
+                  <input
+                    type="text"
+                    placeholder="Search party, voucher no, narration, amount..."
+                    value={searchTerm}
+                    onChange={(e) => { setSearchTerm(e.target.value); setPage(1); }}
+                    className="flex-1 px-3 py-2 rounded-lg text-sm"
+                    style={{ background: 'var(--bg2)', border: '1px solid var(--border)', color: 'var(--text1)', outline: 'none' }}
+                  />
+                  <select
+                    value={filterType}
+                    onChange={(e) => { setFilterType(e.target.value); setPage(1); }}
+                    className="px-3 py-2 rounded-lg text-sm capitalize"
+                    style={{ background: 'var(--bg2)', border: '1px solid var(--border)', color: 'var(--text1)', outline: 'none', cursor: 'pointer' }}
+                  >
+                    {voucherTypes.map(vt => (
+                      <option key={vt} value={vt} className="capitalize">{vt}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Data Table */}
+                <div className="overflow-auto rounded-lg" style={{ border: '1px solid var(--border)', maxHeight: 500 }}>
+                  <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
+                    <thead style={{ background: 'var(--bg3)', position: 'sticky', top: 0 }}>
+                      <tr>
+                        <th className="px-3 py-2 text-xs text-left" style={{ color: 'var(--text3)', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>Date</th>
+                        <th className="px-3 py-2 text-xs text-left" style={{ color: 'var(--text3)', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>Type</th>
+                        <th className="px-3 py-2 text-xs text-left" style={{ color: 'var(--text3)', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>Voucher No</th>
+                        <th className="px-3 py-2 text-xs text-left" style={{ color: 'var(--text3)', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>Party/Ledger</th>
+                        <th className="px-3 py-2 text-xs text-left" style={{ color: 'var(--text3)', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>Narration</th>
+                        <th className="px-3 py-2 text-xs text-right" style={{ color: 'var(--text3)', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>Amount (₹)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {currentVouchers.map((v, i) => (
+                        <tr key={i} style={{ background: i % 2 === 0 ? 'var(--bg)' : 'var(--bg2)', borderBottom: '1px solid var(--border)' }}>
+                          <td className="px-3 py-2 text-xs whitespace-nowrap" style={{ color: 'var(--text2)' }}>{formatDate(v.date)}</td>
+                          <td className="px-3 py-2 text-xs capitalize whitespace-nowrap" style={{ color: 'var(--text1)' }}>{v.type}</td>
+                          <td className="px-3 py-2 text-xs font-mono" style={{ color: 'var(--text2)' }}>{v.vno || '—'}</td>
+                          <td className="px-3 py-2 text-xs" style={{ color: 'var(--teal)' }}>{v.party || '—'}</td>
+                          <td className="px-3 py-2 text-xs" style={{ color: 'var(--text2)', maxWidth: 200 }}><div className="truncate" title={v.narration}>{v.narration || '—'}</div></td>
+                          <td className="px-3 py-2 text-xs font-mono text-right font-semibold" style={{ color: 'var(--text1)' }}>{formatAmount(v.amount)}</td>
+                        </tr>
+                      ))}
+                      {currentVouchers.length === 0 && (
+                        <tr>
+                          <td colSpan={6} className="px-3 py-8 text-center text-sm" style={{ color: 'var(--text3)' }}>No transactions match your search</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+                
+                {/* Pagination */}
+                {filteredVouchers.length > 0 && (
+                  <div className="flex items-center justify-between mt-2">
+                    <div className="text-xs" style={{ color: 'var(--text3)' }}>
+                      Showing {(page - 1) * limit + 1} to {Math.min(page * limit, filteredVouchers.length)} of {filteredVouchers.length.toLocaleString('en-IN')}
+                      {filteredVouchers.length < stats.vouchers!.length && ` (filtered from ${stats.vouchers!.length.toLocaleString('en-IN')})`}
+                    </div>
+                    <div className="flex gap-2">
+                      <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="px-3 py-1 rounded text-xs disabled:opacity-30" style={{ background: 'var(--bg3)', color: 'var(--text1)' }}>Prev</button>
+                      <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page >= totalPages} className="px-3 py-1 rounded text-xs disabled:opacity-30" style={{ background: 'var(--bg3)', color: 'var(--text1)' }}>Next</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+        </div>
+      )}
     </div>
+
   );
 }
 

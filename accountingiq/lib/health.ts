@@ -71,14 +71,8 @@ export function generateHealthSignals(
       note: 'From Balance Sheet',
     });
 
-    // Bug 1: don't compute current ratio when CA is negative
-    if (ca < 0) {
-      signals.push({
-        category: 'Liquidity',
-        signal: 'Current Ratio',
-        value: 'N/A',
-        note: 'Cannot compute — Current Assets negative',
-      });
+    if (ca === 0) {
+      // Cannot compute current ratio when CA is zero
     } else if (cl !== 0) {
       const currentRatio = ca / Math.abs(cl);
       signals.push({

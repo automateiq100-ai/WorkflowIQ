@@ -33,6 +33,7 @@ export function parseDAYBOOK_chunked(
     totalDebit: 0, totalCredit: 0, salesVoucherTotal: 0,
     purchVoucherTotal: 0, cashBankNetMovement: 0,
     taxVoucherTotal: 0, journalNetAmt: 0, outOfFY: 0,
+    vouchers: [],
   };
 
   const dateSet = new Set<string>();
