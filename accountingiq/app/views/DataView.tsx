@@ -249,6 +249,94 @@ function StrictStatementTable({ statement, masterLoaded = false }: { statement: 
   );
 }
 
+// ── BS two-column layout (Liabilities | Assets) ───────────────────────────
+
+function BSSectionTable({
+  title, nodes, totalLabel, masterLoaded,
+}: {
+  title: string;
+  nodes: FinancialNode[];
+  totalLabel: string;
+  masterLoaded: boolean;
+}) {
+  const total = nodes.reduce((s, n) => s + Math.abs(n.amount), 0);
+  return (
+    <div className="flex flex-col gap-1">
+      <div
+        className="text-xs font-bold uppercase tracking-widest px-2 py-1 rounded"
+        style={{ background: 'var(--bg3)', color: 'var(--text3)' }}
+      >
+        {title}
+      </div>
+      <div className="overflow-auto rounded-xl border shadow-sm" style={{ borderColor: 'var(--border)', background: 'var(--bg2)' }}>
+        <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
+          <thead>
+            <tr style={{ background: 'var(--bg3)', borderBottom: '2px solid var(--border)' }}>
+              <th className="px-4 py-2.5 text-left text-xs uppercase tracking-wider" style={{ color: 'var(--text3)', fontWeight: 700 }}>Particulars</th>
+              <th className="px-4 py-2.5 text-right text-xs uppercase tracking-wider" style={{ color: 'var(--text3)', fontWeight: 700 }}>Amount (₹)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {nodes.length === 0 && (
+              <tr><td colSpan={2} className="px-4 py-6 text-center text-xs" style={{ color: 'var(--text3)' }}>—</td></tr>
+            )}
+            {nodes.map(node => <StrictStatementRow key={node.id} node={node} masterLoaded={masterLoaded} />)}
+            <tr style={{ background: 'var(--bg3)', borderTop: '2px solid var(--border)' }}>
+              <td className="px-4 py-2.5 text-xs font-bold" style={{ color: 'var(--text1)' }}>{totalLabel}</td>
+              <td className="px-4 py-2.5 text-right font-mono font-bold text-sm" style={{ color: 'var(--teal)' }}>
+                {formatAmount(total)}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function BSStrictView({ statement, masterLoaded }: { statement: ParsedStatement; masterLoaded: boolean }) {
+  // Tally sign convention: positive = Cr (liabilities/equity), negative = Dr (assets)
+  const liabilityNodes = statement.nodes.filter(n => n.amount >= 0);
+  const assetNodes     = statement.nodes.filter(n => n.amount < 0);
+
+  const liabilityTotal = liabilityNodes.reduce((s, n) => s + n.amount, 0);
+  const assetTotal     = assetNodes.reduce((s, n) => s + Math.abs(n.amount), 0);
+  const balanced       = Math.abs(liabilityTotal - assetTotal) < 1;
+
+  return (
+    <div className="flex flex-col gap-3">
+      {/* Balance indicator */}
+      <div className="flex items-center gap-2">
+        <span
+          className="text-xs px-2 py-0.5 rounded font-semibold"
+          style={{
+            background: balanced ? 'rgba(76,175,121,0.12)' : 'rgba(239,68,68,0.12)',
+            color: balanced ? 'var(--green)' : 'var(--red)',
+          }}
+        >
+          {balanced ? '✓ Assets = Liabilities' : `⚠ Difference: ${formatAmount(Math.abs(liabilityTotal - assetTotal))}`}
+        </span>
+      </div>
+
+      {/* Two-column layout */}
+      <div className="grid grid-cols-2 gap-5">
+        <BSSectionTable
+          title="Liabilities"
+          nodes={liabilityNodes}
+          totalLabel="Total Liabilities"
+          masterLoaded={masterLoaded}
+        />
+        <BSSectionTable
+          title="Assets"
+          nodes={assetNodes}
+          totalLabel="Total Assets"
+          masterLoaded={masterLoaded}
+        />
+      </div>
+    </div>
+  );
+}
+
 // ── Tab types ──────────────────────────────────────────────────────────────
 
 type Tab = 'tb' | 'pl' | 'bs' | 'bills' | 'daybook' | 'fix';
@@ -315,7 +403,8 @@ function TBTab({ ledgers, failedChecks }: {
     else { setSortKey(key); setSortDir('desc'); }
   }
 
-  const drTotal = ledgers.filter(l => l.dr).reduce((s, l) => s + l.closing, 0);
+  // Sign convention: Dr = negative, Cr = positive (matches Tally display)
+  const drTotal = ledgers.filter(l => l.dr).reduce((s, l) => s + Math.abs(l.closing), 0);
   const crTotal = ledgers.filter(l => !l.dr).reduce((s, l) => s + Math.abs(l.closing), 0);
   const diff = drTotal - crTotal;
 
@@ -330,8 +419,8 @@ function TBTab({ ledgers, failedChecks }: {
       {/* Totals bar */}
       <div className="flex gap-4 flex-wrap">
         {[
-          { label: 'Total Dr', value: drTotal, color: 'var(--teal)' },
-          { label: 'Total Cr', value: crTotal, color: 'var(--coral)' },
+          { label: 'Total Dr', value: -drTotal, color: 'var(--coral)' },
+          { label: 'Total Cr', value: crTotal, color: 'var(--teal)' },
           { label: 'Difference', value: diff, color: Math.abs(diff) < 1 ? 'var(--green)' : 'var(--red)' },
           { label: 'Ledgers', value: ledgers.length, color: 'var(--text2)', raw: true },
         ].map(s => (
@@ -396,12 +485,12 @@ function TBTab({ ledgers, failedChecks }: {
                   style={{ background: flag ? 'rgba(251,191,36,0.06)' : i % 2 === 0 ? 'var(--bg)' : 'var(--bg2)', borderBottom: '1px solid var(--border)' }}
                 >
                   <td className="px-3 py-1.5" style={{ color: 'var(--text1)' }}>{l.name}</td>
-                  <td className="px-3 py-1.5 text-right font-mono text-xs" style={{ color: l.dr ? 'var(--teal)' : 'var(--coral)' }}>
-                    {formatAmount(Math.abs(l.closing))}
+                  <td className="px-3 py-1.5 text-right font-mono text-xs" style={{ color: l.dr ? 'var(--coral)' : 'var(--teal)' }}>
+                    {formatAmount(l.dr ? -Math.abs(l.closing) : Math.abs(l.closing))}
                   </td>
                   <td className="px-3 py-1.5 text-center">
                     <span className="px-2 py-0.5 rounded text-xs font-medium"
-                      style={{ background: l.dr ? 'rgba(20,184,166,0.12)' : 'rgba(251,146,60,0.12)', color: l.dr ? 'var(--teal)' : 'var(--coral)' }}>
+                      style={{ background: l.dr ? 'rgba(242,107,91,0.12)' : 'rgba(20,184,166,0.12)', color: l.dr ? 'var(--coral)' : 'var(--teal)' }}>
                       {l.dr ? 'Dr' : 'Cr'}
                     </span>
                   </td>
@@ -595,7 +684,7 @@ function BSTab({ pd }: { pd: Record<string, unknown> }) {
   const strictStatement = pd.bsheetStatement as ParsedStatement | undefined;
   const masterLoaded = ((pd.masterEntries as unknown[] | undefined)?.length ?? 0) > 0;
   if (strictStatement?.nodes?.length) {
-    return <StrictStatementTable statement={strictStatement} masterLoaded={masterLoaded} />;
+    return <BSStrictView statement={strictStatement} masterLoaded={masterLoaded} />;
   }
 
   // In Tally BS export convention:
