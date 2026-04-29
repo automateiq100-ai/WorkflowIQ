@@ -456,6 +456,30 @@ function fmtTBAmt(v: number): string {
   return Math.abs(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+/**
+ * Recursively compute the Dr / Cr split of closing balances under a node,
+ * matching Tally's "Trial Balance — Closing Balance" report:
+ *   - leaf ledgers contribute their |closing| to Dr (closing<0) or Cr (closing>0)
+ *   - groups WITH children: sum each child's split recursively
+ *   - groups WITHOUT children in the export (e.g. Sundry Creditors when its
+ *     individual party ledgers were not in TrialBal.xml): treat as a leaf so
+ *     totals don't vanish
+ */
+function computeGroupDrCr(node: TBNode): { dr: number; cr: number } {
+  if (!node.isGroup || node.children.length === 0) {
+    return {
+      dr: node.closing < 0 ? Math.abs(node.closing) : 0,
+      cr: node.closing > 0 ? node.closing             : 0,
+    };
+  }
+  let dr = 0, cr = 0;
+  for (const child of node.children) {
+    const sub = computeGroupDrCr(child);
+    dr += sub.dr; cr += sub.cr;
+  }
+  return { dr, cr };
+}
+
 function TBTab({ tbRows, masterEntries }: {
   tbRows: TBFullRow[];
   masterEntries: MasterEntry[];
@@ -497,11 +521,26 @@ function TBTab({ tbRows, masterEntries }: {
     });
   }
 
-  // Totals derived from leaf ledgers only (for accurate Dr = Cr check)
+  // Index Dr/Cr split per row name — used for both group-row rendering and the grand total.
+  // For groups we descend into children; for leaves we just bucket their closing.
+  const drCrByName = useMemo(() => {
+    const map = new Map<string, { dr: number; cr: number }>();
+    function visit(n: TBNode) {
+      map.set(n.name, computeGroupDrCr(n));
+      for (const c of n.children) visit(c);
+    }
+    for (const root of tree) visit(root);
+    return map;
+  }, [tree]);
+
+  // Grand totals — sum from LEAF rows only, so groups can't double-count.
+  // (Mirrors how Tally's footer aggregates; matches the per-leaf rendering above.)
   const ledgerRows = tbRows.filter(r => !r.isGroup);
-  const totalCr  = ledgerRows.filter(r => r.closing >  0).reduce((s, r) => s + r.closing, 0);
-  const totalDr  = ledgerRows.filter(r => r.closing <  0).reduce((s, r) => s + Math.abs(r.closing), 0);
-  const diff     = totalDr - totalCr;
+  const grandTotalDr = ledgerRows
+    .reduce((s, r) => s + (r.closing < 0 ? Math.abs(r.closing) : 0), 0);
+  const grandTotalCr = ledgerRows
+    .reduce((s, r) => s + (r.closing > 0 ? r.closing             : 0), 0);
+  const diff     = grandTotalDr - grandTotalCr;
   const balanced = Math.abs(diff) < 1;
 
   const thStyle: React.CSSProperties = {
@@ -514,11 +553,11 @@ function TBTab({ tbRows, masterEntries }: {
       {/* Summary tiles */}
       <div className="flex gap-3 flex-wrap">
         {[
-          { label: 'Total Dr', value: totalDr, color: 'var(--coral)' },
-          { label: 'Total Cr', value: totalCr, color: 'var(--teal)' },
-          { label: 'Difference', value: diff, color: balanced ? 'var(--green)' : 'var(--red)' },
-          { label: 'Groups', value: allGroupNames.size, color: 'var(--blue)', raw: true },
-          { label: 'Ledgers', value: ledgerRows.length, color: 'var(--text2)', raw: true },
+          { label: 'Total Debit',  value: grandTotalDr, color: 'var(--coral)' },
+          { label: 'Total Credit', value: grandTotalCr, color: 'var(--teal)' },
+          { label: 'Difference',   value: diff,         color: balanced ? 'var(--green)' : 'var(--red)' },
+          { label: 'Groups',       value: allGroupNames.size, color: 'var(--blue)', raw: true },
+          { label: 'Ledgers',      value: ledgerRows.length,  color: 'var(--text2)', raw: true },
         ].map(s => (
           <div key={s.label} className="px-3 py-2 rounded-lg" style={{ background: 'var(--bg3)', minWidth: 110 }}>
             <div className="text-xs" style={{ color: 'var(--text3)' }}>{s.label}</div>
@@ -560,43 +599,53 @@ function TBTab({ tbRows, masterEntries }: {
         </span>
       </div>
 
-      {/* Table */}
-      <div className="overflow-auto rounded-lg" style={{ border: '1px solid var(--border)', maxHeight: 520 }}>
+      {/* Table — Tally "Closing Balance" layout: Particulars | Debit | Credit */}
+      <div className="overflow-auto rounded-lg" style={{ border: '1px solid var(--border)', maxHeight: 560 }}>
         <table className="w-full text-sm" style={{ borderCollapse: 'collapse', tableLayout: 'fixed' }}>
           <colgroup>
-            <col style={{ width: '38%' }} />
-            <col style={{ width: '16%' }} />
-            <col style={{ width: '15%' }} />
-            <col style={{ width: '15%' }} />
-            <col style={{ width: '16%' }} />
+            <col style={{ width: '50%' }} />
+            <col style={{ width: '25%' }} />
+            <col style={{ width: '25%' }} />
           </colgroup>
           <thead style={{ background: 'var(--bg3)', position: 'sticky', top: 0, zIndex: 1 }}>
             <tr>
-              <th className="px-3 py-2 text-left"  style={thStyle}>Account Name</th>
-              <th className="px-3 py-2 text-right" style={thStyle}>Opening</th>
-              <th className="px-3 py-2 text-right" style={thStyle}>Dr</th>
-              <th className="px-3 py-2 text-right" style={thStyle}>Cr</th>
-              <th className="px-3 py-2 text-right" style={thStyle}>Closing</th>
+              <th rowSpan={2} className="px-3 py-2 text-left align-middle" style={thStyle}>Particulars</th>
+              <th colSpan={2} className="px-3 py-2 text-center"
+                style={{ ...thStyle, borderBottom: '1px solid var(--border)' }}>
+                Closing Balance
+              </th>
+            </tr>
+            <tr>
+              <th className="px-3 py-1.5 text-right" style={thStyle}>Debit</th>
+              <th className="px-3 py-1.5 text-right" style={thStyle}>Credit</th>
             </tr>
           </thead>
           <tbody>
             {visibleRows.map((row, i) => {
               const isExpanded = expanded.has(row.name);
               const isSuspense = /suspense|miscellaneous/i.test(row.name);
-              const closingCr  = row.closing > 0;   // positive = Cr
-              const closingDr  = row.closing < 0;   // negative = Dr
-              const openingCr  = row.opening > 0;
-              const openingDr  = row.opening < 0;
               const rowBg = row.isGroup
                 ? 'var(--bg3)'
                 : isSuspense
                   ? 'rgba(251,191,36,0.05)'
                   : i % 2 === 0 ? 'var(--bg)' : 'var(--bg2)';
 
+              // Determine Dr / Cr value to display in the two columns.
+              // Groups: use precomputed split (sum of leaves); leaves: bucket their closing.
+              let drVal = 0, crVal = 0;
+              if (row.isGroup) {
+                const split = drCrByName.get(row.name);
+                drVal = split?.dr ?? 0;
+                crVal = split?.cr ?? 0;
+              } else {
+                if (row.closing < 0) drVal = Math.abs(row.closing);
+                else if (row.closing > 0) crVal = row.closing;
+              }
+
               return (
                 <tr key={row.name + row.depth}
                   style={{ background: rowBg, borderBottom: '1px solid var(--border)' }}>
-                  {/* Account name with expand toggle and depth indent */}
+                  {/* Particulars — name with chevron and depth indent */}
                   <td className="px-3 py-1.5" style={{ overflow: 'hidden' }}>
                     <div className="flex items-center gap-1" style={{ paddingLeft: search ? 0 : row.depth * 14 }}>
                       {row.isGroup ? (
@@ -626,35 +675,47 @@ function TBTab({ tbRows, masterEntries }: {
                       )}
                     </div>
                   </td>
-                  {/* Opening */}
-                  <td className="px-3 py-1.5 text-right font-mono text-xs" style={{ color: openingCr ? 'var(--teal)' : openingDr ? 'var(--coral)' : 'var(--text3)' }}>
-                    {row.opening === 0 ? '—' : (
-                      <>{fmtTBAmt(row.opening)}<span className="ml-1 text-xs opacity-60">{openingCr ? 'Cr' : 'Dr'}</span></>
-                    )}
+                  {/* Debit — closing-balance Dr side */}
+                  <td className="px-3 py-1.5 text-right font-mono text-xs"
+                    style={{ color: drVal > 0 ? 'var(--coral)' : 'var(--text3)', fontWeight: row.isGroup ? 600 : 400 }}>
+                    {drVal > 0 ? fmtTBAmt(drVal) : ''}
                   </td>
-                  {/* Dr movement */}
-                  <td className="px-3 py-1.5 text-right font-mono text-xs" style={{ color: row.debitMov > 0 ? 'var(--coral)' : 'var(--text3)' }}>
-                    {fmtTBAmt(row.debitMov)}
-                  </td>
-                  {/* Cr movement */}
-                  <td className="px-3 py-1.5 text-right font-mono text-xs" style={{ color: row.creditMov > 0 ? 'var(--teal)' : 'var(--text3)' }}>
-                    {fmtTBAmt(row.creditMov)}
-                  </td>
-                  {/* Closing */}
-                  <td className="px-3 py-1.5 text-right font-mono text-xs" style={{ color: closingCr ? 'var(--teal)' : closingDr ? 'var(--coral)' : 'var(--text3)' }}>
-                    {row.closing === 0 ? '—' : (
-                      <>{fmtTBAmt(row.closing)}<span className="ml-1 text-xs opacity-60">{closingCr ? 'Cr' : 'Dr'}</span></>
-                    )}
+                  {/* Credit — closing-balance Cr side */}
+                  <td className="px-3 py-1.5 text-right font-mono text-xs"
+                    style={{ color: crVal > 0 ? 'var(--teal)' : 'var(--text3)', fontWeight: row.isGroup ? 600 : 400 }}>
+                    {crVal > 0 ? fmtTBAmt(crVal) : ''}
                   </td>
                 </tr>
               );
             })}
             {visibleRows.length === 0 && (
-              <tr><td colSpan={5} className="px-3 py-8 text-center text-sm" style={{ color: 'var(--text3)' }}>
+              <tr><td colSpan={3} className="px-3 py-8 text-center text-sm" style={{ color: 'var(--text3)' }}>
                 {tbRows.length === 0 ? 'No Trial Balance data loaded' : 'No accounts match'}
               </td></tr>
             )}
           </tbody>
+          <tfoot style={{ position: 'sticky', bottom: 0 }}>
+            <tr style={{
+              background: balanced ? 'var(--bg3)' : 'rgba(239,170,30,0.10)',
+              borderTop: '2px solid var(--border)',
+            }}>
+              <td className="px-3 py-2.5 font-bold text-sm"
+                style={{ color: balanced ? 'var(--text1)' : 'var(--amber)' }}>
+                Grand Total
+                {!balanced && (
+                  <span className="ml-2 text-xs font-normal">
+                    (mismatch: {fmtTBAmt(diff)})
+                  </span>
+                )}
+              </td>
+              <td className="px-3 py-2.5 text-right font-mono font-bold text-sm" style={{ color: 'var(--coral)' }}>
+                {fmtTBAmt(grandTotalDr)}
+              </td>
+              <td className="px-3 py-2.5 text-right font-mono font-bold text-sm" style={{ color: 'var(--teal)' }}>
+                {fmtTBAmt(grandTotalCr)}
+              </td>
+            </tr>
+          </tfoot>
         </table>
       </div>
     </div>
