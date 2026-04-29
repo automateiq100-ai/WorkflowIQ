@@ -160,10 +160,11 @@ function formatDate(raw: string): string {
   return raw;
 }
 
-function StrictStatementRow({ node, depth = 0 }: { node: FinancialNode; depth?: number }) {
+function StrictStatementRow({ node, depth = 0, masterLoaded = false }: { node: FinancialNode; depth?: number; masterLoaded?: boolean }) {
   const [open, setOpen] = useState(depth === 0);
   const hasChildren = node.children.length > 0;
   const isMain = node.nodeType === 'main';
+  const hasVariance = node.childrenBalanced === false;
 
   return (
     <>
@@ -186,30 +187,44 @@ function StrictStatementRow({ node, depth = 0 }: { node: FinancialNode; depth?: 
           {hasChildren && <span style={{ marginRight: 6, fontSize: 10, color: 'var(--text3)' }}>{open ? '▼' : '▶'}</span>}
           {!hasChildren && <span style={{ display: 'inline-block', width: depth > 0 ? 16 : 0 }} />}
           {node.name}
-          {!node.inMaster && (
+          {masterLoaded && !node.inMaster && (
             <span className="text-xs font-normal ml-2" style={{ color: 'var(--text3)' }}>
               Computed / Not in Master
             </span>
           )}
+          {hasVariance && (
+            <span className="text-xs font-normal ml-2" style={{ color: 'var(--amber)' }}>
+              Amount mismatch
+            </span>
+          )}
         </td>
         <td className={isMain ? 'px-6 py-2.5 text-right font-mono font-bold' : 'px-6 py-1.5 text-right font-mono text-xs'} style={{ color: node.amount >= 0 ? 'var(--teal)' : 'var(--coral)' }}>
-          {formatAmount(node.amount)}
+          <div>{formatAmount(Math.abs(node.amount))}</div>
+          {hasVariance && node.childrenTotal != null && node.childrenVariance != null && (
+            <div className="text-xs font-normal mt-0.5" style={{ color: 'var(--amber)' }}>
+              Child sum {formatAmount(Math.abs(node.childrenTotal))} · Var {formatAmount(Math.abs(node.childrenVariance))}
+            </div>
+          )}
         </td>
-        <td className="px-6 py-1.5 text-xs" style={{ color: 'var(--text3)' }}>
-          {node.nodeType === 'main' ? 'Group' : 'Ledger'}
-        </td>
-        <td className="px-6 py-1.5 text-xs" style={{ color: 'var(--text3)' }}>
-          {node.masterParent}
-        </td>
+        {masterLoaded && (
+          <td className="px-6 py-1.5 text-xs" style={{ color: 'var(--text3)' }}>
+            {node.nodeType === 'main' ? 'Group' : 'Ledger'}
+          </td>
+        )}
+        {masterLoaded && (
+          <td className="px-6 py-1.5 text-xs" style={{ color: 'var(--text3)' }}>
+            {node.masterParent}
+          </td>
+        )}
       </tr>
       {open && node.children.map(child => (
-        <StrictStatementRow key={child.id} node={child} depth={depth + 1} />
+        <StrictStatementRow key={child.id} node={child} depth={depth + 1} masterLoaded={masterLoaded} />
       ))}
     </>
   );
 }
 
-function StrictStatementTable({ statement }: { statement: ParsedStatement }) {
+function StrictStatementTable({ statement, masterLoaded = false }: { statement: ParsedStatement; masterLoaded?: boolean }) {
   return (
     <div className="flex flex-col gap-3 max-w-4xl">
       <div className="overflow-auto rounded-xl border shadow-sm" style={{ borderColor: 'var(--border)', background: 'var(--bg2)' }}>
@@ -218,14 +233,14 @@ function StrictStatementTable({ statement }: { statement: ParsedStatement }) {
             <tr style={{ background: 'var(--bg3)', borderBottom: '2px solid var(--border)' }}>
               <th className="px-6 py-3 text-left text-xs uppercase tracking-wider" style={{ color: 'var(--text3)', fontWeight: 700 }}>Particulars</th>
               <th className="px-6 py-3 text-right text-xs uppercase tracking-wider" style={{ color: 'var(--text3)', fontWeight: 700 }}>Amount (₹)</th>
-              <th className="px-6 py-3 text-left text-xs uppercase tracking-wider" style={{ color: 'var(--text3)', fontWeight: 700 }}>Type</th>
-              <th className="px-6 py-3 text-left text-xs uppercase tracking-wider" style={{ color: 'var(--text3)', fontWeight: 700 }}>Master Parent</th>
+              {masterLoaded && <th className="px-6 py-3 text-left text-xs uppercase tracking-wider" style={{ color: 'var(--text3)', fontWeight: 700 }}>Type</th>}
+              {masterLoaded && <th className="px-6 py-3 text-left text-xs uppercase tracking-wider" style={{ color: 'var(--text3)', fontWeight: 700 }}>Master Parent</th>}
             </tr>
           </thead>
           <tbody>
-            {statement.nodes.map(node => <StrictStatementRow key={node.id} node={node} />)}
+            {statement.nodes.map(node => <StrictStatementRow key={node.id} node={node} masterLoaded={masterLoaded} />)}
             {statement.nodes.length === 0 && (
-              <tr><td colSpan={4} className="px-3 py-8 text-center text-sm" style={{ color: 'var(--text3)' }}>No statement rows parsed</td></tr>
+              <tr><td colSpan={masterLoaded ? 4 : 2} className="px-3 py-8 text-center text-sm" style={{ color: 'var(--text3)' }}>No statement rows parsed</td></tr>
             )}
           </tbody>
         </table>
@@ -446,8 +461,9 @@ function PLGroupRow({ label, total, children, color, note }: {
 
 function PLTab({ pd }: { pd: Record<string, unknown> }) {
   const strictStatement = pd.pandlStatement as ParsedStatement | undefined;
+  const masterLoaded = ((pd.masterEntries as unknown[] | undefined)?.length ?? 0) > 0;
   if (strictStatement?.nodes?.length) {
-    return <StrictStatementTable statement={strictStatement} />;
+    return <StrictStatementTable statement={strictStatement} masterLoaded={masterLoaded} />;
   }
 
   const plSections = (pd.plSections as PLSection[] | undefined) ?? [];
@@ -577,8 +593,9 @@ function BSGroupRow({ label, amount, children, color }: {
 
 function BSTab({ pd }: { pd: Record<string, unknown> }) {
   const strictStatement = pd.bsheetStatement as ParsedStatement | undefined;
+  const masterLoaded = ((pd.masterEntries as unknown[] | undefined)?.length ?? 0) > 0;
   if (strictStatement?.nodes?.length) {
-    return <StrictStatementTable statement={strictStatement} />;
+    return <StrictStatementTable statement={strictStatement} masterLoaded={masterLoaded} />;
   }
 
   // In Tally BS export convention:
@@ -628,7 +645,6 @@ function BSTab({ pd }: { pd: Record<string, unknown> }) {
       <BSSection title="ASSETS">
         <Divider label="Non-current assets" />
         <BSGroupRow label="(a) Property, Plant and Equipment" amount={fa} color="var(--blue)" />
-        <BSGroupRow label="(b) Capital work-in-progress" amount={0} color="var(--text2)" />
         <Divider label="Current assets" />
         <BSGroupRow label="(a) Inventories" amount={stock} color="var(--text2)" />
         <BSGroupRow label="(b) Trade receivables" amount={debtors} color="var(--text2)" />
@@ -639,10 +655,8 @@ function BSTab({ pd }: { pd: Record<string, unknown> }) {
 
       <BSSection title="EQUITY AND LIABILITIES">
         <Divider label="Equity" />
-        <BSGroupRow label="(a) Equity Share capital" amount={0} color="var(--text2)" />
         <BSGroupRow label="(b) Other Equity (Profit & Loss)" amount={bsNet} color={bsNet >= 0 ? 'var(--green)' : 'var(--red)'} />
         <Divider label="Non-current liabilities" />
-        <BSGroupRow label="(a) Borrowings" amount={0} color="var(--text2)" />
         <Divider label="Current liabilities" />
         <BSGroupRow label="(a) Trade payables" amount={creds} color="var(--text2)" />
         <BSGroupRow label="(b) Other current liabilities" amount={cl - creds > 0 ? cl - creds : 0} color="var(--text2)" />

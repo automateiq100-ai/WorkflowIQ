@@ -57,6 +57,16 @@ export interface FinancialNode {
    * (e.g. "Cost of Sales :", "Opening Stock") that have no master entry.
    */
   masterParent: string;
+  /** true when this visible header was created from Master.xml and not emitted as a statement row. */
+  synthetic?: boolean;
+  /** The Master.xml parent that caused this node to be grouped under a header. */
+  sourceParent?: string;
+  /** Sum of immediate child amounts, using signed Tally values. */
+  childrenTotal?: number;
+  /** Header amount minus immediate child sum. */
+  childrenVariance?: number;
+  /** true when header amount matches immediate child sum within parser tolerance. */
+  childrenBalanced?: boolean;
   children: FinancialNode[];
 }
 

@@ -948,15 +948,7 @@ function resolveNode(
   const hasSub  = subAmt.trim()  !== '';
   const entry   = masterMap.get(normalizeMasterKey(name));
 
-  let nodeType: FinancialNodeType;
-  if (hasMain && !hasSub) {
-    nodeType = 'main';
-  } else if (hasSub) {
-    nodeType = 'sub';
-  } else {
-    // Zero-balance: master map tie-breaker
-    nodeType = (!entry || entry.type === 'group') ? 'main' : 'sub';
-  }
+  const nodeType: FinancialNodeType = hasMain ? 'main' : hasSub ? 'sub' : 'main';
 
   return {
     nodeType,
@@ -1050,31 +1042,41 @@ function buildStatement(
   const ordered = parseOrderedXml(xml);
   const companyName = findOrderedText(ordered, 'SVCURRENTCOMPANY') || xmlText(xml, 'SVCURRENTCOMPANY');
   const tokens = collectStatementTokens(ordered, statement);
-  const nodes: FinancialNode[] = [];
+  const parsedNodes: FinancialNode[] = [];
+
   let current: FinancialNode | null = null;
 
   for (const token of tokens) {
     const name = decodeEntities(token.name.trim());
     if (!name || name === 'undefined') continue;
-    const amount = parseAmt(token.mainAmt || token.subAmt);
+
+    if (!token.mainAmt.trim() && !token.subAmt.trim()) continue;
+
+    let amount = parseAmt(token.mainAmt || token.subAmt);
     const resolved = resolveNode(name, token.mainAmt, token.subAmt, masterMap);
+    // "Less: Closing Stock" etc. — Tally emits these as Dr (negative) even though
+    // they reduce a debit group total. Flip sign so children sum equals group total.
+    if (/^less[\s:]/i.test(name)) amount = -amount;
     const node = makeNode(name, amount, resolved);
 
     if (resolved.nodeType === 'main') {
-      nodes.push(node);
+      parsedNodes.push(node);
       current = node;
     } else if (current) {
       current.children.push(node);
+      node.sourceParent = current.name;
     } else {
-      nodes.push(node);
+      parsedNodes.push(node);
     }
   }
+
+  annotateChildAmountChecks(parsedNodes);
 
   return {
     statement,
     companyName,
-    nodes,
-    totals: statementTotals(nodes),
+    nodes: parsedNodes,
+    totals: statementTotals(parsedNodes),
   };
 }
 
@@ -1084,6 +1086,7 @@ function makeNode(
   name: string,
   amount: number,
   resolved: ReturnType<typeof resolveNode>,
+  extra: Partial<Pick<FinancialNode, 'synthetic' | 'sourceParent'>> = {},
 ): FinancialNode {
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   const id = `${slug}-${++_nodeSeq}`;
@@ -1095,8 +1098,149 @@ function makeNode(
     inMaster:    resolved.inMaster,
     masterType:  resolved.masterType,
     masterParent: resolved.masterParent,
+    ...extra,
     children: [],
   };
+}
+
+function makeSyntheticHeader(name: string, masterMap: Map<string, MasterEntry>): FinancialNode {
+  const entry = masterMap.get(normalizeMasterKey(name));
+  return makeNode(
+    entry?.name ?? name,
+    0,
+    {
+      nodeType: 'main',
+      inMaster: !!entry,
+      masterType: entry?.type ?? 'group',
+      masterParent: entry?.parent ?? 'Computed / Not in Master',
+    },
+    { synthetic: true },
+  );
+}
+
+function hasUsableMasterParent(node: FinancialNode): boolean {
+  return node.inMaster && node.masterParent.trim() !== '' && normalizeMasterKey(node.masterParent) !== 'primary';
+}
+
+function groupStatementByMasterParent(
+  parsedNodes: FinancialNode[],
+  masterMap: Map<string, MasterEntry>,
+): FinancialNode[] {
+  const roots: FinancialNode[] = [];
+  const nodeByName = new Map<string, FinancialNode>();
+  const syntheticByName = new Map<string, FinancialNode>();
+  const rooted = new Set<FinancialNode>();
+  const attached = new Set<FinancialNode>();
+  let currentComputedParent: FinancialNode | null = null;
+
+  for (const node of parsedNodes) {
+    const key = normalizeMasterKey(node.name);
+    if (!nodeByName.has(key)) nodeByName.set(key, node);
+  }
+
+  function pushRoot(node: FinancialNode) {
+    if (!rooted.has(node) && !attached.has(node)) {
+      roots.push(node);
+      rooted.add(node);
+    }
+  }
+
+  function appendChild(parent: FinancialNode, child: FinancialNode) {
+    if (parent === child || parent.children.includes(child)) return;
+    parent.children.push(child);
+    attached.add(child);
+    const rootIndex = roots.indexOf(child);
+    if (rootIndex >= 0) roots.splice(rootIndex, 1);
+  }
+
+  function getParentHeader(parentName: string): FinancialNode {
+    const key = normalizeMasterKey(parentName);
+    const existing = nodeByName.get(key);
+    if (existing) return existing;
+
+    let synthetic = syntheticByName.get(key);
+    if (!synthetic) {
+      synthetic = makeSyntheticHeader(parentName, masterMap);
+      syntheticByName.set(key, synthetic);
+      nodeByName.set(key, synthetic);
+    }
+    return synthetic;
+  }
+
+  function wouldCreateCycle(parent: FinancialNode, child: FinancialNode): boolean {
+    if (parent === child) return true;
+    const stack = [...child.children];
+    while (stack.length) {
+      const next = stack.pop()!;
+      if (next === parent) return true;
+      stack.push(...next.children);
+    }
+    return false;
+  }
+
+  function placeMasterNode(node: FinancialNode, visiting = new Set<string>()) {
+    const key = normalizeMasterKey(node.name);
+    if (visiting.has(key)) {
+      pushRoot(node);
+      return;
+    }
+
+    if (!hasUsableMasterParent(node)) {
+      pushRoot(node);
+      return;
+    }
+
+    const parent = getParentHeader(node.masterParent);
+    if (wouldCreateCycle(parent, node)) {
+      pushRoot(node);
+      return;
+    }
+
+    visiting.add(key);
+    if (hasUsableMasterParent(parent)) {
+      placeMasterNode(parent, visiting);
+    } else {
+      pushRoot(parent);
+    }
+    visiting.delete(key);
+
+    appendChild(parent, node);
+    node.sourceParent = parent.name;
+  }
+
+  for (const node of parsedNodes) {
+    if (!node.inMaster) {
+      if (node.nodeType === 'main') {
+        pushRoot(node);
+        currentComputedParent = node;
+      } else if (currentComputedParent) {
+        appendChild(currentComputedParent, node);
+        node.sourceParent = currentComputedParent.name;
+      } else {
+        pushRoot(node);
+      }
+      continue;
+    }
+
+    placeMasterNode(node);
+  }
+
+  return roots;
+}
+
+const CHILD_AMOUNT_TOLERANCE = 0.01;
+
+function annotateChildAmountChecks(nodes: FinancialNode[]) {
+  for (const node of nodes) {
+    annotateChildAmountChecks(node.children);
+    if (node.children.length === 0 || node.synthetic) continue;
+
+    const childrenTotal = node.children.reduce((sum, child) => sum + child.amount, 0);
+    const childrenVariance = node.amount - childrenTotal;
+    node.childrenTotal = childrenTotal;
+    node.childrenVariance = childrenVariance;
+    node.childrenBalanced = Math.abs(childrenVariance) <= CHILD_AMOUNT_TOLERANCE;
+  }
 }
 
 function statementTotals(nodes: FinancialNode[]) {
