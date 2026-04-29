@@ -1114,6 +1114,7 @@ function buildStatement(
     if (!name || name === 'undefined') continue;
 
     // Keep zero/blank-balance rows — display as ₹0 so nothing is silently hidden.
+    const hasMain = token.mainAmt.trim() !== '';
     let amount = parseAmt(token.mainAmt || token.subAmt);
     const resolved = resolveNode(name, token.mainAmt, token.subAmt, masterMap);
     // "Less: Closing Stock" etc. — Tally emits these as Dr (negative) even though
@@ -1145,11 +1146,27 @@ function buildStatement(
 
     if (!placed) {
       if (resolved.nodeType === 'main') {
-        // New root-level section header
-        parsedNodes.push(node);
-        stack.length = 0;
-        stack.push(node);
-        lastRoot = node;
+        // A header. Two cases:
+        //   (a) hasMain (BSMAINAMT / PLAMT main set) → Tally's explicit top-level
+        //       section start → push to root, reset stack.
+        //   (b) Header with only hasSub — Tally rolled this group into the
+        //       parent section's totals (e.g. P&L: Direct Expenses appears as a
+        //       PLSUBAMT line inside the Cost of Sales block per the formula
+        //       Cost of Sales = Opening + Purchases − Closing + Direct Expenses).
+        //       Nest under current top of stack so the section total reconciles
+        //       and so this group's own children (e.g. Carriage Inward → Direct
+        //       Expenses) can still nest under it via the master lookup above.
+        if (hasMain || stack.length === 0) {
+          parsedNodes.push(node);
+          stack.length = 0;
+          stack.push(node);
+          lastRoot = node;
+        } else {
+          const parent = stack[stack.length - 1];
+          parent.children.push(node);
+          node.sourceParent = parent.name;
+          stack.push(node);
+        }
       } else {
         // Sub item whose master parent isn't in stack — anchor to current section root.
         // This handles Tally display quirks (e.g. Input CGST/SGST appearing in the
