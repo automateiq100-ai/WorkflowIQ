@@ -2,7 +2,7 @@
 
 import { XMLParser } from 'fast-xml-parser';
 import type {
-  TBLedger, ParsedData, ChunkedStats,
+  TBLedger, TBFullRow, ParsedData, ChunkedStats,
   MasterEntry, MasterItemType, FinancialNode, FinancialNodeType,
   ParsedStatement, FlatFinancialRow,
 } from './types';
@@ -296,6 +296,39 @@ export function parseTrialBalance(
     suspenseLedgers,
     dupPairDetails,
   };
+}
+
+/**
+ * Parse the full Trial Balance XML into ALL rows — both group rollup rows and
+ * individual ledger rows — preserving Tally's document order (parents before
+ * children).  Intended for the hierarchical Data View display only; does NOT
+ * filter groups (use parseTrialBalance for analysis checks).
+ *
+ * Sign convention: positive closing = Cr balance, negative = Dr balance.
+ */
+export function parseTBFull(
+  xml: string,
+  masterMap: Map<string, MasterEntry> = new Map(),
+): TBFullRow[] {
+  const rows: TBFullRow[] = [];
+  const blockRe = /<DSPACCNAME\b[^>]*>([\s\S]*?)<\/DSPACCNAME>\s*<DSPACCINFO\b[^>]*>([\s\S]*?)<\/DSPACCINFO>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = blockRe.exec(xml)) !== null) {
+    const nameBlock = m[1];
+    const infoBlock = m[2];
+    const name = xmlText(nameBlock, 'DSPDISPNAME');
+    if (!name || name === 'undefined') continue;
+    const masterEntry = masterMap.get(normalizeMasterKey(name));
+    rows.push({
+      name,
+      opening:   parseAmt(xmlText(infoBlock, 'DSPOPAMTA')),
+      debitMov:  Math.abs(parseAmt(xmlText(infoBlock, 'DSPDRAMTA'))),
+      creditMov: Math.abs(parseAmt(xmlText(infoBlock, 'DSPCRAMTA'))),
+      closing:   parseAmt(xmlText(infoBlock, 'DSPCLAMTA')),
+      isGroup:   masterEntry?.type === 'group',
+    });
+  }
+  return rows;
 }
 
 // ── Near-duplicate detection (Bug 3 fix) ──────────────────────────────────

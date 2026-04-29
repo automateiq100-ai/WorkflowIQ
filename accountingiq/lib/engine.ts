@@ -5,7 +5,8 @@ import type {
 } from './types';
 import { DIM_WEIGHTS } from './constants';
 import {
-  parseTrialBalance, parsePandL, parseBSheet, parseGrpSum, parseDayBook, parseTallyDate,
+  parseTrialBalance, parseTBFull,
+  parsePandL, parseBSheet, parseGrpSum, parseDayBook, parseTallyDate,
   parseCashFlow, parseLedgerGroups, parseMasterMap, parsePandLStatement, parseBSheetStatement, flattenStatement,
 } from './parser';
 
@@ -83,6 +84,8 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
   // Parse each XML — masterMap first so parseTrialBalance can filter GROUP rollup rows
   const masterMap = hasMaster && files.master.content ? parseMasterMap(files.master.content) : new Map();
   const tbResult  = hasTB  ? parseTrialBalance(files.trialbal.content!, masterMap) : null;
+  // Full TB (groups + ledgers) for the hierarchical Data View display
+  const tbRows    = hasTB  ? parseTBFull(files.trialbal.content!, masterMap) : [];
   const plResult  = hasPL  ? parsePandL(files.pandl.content!)           : null;
   const bsResult  = hasBS  ? parseBSheet(files.bsheet.content!)         : null;
   const pandlStatement = hasPL ? parsePandLStatement(files.pandl.content!, masterMap) : null;
@@ -126,6 +129,7 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     ...(grpResult ?? {}),
     ...(cfResult  ?? {}),
     masterEntries: Array.from(masterMap.values()),
+    tbRows,
     ...(pandlStatement ? { pandlStatement, pandlRows: flattenStatement(pandlStatement) } : {}),
     ...(bsheetStatement ? { bsheetStatement, bsheetRows: flattenStatement(bsheetStatement) } : {}),
   };

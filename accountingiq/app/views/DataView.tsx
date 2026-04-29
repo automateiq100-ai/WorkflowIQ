@@ -2,7 +2,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { useApp } from '@/lib/state';
-import type { TBLedger, ParsedData, ChunkedStats, PLSection, Voucher, FinancialNode, ParsedStatement, MasterEntry } from '@/lib/types';
+import type { TBLedger, TBFullRow, ParsedData, ChunkedStats, PLSection, Voucher, FinancialNode, ParsedStatement, MasterEntry } from '@/lib/types';
 import { classifyBSSide } from '@/lib/parser';
 import AgentFixView from '@/app/views/AgentFixView';
 
@@ -336,161 +336,255 @@ const TABS: { id: Tab; label: string; icon: string }[] = [
 
 // ── Trial Balance tab ──────────────────────────────────────────────────────
 
-type SortKey = 'name' | 'closing' | 'dr';
-type SortDir = 'asc' | 'desc';
+interface TBNode extends TBFullRow {
+  children: TBNode[];
+  depth: number;
+}
 
-function TBTab({ ledgers, failedChecks }: {
-  ledgers: TBLedger[];
-  failedChecks: Set<string>;
+function buildTBTree(rows: TBFullRow[], masterMap: Map<string, MasterEntry>): TBNode[] {
+  const nodeMap = new Map<string, TBNode>();
+  for (const row of rows) {
+    nodeMap.set(row.name.toLowerCase().trim(), { ...row, children: [], depth: 0 });
+  }
+  const roots: TBNode[] = [];
+  for (const row of rows) {
+    const key = row.name.toLowerCase().trim();
+    const node = nodeMap.get(key)!;
+    const parentName = masterMap.get(key)?.parent?.trim();
+    if (parentName && parentName.toLowerCase() !== 'primary' && parentName !== '') {
+      const parentNode = nodeMap.get(parentName.toLowerCase().trim());
+      if (parentNode) {
+        parentNode.children.push(node);
+        node.depth = parentNode.depth + 1;
+        continue;
+      }
+    }
+    roots.push(node);
+  }
+  return roots;
+}
+
+function collectGroupNames(nodes: TBNode[], out: Set<string> = new Set()): Set<string> {
+  for (const n of nodes) {
+    if (n.isGroup) { out.add(n.name); collectGroupNames(n.children, out); }
+  }
+  return out;
+}
+
+function flattenVisible(nodes: TBNode[], expanded: Set<string>): TBNode[] {
+  const result: TBNode[] = [];
+  for (const node of nodes) {
+    result.push(node);
+    if (node.isGroup && expanded.has(node.name) && node.children.length > 0) {
+      result.push(...flattenVisible(node.children, expanded));
+    }
+  }
+  return result;
+}
+
+/** Format amount for TB display — show raw number with commas, no abbreviation */
+function fmtTBAmt(v: number): string {
+  if (v === 0) return '—';
+  return Math.abs(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function TBTab({ tbRows, masterEntries }: {
+  tbRows: TBFullRow[];
+  masterEntries: MasterEntry[];
 }) {
+  const masterMap = useMemo(() => {
+    const m = new Map<string, MasterEntry>();
+    for (const e of masterEntries) m.set(e.name.toLowerCase().trim(), e);
+    return m;
+  }, [masterEntries]);
+
+  const tree = useMemo(() => buildTBTree(tbRows, masterMap), [tbRows, masterMap]);
+
+  const allGroupNames = useMemo(() => collectGroupNames(tree), [tree]);
+
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(allGroupNames));
   const [search, setSearch] = useState('');
-  const [sortKey, setSortKey] = useState<SortKey>('closing');
-  const [sortDir, setSortDir] = useState<SortDir>('desc');
-  const [filter, setFilter] = useState<'all' | 'flagged' | 'dr' | 'cr'>('all');
 
-  // Build flag set from check context
-  const suspenseNames = useMemo(() => {
-    const s = new Set<string>();
-    // We flag "suspense" pattern names
-    ledgers.forEach(l => {
-      if (/suspense|misc\b|sundry|differ/i.test(l.nl)) s.add(l.name);
+  // Re-expand when data changes (new analysis run)
+  React.useEffect(() => {
+    setExpanded(new Set(allGroupNames));
+  }, [allGroupNames]);
+
+  // Search → flat filtered list (depth=0, no indent); no search → hierarchical tree
+  const visibleRows = useMemo((): TBNode[] => {
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      return tbRows
+        .filter(r => r.name.toLowerCase().includes(q))
+        .map(r => ({ ...r, children: [], depth: 0 }));
+    }
+    return flattenVisible(tree, expanded);
+  }, [tbRows, tree, expanded, search]);
+
+  function toggleExpand(name: string) {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      next.has(name) ? next.delete(name) : next.add(name);
+      return next;
     });
-    return s;
-  }, [ledgers]);
-
-  const zeroNames = useMemo(() => new Set(ledgers.filter(l => l.closing === 0).map(l => l.name)), [ledgers]);
-
-  function isFlagged(l: TBLedger): string | null {
-    if (suspenseNames.has(l.name)) return 'Suspense';
-    if (zeroNames.has(l.name) && l.closing === 0) return 'Zero balance';
-    return null;
   }
 
-  const filtered = useMemo(() => {
-    let rows = ledgers;
-    if (search) rows = rows.filter(l => l.name.toLowerCase().includes(search.toLowerCase()));
-    if (filter === 'flagged') rows = rows.filter(l => isFlagged(l));
-    if (filter === 'dr') rows = rows.filter(l => l.dr);
-    if (filter === 'cr') rows = rows.filter(l => !l.dr);
-    return [...rows].sort((a, b) => {
-      let cmp = 0;
-      if (sortKey === 'name') cmp = a.name.localeCompare(b.name);
-      else if (sortKey === 'closing') cmp = Math.abs(a.closing) - Math.abs(b.closing);
-      else if (sortKey === 'dr') cmp = (a.dr ? 1 : 0) - (b.dr ? 1 : 0);
-      return sortDir === 'asc' ? cmp : -cmp;
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ledgers, search, sortKey, sortDir, filter]);
+  // Totals derived from leaf ledgers only (for accurate Dr = Cr check)
+  const ledgerRows = tbRows.filter(r => !r.isGroup);
+  const totalCr  = ledgerRows.filter(r => r.closing >  0).reduce((s, r) => s + r.closing, 0);
+  const totalDr  = ledgerRows.filter(r => r.closing <  0).reduce((s, r) => s + Math.abs(r.closing), 0);
+  const diff     = totalDr - totalCr;
+  const balanced = Math.abs(diff) < 1;
 
-  function toggleSort(key: SortKey) {
-    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
-    else { setSortKey(key); setSortDir('desc'); }
-  }
-
-  // l.dr comes from parser; Tally's XML positives map to what the user calls Cr
-  // so we swap: parser's dr=true → display as Cr, dr=false → display as Dr
-  const drTotal = ledgers.filter(l => !l.dr).reduce((s, l) => s + Math.abs(l.closing), 0);
-  const crTotal = ledgers.filter(l => l.dr).reduce((s, l) => s + Math.abs(l.closing), 0);
-  const diff = drTotal - crTotal;
-
-  const SortBtn = ({ k }: { k: SortKey }) => (
-    <button onClick={() => toggleSort(k)} style={{ marginLeft: 4, fontSize: 10, color: 'var(--text3)', cursor: 'pointer' }}>
-      {sortKey === k ? (sortDir === 'asc' ? '▲' : '▼') : '⇅'}
-    </button>
-  );
+  const thStyle: React.CSSProperties = {
+    color: 'var(--text3)', fontWeight: 600, fontSize: 11,
+    borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap',
+  };
 
   return (
     <div className="flex flex-col gap-3">
-      {/* Totals bar */}
-      <div className="flex gap-4 flex-wrap">
+      {/* Summary tiles */}
+      <div className="flex gap-3 flex-wrap">
         {[
-          { label: 'Total Dr', value: drTotal, color: 'var(--coral)' },
-          { label: 'Total Cr', value: crTotal, color: 'var(--teal)' },
-          { label: 'Difference', value: diff, color: Math.abs(diff) < 1 ? 'var(--green)' : 'var(--red)' },
-          { label: 'Ledgers', value: ledgers.length, color: 'var(--text2)', raw: true },
+          { label: 'Total Dr', value: totalDr, color: 'var(--coral)' },
+          { label: 'Total Cr', value: totalCr, color: 'var(--teal)' },
+          { label: 'Difference', value: diff, color: balanced ? 'var(--green)' : 'var(--red)' },
+          { label: 'Groups', value: allGroupNames.size, color: 'var(--blue)', raw: true },
+          { label: 'Ledgers', value: ledgerRows.length, color: 'var(--text2)', raw: true },
         ].map(s => (
-          <div key={s.label} className="px-3 py-2 rounded-lg" style={{ background: 'var(--bg3)', minWidth: 120 }}>
+          <div key={s.label} className="px-3 py-2 rounded-lg" style={{ background: 'var(--bg3)', minWidth: 110 }}>
             <div className="text-xs" style={{ color: 'var(--text3)' }}>{s.label}</div>
             <div className="text-sm font-semibold" style={{ color: s.color }}>
-              {'raw' in s ? s.value : formatAmount(s.value as number)}
+              {'raw' in s && s.raw ? String(s.value) : formatAmount(s.value as number)}
             </div>
           </div>
         ))}
       </div>
 
-      {/* Search + filter */}
-      <div className="flex gap-2 flex-wrap">
+      {/* Controls */}
+      <div className="flex gap-2 flex-wrap items-center">
         <input
-          type="text"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          placeholder="Search ledger…"
+          type="text" value={search} onChange={e => setSearch(e.target.value)}
+          placeholder="Search accounts…"
           className="px-3 py-1.5 rounded-lg text-sm flex-1"
           style={{ background: 'var(--bg3)', border: '1px solid var(--border)', color: 'var(--text1)', minWidth: 180, outline: 'none' }}
         />
-        {(['all','flagged','dr','cr'] as const).map(f => (
-          <button key={f} onClick={() => setFilter(f)}
-            className="px-3 py-1.5 rounded-lg text-xs font-medium"
-            style={{
-              background: filter === f ? 'var(--teal)' : 'var(--bg3)',
-              color: filter === f ? '#000' : 'var(--text2)',
-              border: '1px solid var(--border)',
-            }}
-          >
-            {f === 'all' ? 'All' : f === 'flagged' ? '⚑ Flagged' : f === 'dr' ? 'Cr' : 'Dr'}
-          </button>
-        ))}
-        <span className="text-xs self-center" style={{ color: 'var(--text3)' }}>{filtered.length} rows</span>
+        {!search && (
+          <>
+            <button
+              onClick={() => setExpanded(new Set(allGroupNames))}
+              className="px-3 py-1.5 rounded-lg text-xs"
+              style={{ background: 'var(--bg3)', color: 'var(--text2)', border: '1px solid var(--border)' }}
+            >
+              Expand all
+            </button>
+            <button
+              onClick={() => setExpanded(new Set())}
+              className="px-3 py-1.5 rounded-lg text-xs"
+              style={{ background: 'var(--bg3)', color: 'var(--text2)', border: '1px solid var(--border)' }}
+            >
+              Collapse all
+            </button>
+          </>
+        )}
+        <span className="text-xs" style={{ color: 'var(--text3)' }}>
+          {search ? `${visibleRows.length} matches` : `${visibleRows.length} rows visible`}
+        </span>
       </div>
 
       {/* Table */}
-      <div className="overflow-auto rounded-lg" style={{ border: '1px solid var(--border)', maxHeight: 480 }}>
-        <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
+      <div className="overflow-auto rounded-lg" style={{ border: '1px solid var(--border)', maxHeight: 520 }}>
+        <table className="w-full text-sm" style={{ borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+          <colgroup>
+            <col style={{ width: '38%' }} />
+            <col style={{ width: '16%' }} />
+            <col style={{ width: '15%' }} />
+            <col style={{ width: '15%' }} />
+            <col style={{ width: '16%' }} />
+          </colgroup>
           <thead style={{ background: 'var(--bg3)', position: 'sticky', top: 0, zIndex: 1 }}>
             <tr>
-              <th className="px-3 py-2 text-left text-xs" style={{ color: 'var(--text3)', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>
-                Ledger Name <SortBtn k="name" />
-              </th>
-              <th className="px-3 py-2 text-right text-xs" style={{ color: 'var(--text3)', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>
-                Closing Balance <SortBtn k="closing" />
-              </th>
-              <th className="px-3 py-2 text-center text-xs" style={{ color: 'var(--text3)', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>
-                Dr/Cr <SortBtn k="dr" />
-              </th>
-              <th className="px-3 py-2 text-left text-xs" style={{ color: 'var(--text3)', fontWeight: 600, borderBottom: '1px solid var(--border)' }}>
-                Flag
-              </th>
+              <th className="px-3 py-2 text-left"  style={thStyle}>Account Name</th>
+              <th className="px-3 py-2 text-right" style={thStyle}>Opening</th>
+              <th className="px-3 py-2 text-right" style={thStyle}>Dr</th>
+              <th className="px-3 py-2 text-right" style={thStyle}>Cr</th>
+              <th className="px-3 py-2 text-right" style={thStyle}>Closing</th>
             </tr>
           </thead>
           <tbody>
-            {filtered.map((l, i) => {
-              const flag = isFlagged(l);
+            {visibleRows.map((row, i) => {
+              const isExpanded = expanded.has(row.name);
+              const isSuspense = /suspense|miscellaneous/i.test(row.name);
+              const closingCr  = row.closing > 0;   // positive = Cr
+              const closingDr  = row.closing < 0;   // negative = Dr
+              const openingCr  = row.opening > 0;
+              const openingDr  = row.opening < 0;
+              const rowBg = row.isGroup
+                ? 'var(--bg3)'
+                : isSuspense
+                  ? 'rgba(251,191,36,0.05)'
+                  : i % 2 === 0 ? 'var(--bg)' : 'var(--bg2)';
+
               return (
-                <tr key={l.name + i}
-                  style={{ background: flag ? 'rgba(251,191,36,0.06)' : i % 2 === 0 ? 'var(--bg)' : 'var(--bg2)', borderBottom: '1px solid var(--border)' }}
-                >
-                  <td className="px-3 py-1.5" style={{ color: 'var(--text1)' }}>{l.name}</td>
-                  <td className="px-3 py-1.5 text-right font-mono text-xs" style={{ color: l.dr ? 'var(--teal)' : 'var(--coral)' }}>
-                    {formatAmount(Math.abs(l.closing))}
-                  </td>
-                  <td className="px-3 py-1.5 text-center">
-                    <span className="px-2 py-0.5 rounded text-xs font-medium"
-                      style={{ background: l.dr ? 'rgba(20,184,166,0.12)' : 'rgba(242,107,91,0.12)', color: l.dr ? 'var(--teal)' : 'var(--coral)' }}>
-                      {l.dr ? 'Cr' : 'Dr'}
-                    </span>
-                  </td>
-                  <td className="px-3 py-1.5">
-                    {flag && (
-                      <span className="px-2 py-0.5 rounded text-xs" style={{ background: 'rgba(251,191,36,0.15)', color: 'var(--amber)' }}>
-                        ⚑ {flag}
+                <tr key={row.name + row.depth}
+                  style={{ background: rowBg, borderBottom: '1px solid var(--border)' }}>
+                  {/* Account name with expand toggle and depth indent */}
+                  <td className="px-3 py-1.5" style={{ overflow: 'hidden' }}>
+                    <div className="flex items-center gap-1" style={{ paddingLeft: search ? 0 : row.depth * 14 }}>
+                      {row.isGroup ? (
+                        <button
+                          onClick={() => toggleExpand(row.name)}
+                          style={{ fontSize: 10, width: 14, flexShrink: 0, color: 'var(--text3)', cursor: 'pointer' }}
+                        >
+                          {isExpanded ? '▾' : '▸'}
+                        </button>
+                      ) : (
+                        <span style={{ width: 14, flexShrink: 0 }} />
+                      )}
+                      <span
+                        className="truncate"
+                        title={row.name}
+                        style={{
+                          color: row.isGroup ? 'var(--text1)' : 'var(--text2)',
+                          fontWeight: row.isGroup ? 600 : 400,
+                          fontSize: row.isGroup ? 13 : 12,
+                        }}
+                      >
+                        {row.name}
                       </span>
+                      {isSuspense && !row.isGroup && (
+                        <span className="ml-1 px-1.5 rounded text-xs shrink-0"
+                          style={{ background: 'rgba(251,191,36,0.15)', color: 'var(--amber)' }}>⚑</span>
+                      )}
+                    </div>
+                  </td>
+                  {/* Opening */}
+                  <td className="px-3 py-1.5 text-right font-mono text-xs" style={{ color: openingCr ? 'var(--teal)' : openingDr ? 'var(--coral)' : 'var(--text3)' }}>
+                    {row.opening === 0 ? '—' : (
+                      <>{fmtTBAmt(row.opening)}<span className="ml-1 text-xs opacity-60">{openingCr ? 'Cr' : 'Dr'}</span></>
+                    )}
+                  </td>
+                  {/* Dr movement */}
+                  <td className="px-3 py-1.5 text-right font-mono text-xs" style={{ color: row.debitMov > 0 ? 'var(--coral)' : 'var(--text3)' }}>
+                    {fmtTBAmt(row.debitMov)}
+                  </td>
+                  {/* Cr movement */}
+                  <td className="px-3 py-1.5 text-right font-mono text-xs" style={{ color: row.creditMov > 0 ? 'var(--teal)' : 'var(--text3)' }}>
+                    {fmtTBAmt(row.creditMov)}
+                  </td>
+                  {/* Closing */}
+                  <td className="px-3 py-1.5 text-right font-mono text-xs" style={{ color: closingCr ? 'var(--teal)' : closingDr ? 'var(--coral)' : 'var(--text3)' }}>
+                    {row.closing === 0 ? '—' : (
+                      <>{fmtTBAmt(row.closing)}<span className="ml-1 text-xs opacity-60">{closingCr ? 'Cr' : 'Dr'}</span></>
                     )}
                   </td>
                 </tr>
               );
             })}
-            {filtered.length === 0 && (
-              <tr><td colSpan={4} className="px-3 py-8 text-center text-sm" style={{ color: 'var(--text3)' }}>No ledgers match</td></tr>
+            {visibleRows.length === 0 && (
+              <tr><td colSpan={5} className="px-3 py-8 text-center text-sm" style={{ color: 'var(--text3)' }}>
+                {tbRows.length === 0 ? 'No Trial Balance data loaded' : 'No accounts match'}
+              </td></tr>
             )}
           </tbody>
         </table>
@@ -1096,7 +1190,9 @@ export default function DataView() {
   }
 
   const pd = parsedData as Partial<ParsedData>;
-  const tbLedgers: TBLedger[] = pd.tbLedgers ?? [];
+  const tbLedgers: TBLedger[]    = pd.tbLedgers     ?? [];
+  const tbRows:    TBFullRow[]   = pd.tbRows        ?? [];
+  const masterEntries: MasterEntry[] = pd.masterEntries ?? [];
   const pdRaw = pd as Record<string, unknown>;
 
   return (
@@ -1105,7 +1201,7 @@ export default function DataView() {
       <div className="px-6 py-4 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
         <h1 className="text-lg font-semibold" style={{ color: 'var(--text1)' }}>Data View</h1>
         <p className="text-xs mt-0.5" style={{ color: 'var(--text3)' }}>
-          Explore parsed Tally data in tabular form. {tbLedgers.length} ledgers loaded.
+          Explore parsed Tally data in tabular form. {tbRows.length} accounts loaded.
         </p>
       </div>
 
@@ -1131,7 +1227,7 @@ export default function DataView() {
       {/* Tab content */}
       <div className="flex-1 overflow-y-auto px-6 py-4">
         {activeTab === 'tb' && (
-          <TBTab ledgers={tbLedgers} failedChecks={failedCheckIds} />
+          <TBTab tbRows={tbRows} masterEntries={masterEntries} />
         )}
         {activeTab === 'pl' && <PLTab pd={pdRaw} />}
         {activeTab === 'bs' && <BSTab pd={pdRaw} />}

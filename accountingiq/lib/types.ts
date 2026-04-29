@@ -218,6 +218,8 @@ export interface ParsedData {
 
   // Strict Master / financial statement trees for Data View
   masterEntries?: MasterEntry[];
+  /** Full TB rows (groups + ledgers) for the hierarchical Data View display */
+  tbRows?: TBFullRow[];
   pandlStatement?: ParsedStatement;
   pandlRows?: FlatFinancialRow[];
   bsheetStatement?: ParsedStatement;
@@ -265,6 +267,19 @@ export interface TBLedger {
   nl: string;   // lowercased
   closing: number;
   dr: boolean;
+}
+
+/**
+ * Full Trial Balance row as exported from Tally — includes both group and ledger entries.
+ * Sign convention: positive closing = Cr balance, negative = Dr balance.
+ */
+export interface TBFullRow {
+  name: string;
+  opening:   number;  // DSPOPAMTA  (positive=Cr, negative=Dr)
+  debitMov:  number;  // abs(DSPDRAMTA) — total Dr transactions in period
+  creditMov: number;  // abs(DSPCRAMTA) — total Cr transactions in period
+  closing:   number;  // DSPCLAMTA  (positive=Cr, negative=Dr)
+  isGroup:   boolean; // true if master type='group'
 }
 
 export interface CompanyProfile {
