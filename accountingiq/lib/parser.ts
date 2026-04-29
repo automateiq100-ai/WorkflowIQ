@@ -160,7 +160,10 @@ export function parseTallyDate(s: string): Date | null {
 
 // ── Trial Balance parser ─────────────────────────────────────────────────
 
-export function parseTrialBalance(xml: string): {
+export function parseTrialBalance(
+  xml: string,
+  masterMap: Map<string, MasterEntry> = new Map(),
+): {
   tbLedgers: TBLedger[];
   suspenseCount: number;
   dupPairs: number;
@@ -193,6 +196,8 @@ export function parseTrialBalance(xml: string): {
     const infoBlock = m[2];
     const name = xmlText(nameBlock, 'DSPDISPNAME');
     if (!name || name === 'undefined') continue;
+    // Skip GROUP-type entries — they are rollup rows; including them double-counts children in D1/H2/H3
+    if (masterMap.get(normalizeMasterKey(name))?.type === 'group') continue;
     const closingStr = xmlText(infoBlock, 'DSPCLAMTA');
     const closing = parseAmt(closingStr);
     // Bug 1 fix: preserve sign. Dr = positive, Cr = negative in Tally TB convention
@@ -207,6 +212,7 @@ export function parseTrialBalance(xml: string): {
     for (let i = 0; i < minLen; i++) {
       const name = names[i];
       if (!name || name === 'undefined') continue;
+      if (masterMap.get(normalizeMasterKey(name))?.type === 'group') continue;
       const closing = parseAmt(amounts[i]);
       tbLedgers.push({ name, nl: name.toLowerCase(), closing, dr: closing >= 0 });
     }
@@ -219,6 +225,7 @@ export function parseTrialBalance(xml: string): {
       const block = m[1];
       const name = xmlText(block, 'NAME') || xmlText(block, 'LEDGERNAME');
       if (!name || name === 'undefined') continue;
+      if (masterMap.get(normalizeMasterKey(name))?.type === 'group') continue;
       const closingStr = xmlText(block, 'CLOSINGBALANCE') || xmlText(block, 'CLOSINGBAL');
       const closing = parseAmt(closingStr);
       tbLedgers.push({ name, nl: name.toLowerCase(), closing, dr: closing >= 0 });

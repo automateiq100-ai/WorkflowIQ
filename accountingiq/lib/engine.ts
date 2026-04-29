@@ -80,11 +80,11 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
   const hasGrp      = files.grpsum.hasContent;
   const hasMaster   = files.master.hasContent;
 
-  // Parse each XML
-  const tbResult  = hasTB  ? parseTrialBalance(files.trialbal.content!) : null;
+  // Parse each XML — masterMap first so parseTrialBalance can filter GROUP rollup rows
+  const masterMap = hasMaster && files.master.content ? parseMasterMap(files.master.content) : new Map();
+  const tbResult  = hasTB  ? parseTrialBalance(files.trialbal.content!, masterMap) : null;
   const plResult  = hasPL  ? parsePandL(files.pandl.content!)           : null;
   const bsResult  = hasBS  ? parseBSheet(files.bsheet.content!)         : null;
-  const masterMap = hasMaster && files.master.content ? parseMasterMap(files.master.content) : new Map();
   const pandlStatement = hasPL ? parsePandLStatement(files.pandl.content!, masterMap) : null;
   const bsheetStatement = hasBS ? parseBSheetStatement(files.bsheet.content!, masterMap) : null;
 
