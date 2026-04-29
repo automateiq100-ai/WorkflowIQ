@@ -1050,8 +1050,8 @@ function buildStatement(
     const name = decodeEntities(token.name.trim());
     if (!name || name === 'undefined') continue;
 
-    if (!token.mainAmt.trim() && !token.subAmt.trim()) continue;
-
+    // Keep zero/blank-balance rows — display them as ₹0 so nothing is silently hidden.
+    // resolveNode() falls back to 'main' when both amounts are empty (master-map tie-breaker).
     let amount = parseAmt(token.mainAmt || token.subAmt);
     const resolved = resolveNode(name, token.mainAmt, token.subAmt, masterMap);
     // "Less: Closing Stock" etc. — Tally emits these as Dr (negative) even though
