@@ -676,23 +676,7 @@ function BSTab({ pd }: { pd: Record<string, unknown> }) {
   }, [masterEntries]);
 
   if (strictStatement?.nodes?.length) {
-    return (
-      <>
-        {!masterEntries?.length && (
-          <div
-            className="mb-3 px-4 py-2.5 rounded-lg text-sm flex items-center gap-2"
-            style={{ background: 'rgba(239,170,30,0.10)', color: 'var(--amber)', border: '1px solid rgba(239,170,30,0.25)' }}
-          >
-            <span>⚠</span>
-            <span>
-              Upload the <strong>All Masters</strong> export (Ledger.xml) for accurate
-              Liabilities / Assets grouping. Without it, items are classified by sign only.
-            </span>
-          </div>
-        )}
-        <BSStrictView statement={strictStatement} masterMap={masterMap} />
-      </>
-    );
+    return <BSStrictView statement={strictStatement} masterMap={masterMap} />;
   }
 
   // In Tally BS export convention:

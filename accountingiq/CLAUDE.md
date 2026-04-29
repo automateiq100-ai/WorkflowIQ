@@ -168,6 +168,7 @@ SUPABASE_SERVICE_ROLE_KEY=eyJ...        # Supabase service role key (server-side
 | P&L Statement | `pandl` | Required |
 | Balance Sheet | `bsheet` | Required |
 | Group Summary | `grpsum` | Required |
+| All Masters (Ledger.xml) | `master` | Required |
 | Sales Register | `sales` | Conditional |
 | Purchase Register | `purchase` | Conditional |
 | Bills Receivable | `bills` | Conditional |

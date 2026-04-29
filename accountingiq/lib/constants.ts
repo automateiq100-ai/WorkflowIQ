@@ -27,9 +27,9 @@ export const DIM_COLORS: Record<DimKey, string> = {
 };
 
 export const FILE_TIERS = {
-  required:    ['daybook', 'trialbal', 'pandl', 'bsheet', 'grpsum'] as FileKey[],
+  required:    ['daybook', 'trialbal', 'pandl', 'bsheet', 'grpsum', 'master'] as FileKey[],
   conditional: ['sales', 'purchase', 'bills', 'payables', 'cashflow'] as FileKey[],
-  optional:    ['faregister', 'stock', 'bankrecon', 'master'] as FileKey[],
+  optional:    ['faregister', 'stock', 'bankrecon'] as FileKey[],
 };
 
 export const FILE_LABELS: Record<FileKey, string> = {

@@ -496,7 +496,7 @@ function UploadScreen({
         </button>
         {!requiredLoaded && (
           <span className="text-xs" style={{ color: 'var(--text3)' }}>
-            5 required files needed
+            6 required files needed
           </span>
         )}
 
@@ -759,6 +759,7 @@ function FileRow({
   last: boolean;
 }) {
   const manualRef = useRef<HTMLInputElement>(null);
+  if (!entry) return null;
   const loaded = entry.hasContent;
   const expired = entry.sessionExpired;
 
