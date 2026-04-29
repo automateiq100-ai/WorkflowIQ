@@ -2,7 +2,8 @@
 
 import React, { useState, useMemo } from 'react';
 import { useApp } from '@/lib/state';
-import type { TBLedger, ParsedData, ChunkedStats, PLSection, Voucher, FinancialNode, ParsedStatement } from '@/lib/types';
+import type { TBLedger, ParsedData, ChunkedStats, PLSection, Voucher, FinancialNode, ParsedStatement, MasterEntry } from '@/lib/types';
+import { classifyBSSide } from '@/lib/parser';
 import AgentFixView from '@/app/views/AgentFixView';
 
 // ── Bill parser ────────────────────────────────────────────────────────────
@@ -271,10 +272,26 @@ function BSSectionTable({
   );
 }
 
-function BSStrictView({ statement }: { statement: ParsedStatement }) {
-  // Tally sign convention: positive = Cr (liabilities/equity), negative = Dr (assets)
-  const liabilityNodes = statement.nodes.filter(n => n.amount >= 0);
-  const assetNodes     = statement.nodes.filter(n => n.amount < 0);
+function BSStrictView({
+  statement,
+  masterMap = new Map(),
+}: {
+  statement: ParsedStatement;
+  masterMap?: Map<string, MasterEntry>;
+}) {
+  const hasMaster = masterMap.size > 0;
+
+  function sideOf(node: FinancialNode): 'liability' | 'asset' {
+    if (hasMaster) {
+      const side = classifyBSSide(node.name, masterMap);
+      if (side !== 'unknown') return side;
+    }
+    // Tally sign convention: positive = Cr (liabilities/equity), negative = Dr (assets)
+    return node.amount >= 0 ? 'liability' : 'asset';
+  }
+
+  const liabilityNodes = statement.nodes.filter(n => sideOf(n) === 'liability');
+  const assetNodes     = statement.nodes.filter(n => sideOf(n) === 'asset');
 
   const liabilityTotal = liabilityNodes.reduce((s, n) => s + n.amount, 0);
   const assetTotal     = assetNodes.reduce((s, n) => s + Math.abs(n.amount), 0);
@@ -649,8 +666,33 @@ function BSGroupRow({ label, amount, children, color }: {
 
 function BSTab({ pd }: { pd: Record<string, unknown> }) {
   const strictStatement = pd.bsheetStatement as ParsedStatement | undefined;
+  const masterEntries   = pd.masterEntries as MasterEntry[] | undefined;
+
+  const masterMap = useMemo(() => {
+    if (!masterEntries?.length) return new Map<string, MasterEntry>();
+    const m = new Map<string, MasterEntry>();
+    for (const e of masterEntries) m.set(e.name.toLowerCase().trim(), e);
+    return m;
+  }, [masterEntries]);
+
   if (strictStatement?.nodes?.length) {
-    return <BSStrictView statement={strictStatement} />;
+    return (
+      <>
+        {!masterEntries?.length && (
+          <div
+            className="mb-3 px-4 py-2.5 rounded-lg text-sm flex items-center gap-2"
+            style={{ background: 'rgba(239,170,30,0.10)', color: 'var(--amber)', border: '1px solid rgba(239,170,30,0.25)' }}
+          >
+            <span>⚠</span>
+            <span>
+              Upload the <strong>All Masters</strong> export (Ledger.xml) for accurate
+              Liabilities / Assets grouping. Without it, items are classified by sign only.
+            </span>
+          </div>
+        )}
+        <BSStrictView statement={strictStatement} masterMap={masterMap} />
+      </>
+    );
   }
 
   // In Tally BS export convention:

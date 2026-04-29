@@ -917,6 +917,41 @@ export function parseMasterMap(xml: string): Map<string, MasterEntry> {
   return map;
 }
 
+/** Tally standard primary group names on the Liabilities side of the BS. */
+export const TALLY_LIABILITY_PRIMARIES = new Set([
+  'capital account', 'loans (liability)', 'current liabilities',
+  'reserves & surplus', 'provisions', 'branch / divisions',
+]);
+
+/** Tally standard primary group names on the Assets side of the BS. */
+export const TALLY_ASSET_PRIMARIES = new Set([
+  'fixed assets', 'current assets', 'misc. expenses (asset)',
+  'investments', 'loans & advances (asset)', 'suspense a/c',
+]);
+
+/**
+ * Walk the master parent chain from `name` until a known Tally primary group.
+ * Returns 'liability', 'asset', or 'unknown' (caller falls back to sign).
+ */
+export function classifyBSSide(
+  name: string,
+  masterMap: Map<string, MasterEntry>,
+): 'liability' | 'asset' | 'unknown' {
+  let current = name;
+  const seen = new Set<string>();
+  for (let hop = 0; hop < 20; hop++) {
+    if (seen.has(current)) break;
+    seen.add(current);
+    const lname = current.toLowerCase().trim();
+    if (TALLY_LIABILITY_PRIMARIES.has(lname)) return 'liability';
+    if (TALLY_ASSET_PRIMARIES.has(lname)) return 'asset';
+    const entry = masterMap.get(normalizeMasterKey(current));
+    if (!entry || !entry.parent || entry.parent.toLowerCase() === 'primary') break;
+    current = entry.parent;
+  }
+  return 'unknown';
+}
+
 // ── Phase 2-4 internal helpers ────────────────────────────────────────────
 
 /**
@@ -948,7 +983,14 @@ function resolveNode(
   const hasSub  = subAmt.trim()  !== '';
   const entry   = masterMap.get(normalizeMasterKey(name));
 
-  const nodeType: FinancialNodeType = hasMain ? 'main' : hasSub ? 'sub' : 'main';
+  const nodeType: FinancialNodeType =
+    hasMain ? 'main' :
+    hasSub  ? 'sub'  :
+    // Zero-balance tie-breaker: entries with a real (non-Primary) master parent are
+    // nested sub-groups/ledgers shown as ₹0 leaf lines in Tally's condensed BS display.
+    // Top-level BS groups (e.g. Current Assets, Capital Account) have empty/Primary parent
+    // and always have a non-blank BSMAINAMT, so they never reach this branch.
+    (entry && entry.parent && entry.parent.toLowerCase() !== 'primary' ? 'sub' : 'main');
 
   return {
     nodeType,
