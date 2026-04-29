@@ -205,9 +205,57 @@ function StrictStatementRow({ node, depth = 0 }: { node: FinancialNode; depth?: 
   );
 }
 
-function StrictStatementTable({ statement }: { statement: ParsedStatement }) {
+function StrictStatementTable({
+  statement,
+  bsNetProfit,
+}: {
+  statement: ParsedStatement;
+  bsNetProfit?: number | null;
+}) {
+  // Net profit = algebraic sum of all top-level section amounts.
+  // Income sections carry positive (Cr) amounts; expense sections carry negative (Dr) amounts.
+  const computedProfit = statement.nodes.reduce((s, n) => s + n.amount, 0);
+  const totalIncome    = statement.nodes.filter(n => n.amount > 0).reduce((s, n) => s + n.amount, 0);
+  const totalExpenses  = statement.nodes.filter(n => n.amount < 0).reduce((s, n) => s + Math.abs(n.amount), 0);
+
+  // Prefer BS-sourced net profit (Profit & Loss A/c line) when available and non-zero
+  const displayProfit  = (bsNetProfit != null && bsNetProfit !== 0) ? bsNetProfit : computedProfit;
+  const isProfit       = displayProfit >= 0;
+  const profitColor    = isProfit ? 'var(--green)' : 'var(--red)';
+  const profitBg       = isProfit ? 'rgba(76,175,121,0.08)' : 'rgba(242,107,91,0.08)';
+
+  // Show a reconciliation note if BS figure differs materially from computed
+  const bsDiffers = bsNetProfit != null && bsNetProfit !== 0 &&
+    Math.abs(bsNetProfit - computedProfit) > 1;
+
   return (
     <div className="flex flex-col gap-3 max-w-4xl">
+      {/* Summary tiles */}
+      <div className="flex gap-3 flex-wrap">
+        {[
+          { label: 'Total Income', value: totalIncome, color: 'var(--teal)' },
+          { label: 'Total Expenses', value: totalExpenses, color: 'var(--coral)' },
+          { label: isProfit ? 'Net Profit' : 'Net Loss', value: Math.abs(displayProfit), color: profitColor },
+        ].map(s => (
+          <div key={s.label} className="px-4 py-2.5 rounded-lg flex-1" style={{ background: 'var(--bg3)', minWidth: 140 }}>
+            <div className="text-xs mb-0.5" style={{ color: 'var(--text3)' }}>{s.label}</div>
+            <div className="text-base font-bold font-mono" style={{ color: s.color }}>{formatAmount(s.value)}</div>
+          </div>
+        ))}
+      </div>
+
+      {bsDiffers && (
+        <div className="px-4 py-2 rounded-lg text-xs flex items-center gap-2"
+          style={{ background: 'rgba(239,170,30,0.10)', color: 'var(--amber)', border: '1px solid rgba(239,170,30,0.25)' }}>
+          <span>⚠</span>
+          <span>
+            P&amp;L computed profit <strong>{formatAmount(Math.abs(computedProfit))}</strong> differs
+            from Balance Sheet P&amp;L A/c <strong>{formatAmount(Math.abs(bsNetProfit!))}</strong>.
+            Displaying BS figure.
+          </span>
+        </div>
+      )}
+
       <div className="overflow-auto rounded-xl border shadow-sm" style={{ borderColor: 'var(--border)', background: 'var(--bg2)' }}>
         <table className="w-full text-sm" style={{ borderCollapse: 'collapse' }}>
           <thead>
@@ -222,6 +270,26 @@ function StrictStatementTable({ statement }: { statement: ParsedStatement }) {
               <tr><td colSpan={2} className="px-3 py-8 text-center text-sm" style={{ color: 'var(--text3)' }}>No statement rows parsed</td></tr>
             )}
           </tbody>
+          <tfoot>
+            {/* Subtotal lines */}
+            <tr style={{ borderTop: '1px solid var(--border)', background: 'var(--bg3)' }}>
+              <td className="px-6 py-2 text-xs font-semibold" style={{ color: 'var(--text2)' }}>Total Income</td>
+              <td className="px-6 py-2 text-right font-mono text-xs font-semibold" style={{ color: 'var(--teal)' }}>{formatAmount(totalIncome)}</td>
+            </tr>
+            <tr style={{ borderTop: '1px solid var(--border)', background: 'var(--bg3)' }}>
+              <td className="px-6 py-2 text-xs font-semibold" style={{ color: 'var(--text2)' }}>Total Expenses</td>
+              <td className="px-6 py-2 text-right font-mono text-xs font-semibold" style={{ color: 'var(--coral)' }}>{formatAmount(totalExpenses)}</td>
+            </tr>
+            {/* Net Profit / Loss */}
+            <tr style={{ borderTop: '2px solid var(--border)', background: profitBg }}>
+              <td className="px-6 py-3 font-bold" style={{ color: 'var(--text1)', fontSize: 13 }}>
+                {isProfit ? 'Net Profit' : 'Net Loss'} for the period
+              </td>
+              <td className="px-6 py-3 text-right font-mono font-bold" style={{ color: profitColor, fontSize: 15 }}>
+                {formatAmount(Math.abs(displayProfit))}
+              </td>
+            </tr>
+          </tfoot>
         </table>
       </div>
     </div>
@@ -630,7 +698,8 @@ function PLGroupRow({ label, total, children, color, note }: {
 function PLTab({ pd }: { pd: Record<string, unknown> }) {
   const strictStatement = pd.pandlStatement as ParsedStatement | undefined;
   if (strictStatement?.nodes?.length) {
-    return <StrictStatementTable statement={strictStatement} />;
+    const bsNetProfit = pd.bsNetProfit as number | null | undefined;
+    return <StrictStatementTable statement={strictStatement} bsNetProfit={bsNetProfit} />;
   }
 
   const plSections = (pd.plSections as PLSection[] | undefined) ?? [];
@@ -640,7 +709,8 @@ function PLTab({ pd }: { pd: Record<string, unknown> }) {
   const expenses       = (pd.expenses as number) ?? 0;
   const netProfit      = (pd.netProfit as number) ?? 0;
   const totalIncome    = directRevenue + otherIncome;
-  const totalExpenses  = expenses;
+  // totalExpenses from parser already includes cost of materials + indirect expenses
+  const totalExpenses  = expenses || (costOfMaterials + (pd.indirectExpenses as number ?? 0));
 
   // Map sections from XML to schedule groups
   const salesSections  = plSections.filter(s => s.name.toLowerCase().includes('sales') && !s.name.toLowerCase().includes('cost of sales'));
@@ -714,9 +784,13 @@ function PLTab({ pd }: { pd: Record<string, unknown> }) {
               <td className="px-6 py-2.5 text-right font-mono font-bold" style={{ color: 'var(--coral)' }}>{formatAmount(totalExpenses)}</td>
             </tr>
 
-            <tr style={{ borderBottom: '1px solid var(--border)', background: 'rgba(255,255,255,0.04)' }}>
-              <td className="px-6 py-3 font-bold" style={{ color: 'var(--text1)' }}>V  Profit / (Loss) before tax (III − IV)</td>
-              <td className="px-6 py-3 text-right font-mono font-bold" style={{ color: netProfit >= 0 ? 'var(--green)' : 'var(--red)', fontSize: '1rem' }}>{formatAmount(totalIncome - totalExpenses)}</td>
+            <tr style={{ borderBottom: '1px solid var(--border)', background: netProfit >= 0 ? 'rgba(76,175,121,0.08)' : 'rgba(242,107,91,0.08)' }}>
+              <td className="px-6 py-3 font-bold" style={{ color: 'var(--text1)' }}>
+                {netProfit >= 0 ? 'Net Profit' : 'Net Loss'} for the period
+              </td>
+              <td className="px-6 py-3 text-right font-mono font-bold" style={{ color: netProfit >= 0 ? 'var(--green)' : 'var(--red)', fontSize: '1rem' }}>
+                {formatAmount(Math.abs(netProfit || (totalIncome - totalExpenses)))}
+              </td>
             </tr>
           </tbody>
         </table>
