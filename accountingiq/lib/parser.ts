@@ -983,14 +983,21 @@ function resolveNode(
   const hasSub  = subAmt.trim()  !== '';
   const entry   = masterMap.get(normalizeMasterKey(name));
 
+  // Priority for nodeType:
+  //   1. BSMAINAMT / PLAMT main → 'main'  (Tally's explicit top-level signal,
+  //      e.g. "Profit & Loss A/c" appearing on the BS as a primary line)
+  //   2. Master entry type → authoritative for nested rows
+  //        GROUP  → 'main'  (sub-group header — nests Duties & Taxes under
+  //                          Current Liabilities, Carriage Inward under Direct
+  //                          Expenses, Cash-in-Hand under Current Assets, etc.)
+  //        LEDGER → 'sub'   (always a leaf account)
+  //   3. Amount-tag fallback for names not in the master file.
   const nodeType: FinancialNodeType =
     hasMain ? 'main' :
+    entry?.type === 'group'  ? 'main' :
+    entry?.type === 'ledger' ? 'sub'  :
     hasSub  ? 'sub'  :
-    // Zero-balance tie-breaker: entries with a real (non-Primary) master parent are
-    // nested sub-groups/ledgers shown as ₹0 leaf lines in Tally's condensed BS display.
-    // Top-level BS groups (e.g. Current Assets, Capital Account) have empty/Primary parent
-    // and always have a non-blank BSMAINAMT, so they never reach this branch.
-    (entry && entry.parent && entry.parent.toLowerCase() !== 'primary' ? 'sub' : 'main');
+    'sub';  // unknown + zero-balance → safer leaf default
 
   return {
     nodeType,
@@ -1086,14 +1093,27 @@ function buildStatement(
   const tokens = collectStatementTokens(ordered, statement);
   const parsedNodes: FinancialNode[] = [];
 
-  let current: FinancialNode | null = null;
+  // Master-aware placement: maintain a stack of active group nodes (root → deepest).
+  // For every node, look up its master-defined parent. If the parent is in the stack,
+  // place the node under it (popping deeper levels for 'main' headers). Otherwise fall
+  // back to the most recent root section. This mirrors Tally's true Chart of Accounts
+  // hierarchy (e.g. Cash-in-Hand → Current Assets, Carriage Inward → Direct Expenses).
+  const stack: FinancialNode[] = [];
+  let lastRoot: FinancialNode | null = null;
+
+  function findInStack(parentName: string): number {
+    const norm = parentName.toLowerCase().trim();
+    for (let i = stack.length - 1; i >= 0; i--) {
+      if (stack[i].name.toLowerCase().trim() === norm) return i;
+    }
+    return -1;
+  }
 
   for (const token of tokens) {
     const name = decodeEntities(token.name.trim());
     if (!name || name === 'undefined') continue;
 
-    // Keep zero/blank-balance rows — display them as ₹0 so nothing is silently hidden.
-    // resolveNode() falls back to 'main' when both amounts are empty (master-map tie-breaker).
+    // Keep zero/blank-balance rows — display as ₹0 so nothing is silently hidden.
     let amount = parseAmt(token.mainAmt || token.subAmt);
     const resolved = resolveNode(name, token.mainAmt, token.subAmt, masterMap);
     // "Less: Closing Stock" etc. — Tally emits these as Dr (negative) even though
@@ -1101,14 +1121,47 @@ function buildStatement(
     if (/^less[\s:]/i.test(name)) amount = -amount;
     const node = makeNode(name, amount, resolved);
 
-    if (resolved.nodeType === 'main') {
-      parsedNodes.push(node);
-      current = node;
-    } else if (current) {
-      current.children.push(node);
-      node.sourceParent = current.name;
-    } else {
-      parsedNodes.push(node);
+    const masterParent = resolved.masterParent;
+    const hasRealMasterParent =
+      !!masterParent &&
+      masterParent !== 'Computed / Not in Master' &&
+      masterParent.toLowerCase() !== 'primary';
+
+    let placed = false;
+
+    if (hasRealMasterParent) {
+      const idx = findInStack(masterParent);
+      if (idx >= 0) {
+        stack[idx].children.push(node);
+        node.sourceParent = stack[idx].name;
+        if (resolved.nodeType === 'main') {
+          // Group header — pop deeper levels and become the new top of stack
+          stack.splice(idx + 1);
+          stack.push(node);
+        }
+        placed = true;
+      }
+    }
+
+    if (!placed) {
+      if (resolved.nodeType === 'main') {
+        // New root-level section header
+        parsedNodes.push(node);
+        stack.length = 0;
+        stack.push(node);
+        lastRoot = node;
+      } else {
+        // Sub item whose master parent isn't in stack — anchor to current section root.
+        // This handles Tally display quirks (e.g. Input CGST/SGST appearing in the
+        // Current Assets section even though their master parent is Duties & Taxes).
+        const fallback = lastRoot;
+        if (fallback) {
+          fallback.children.push(node);
+          node.sourceParent = fallback.name;
+        } else {
+          parsedNodes.push(node);
+        }
+      }
     }
   }
 

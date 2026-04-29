@@ -188,9 +188,15 @@ describe('strict Tally XML parsing', () => {
     <ENVELOPE>
       <GROUP NAME="Sales Accounts"><PARENT>Primary</PARENT></GROUP>
       <GROUP NAME="Current Assets"><PARENT></PARENT></GROUP>
+      <GROUP NAME="Current Liabilities"><PARENT>Primary</PARENT></GROUP>
+      <GROUP NAME="Cash-in-Hand"><PARENT>Current Assets</PARENT></GROUP>
+      <GROUP NAME="Duties &amp; Taxes"><PARENT>Current Liabilities</PARENT></GROUP>
+      <GROUP NAME="Sundry Creditors"><PARENT>Current Liabilities</PARENT></GROUP>
       <GROUP NAME="Zero Group"><PARENT>Primary</PARENT></GROUP>
+      <GROUP NAME="Bank Accounts"><PARENT>Primary</PARENT></GROUP>
       <LEDGER NAME="Sales Account"><PARENT>Sales Accounts</PARENT></LEDGER>
       <LEDGER NAME="Cash"><PARENT>Current Assets</PARENT></LEDGER>
+      <LEDGER NAME="Axis Bank"><PARENT>Bank Accounts</PARENT></LEDGER>
       <LEDGER NAME="Zero Ledger"><PARENT>Zero Group</PARENT></LEDGER>
     </ENVELOPE>
   `;
@@ -250,7 +256,124 @@ describe('strict Tally XML parsing', () => {
     expect(stmt.nodes[0].children[0].nodeType).toBe('sub');
   });
 
-  it('uses master map as zero-balance tie-breaker', () => {
+  it('nests sub-groups under their Master.xml parent (Cash-in-Hand → Current Assets)', () => {
+    const master = parseMasterMap(masterXml);
+    const stmt = parseBSheetStatement(`
+      <ENVELOPE>
+        <BSNAME><DSPACCNAME><DSPDISPNAME>Current Assets</DSPDISPNAME></DSPACCNAME></BSNAME>
+        <BSAMT><BSSUBAMT></BSSUBAMT><BSMAINAMT>5000</BSMAINAMT></BSAMT>
+        <BSNAME><DSPACCNAME><DSPDISPNAME>Cash-in-Hand</DSPDISPNAME></DSPACCNAME></BSNAME>
+        <BSAMT><BSSUBAMT></BSSUBAMT><BSMAINAMT>2000</BSMAINAMT></BSAMT>
+      </ENVELOPE>
+    `, master);
+
+    // Cash-in-Hand has PARENT=Current Assets in master — must nest under it,
+    // not appear as a sibling root section.
+    expect(stmt.nodes.map(n => n.name)).toEqual(['Current Assets']);
+    expect(stmt.nodes[0].children.map(n => n.name)).toEqual(['Cash-in-Hand']);
+    expect(stmt.nodes[0].children[0].nodeType).toBe('main');
+  });
+
+  it('places group rows with sub amounts under their Master.xml parent header', () => {
+    const master = parseMasterMap(masterXml);
+    const stmt = parseBSheetStatement(`
+      <ENVELOPE>
+        <BSNAME><DSPACCNAME><DSPDISPNAME>Current Liabilities</DSPDISPNAME></DSPACCNAME></BSNAME>
+        <BSAMT><BSSUBAMT></BSSUBAMT><BSMAINAMT>470400</BSMAINAMT></BSAMT>
+        <BSNAME><DSPACCNAME><DSPDISPNAME>Duties &amp; Taxes</DSPDISPNAME></DSPACCNAME></BSNAME>
+        <BSAMT><BSSUBAMT>640800</BSSUBAMT><BSMAINAMT></BSMAINAMT></BSAMT>
+        <BSNAME><DSPACCNAME><DSPDISPNAME>Sundry Creditors</DSPDISPNAME></DSPACCNAME></BSNAME>
+        <BSAMT><BSSUBAMT>-206400</BSSUBAMT><BSMAINAMT></BSMAINAMT></BSAMT>
+      </ENVELOPE>
+    `, master);
+
+    expect(stmt.nodes).toHaveLength(1);
+    expect(stmt.nodes[0].name).toBe('Current Liabilities');
+    expect(stmt.nodes[0].children.map(n => n.name)).toEqual(['Duties & Taxes', 'Sundry Creditors']);
+  });
+
+  it('marks a parent as balanced when its amount equals immediate child sum', () => {
+    const master = parseMasterMap(masterXml);
+    const stmt = parseBSheetStatement(`
+      <ENVELOPE>
+        <BSNAME><DSPACCNAME><DSPDISPNAME>Current Assets</DSPDISPNAME></DSPACCNAME></BSNAME>
+        <BSAMT><BSSUBAMT></BSSUBAMT><BSMAINAMT>5000</BSMAINAMT></BSAMT>
+        <BSNAME><DSPACCNAME><DSPDISPNAME>Cash</DSPDISPNAME></DSPACCNAME></BSNAME>
+        <BSAMT><BSSUBAMT>5000</BSSUBAMT><BSMAINAMT></BSMAINAMT></BSAMT>
+      </ENVELOPE>
+    `, master);
+
+    expect(stmt.nodes[0].childrenTotal).toBe(5000);
+    expect(stmt.nodes[0].childrenVariance).toBe(0);
+    expect(stmt.nodes[0].childrenBalanced).toBe(true);
+  });
+
+  it('marks a parent as mismatched when child sum differs from header amount', () => {
+    const master = parseMasterMap(masterXml);
+    const stmt = parseBSheetStatement(`
+      <ENVELOPE>
+        <BSNAME><DSPACCNAME><DSPDISPNAME>Current Assets</DSPDISPNAME></DSPACCNAME></BSNAME>
+        <BSAMT><BSSUBAMT></BSSUBAMT><BSMAINAMT>5000</BSMAINAMT></BSAMT>
+        <BSNAME><DSPACCNAME><DSPDISPNAME>Cash</DSPDISPNAME></DSPACCNAME></BSNAME>
+        <BSAMT><BSSUBAMT>4500</BSSUBAMT><BSMAINAMT></BSMAINAMT></BSAMT>
+      </ENVELOPE>
+    `, master);
+
+    expect(stmt.nodes[0].childrenTotal).toBe(4500);
+    expect(stmt.nodes[0].childrenVariance).toBe(500);
+    expect(stmt.nodes[0].childrenBalanced).toBe(false);
+  });
+
+  it('reconciles Cost of Sales by flipping the sign on "Less:" children', () => {
+    const master = parseMasterMap(masterXml);
+    const stmt = parsePandLStatement(`
+      <ENVELOPE>
+        <DSPACCNAME><DSPDISPNAME>Cost of Sales :</DSPDISPNAME></DSPACCNAME>
+        <PLAMT><PLSUBAMT></PLSUBAMT><BSMAINAMT>-300</BSMAINAMT></PLAMT>
+        <DSPACCNAME><DSPDISPNAME>Opening Stock</DSPDISPNAME></DSPACCNAME>
+        <PLAMT><PLSUBAMT>-500</PLSUBAMT><BSMAINAMT></BSMAINAMT></PLAMT>
+        <DSPACCNAME><DSPDISPNAME>Less: Closing Stock</DSPDISPNAME></DSPACCNAME>
+        <PLAMT><PLSUBAMT>-200</PLSUBAMT><BSMAINAMT></BSMAINAMT></PLAMT>
+      </ENVELOPE>
+    `, master);
+
+    // Tally exports "Less: Closing Stock" as a Dr (negative) even though it reduces
+    // a debit total. Parser flips the sign so children sum equals parent.
+    //   -500 (Opening) + +200 (Less Closing flipped) = -300 = parent ✓
+    expect(stmt.nodes[0].childrenTotal).toBe(-300);
+    expect(stmt.nodes[0].childrenVariance).toBe(0);
+    expect(stmt.nodes[0].childrenBalanced).toBe(true);
+  });
+
+  it('keeps ledger node standalone — no synthetic headers from masterMap', () => {
+    const master = parseMasterMap(masterXml);
+    const stmt = parseBSheetStatement(`
+      <ENVELOPE>
+        <BSNAME><DSPACCNAME><DSPDISPNAME>Axis Bank</DSPDISPNAME></DSPACCNAME></BSNAME>
+        <BSAMT><BSSUBAMT>1250</BSSUBAMT><BSMAINAMT></BSMAINAMT></BSAMT>
+      </ENVELOPE>
+    `, master);
+
+    expect(stmt.nodes).toHaveLength(1);
+    expect(stmt.nodes[0].name).toBe('Axis Bank');
+    expect(stmt.nodes[0].nodeType).toBe('sub');
+    expect(stmt.nodes[0].amount).toBe(1250);
+  });
+
+  it('does not create a visible Primary header', () => {
+    const master = parseMasterMap(masterXml);
+    const stmt = parseBSheetStatement(`
+      <ENVELOPE>
+        <BSNAME><DSPACCNAME><DSPDISPNAME>Current Assets</DSPDISPNAME></DSPACCNAME></BSNAME>
+        <BSAMT><BSSUBAMT></BSSUBAMT><BSMAINAMT>5000</BSMAINAMT></BSAMT>
+      </ENVELOPE>
+    `, master);
+
+    expect(stmt.nodes.map(n => n.name)).toEqual(['Current Assets']);
+    expect(stmt.nodes.some(n => n.name === 'Primary')).toBe(false);
+  });
+
+  it('preserves zero-balance entries — displays them as ₹0 rows using master type', () => {
     const master = parseMasterMap(masterXml);
     const stmt = parseBSheetStatement(`
       <ENVELOPE>
@@ -261,11 +384,17 @@ describe('strict Tally XML parsing', () => {
       </ENVELOPE>
     `, master);
 
+    // Zero Group (GROUP, parent=Primary) becomes a root 'main' node with ₹0.
+    // Zero Ledger (LEDGER, parent=Zero Group) nests under Zero Group as a 'sub' leaf.
+    expect(stmt.nodes.map(n => n.name)).toEqual(['Zero Group']);
     expect(stmt.nodes[0].nodeType).toBe('main');
-    expect(stmt.nodes[0].children[0].nodeType).toBe('sub');
+    expect(stmt.nodes[0].amount).toBe(0);
+    expect(stmt.nodes[0].children.map(n => [n.name, n.nodeType, n.amount])).toEqual([
+      ['Zero Ledger', 'sub', 0],
+    ]);
   });
 
-  it('defaults missing zero-balance master entries to main and labels them computed', () => {
+  it('preserves zero-balance entries not in master map (defaults to leaf)', () => {
     const stmt = parseBSheetStatement(`
       <ENVELOPE>
         <BSNAME><DSPACCNAME><DSPDISPNAME>Unknown Structural Line</DSPDISPNAME></DSPACCNAME></BSNAME>
@@ -273,9 +402,12 @@ describe('strict Tally XML parsing', () => {
       </ENVELOPE>
     `, new Map());
 
-    expect(stmt.nodes[0].nodeType).toBe('main');
-    expect(stmt.nodes[0].inMaster).toBe(false);
-    expect(stmt.nodes[0].masterParent).toBe('Computed / Not in Master');
+    // Unknown zero-balance entries stay visible as ₹0 leaf rows ('sub') to avoid
+    // silently dropping data; never become spurious group headers.
+    expect(stmt.nodes).toHaveLength(1);
+    expect(stmt.nodes[0].name).toBe('Unknown Structural Line');
+    expect(stmt.nodes[0].nodeType).toBe('sub');
+    expect(stmt.nodes[0].amount).toBe(0);
   });
 
   it('classifies computed P&L reporting lines only by amount tags', () => {
@@ -294,6 +426,10 @@ describe('strict Tally XML parsing', () => {
     expect(stmt.nodes[0].name).toBe('Cost of Sales :');
     expect(stmt.nodes[0].nodeType).toBe('main');
     expect(stmt.nodes[0].masterParent).toBe('Computed / Not in Master');
+    // -10000 (Opening Stock) + +31111 (Less: Closing Stock, sign flipped) = 21111
+    expect(stmt.nodes[0].childrenTotal).toBe(21111);
+    expect(stmt.nodes[0].childrenVariance).toBe(-651111);
+    expect(stmt.nodes[0].childrenBalanced).toBe(false);
     expect(stmt.nodes[0].children.map(n => [n.name, n.nodeType])).toEqual([
       ['Opening Stock', 'sub'],
       ['Less: Closing Stock', 'sub'],
@@ -395,5 +531,54 @@ describe('similarity', () => {
   it('returns low similarity for very different strings', () => {
     const sim = similarity('cashinhand', 'bankaccount');
     expect(sim).toBeLessThan(0.5);
+  });
+});
+
+// ── Real data smoke tests ─────────────────────────────────────────────────
+import { readFileSync } from 'fs';
+import { join } from 'path';
+
+describe('Real XML smoke tests', () => {
+  const realDataDir = join(__dirname, '..', '..', '..', '20042026');
+
+  it('parses PandL.xml and verifies Cost of Sales variance is zero', () => {
+    const raw = readFileSync(join(realDataDir, 'PandL.xml'));
+    const xml = raw.toString('utf16le');
+    const stmt = parsePandLStatement(xml, new Map());
+
+    expect(stmt.nodes.length).toBeGreaterThan(0);
+
+    const cos = stmt.nodes.find(n => n.name === 'Cost of Sales :');
+    expect(cos).toBeDefined();
+    expect(cos!.amount).toBe(-630000);
+    expect(cos!.children.length).toBe(1);
+    expect(cos!.children[0].name).toBe('Purchase Accounts');
+    expect(cos!.childrenTotal).toBe(-630000);
+    expect(cos!.childrenVariance).toBe(0);
+    expect(cos!.childrenBalanced).toBe(true);
+  });
+
+  it('parses BSheet.xml and verifies all nodes are balanced', () => {
+    const raw = readFileSync(join(realDataDir, 'BSheet.xml'));
+    const xml = raw.toString('utf16le');
+    const stmt = parseBSheetStatement(xml, new Map());
+
+    expect(stmt.nodes.length).toBeGreaterThan(0);
+
+    for (const node of stmt.nodes) {
+      if (node.children.length > 0) {
+        expect(node.childrenBalanced).toBe(true);
+      }
+    }
+
+    const cl = stmt.nodes.find(n => n.name === 'Current Liabilities');
+    expect(cl).toBeDefined();
+    expect(cl!.childrenTotal).toBe(470400);
+    expect(cl!.childrenVariance).toBe(0);
+
+    const ca = stmt.nodes.find(n => n.name === 'Current Assets');
+    expect(ca).toBeDefined();
+    expect(ca!.childrenTotal).toBe(-407634.72);
+    expect(ca!.childrenVariance).toBe(0);
   });
 });
