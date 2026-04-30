@@ -118,199 +118,170 @@ export default function Shell({ user }: { user: UserInfo | null }) {
   const moduleViews = MODULE_VIEWS[currentModule];
 
   return (
-    <div className="flex flex-col h-full" style={{ background: 'var(--bg)' }}>
+    <div className="flex h-full" style={{ background: 'var(--bg)' }}>
       {/* DPDPA consent modal */}
       {!consentGiven && <ConsentModal />}
 
-      {/* ── Top Module Tab Bar ── */}
-      <header
-        className="shrink-0 flex items-center border-b px-4"
-        style={{ background: 'var(--bg2)', borderColor: 'var(--border)', height: 48 }}
+      {/* ── Sidebar — full height ── */}
+      <aside
+        className="flex flex-col shrink-0 border-r h-full"
+        style={{ width: 216, background: 'var(--bg2)', borderColor: 'var(--border)' }}
       >
-        {/* Logo / Home button */}
-        <a
-          href="/portal"
-          className="flex items-center gap-1.5 text-sm font-semibold tracking-tight mr-6 transition-opacity"
-          style={{ color: 'var(--text1)', fontFamily: 'var(--font-dm-serif)', textDecoration: 'none' }}
-          title="Back to Portal"
-          onMouseEnter={e => (e.currentTarget.style.opacity = '0.7')}
-          onMouseLeave={e => (e.currentTarget.style.opacity = '1')}
-        >
-          <span style={{ fontSize: 16, lineHeight: 1 }}>⌂</span>
-          AccountingIQ
-        </a>
+        {/* Branding */}
+        <div className="px-5 py-5 border-b shrink-0" style={{ borderColor: 'var(--border)' }}>
+          <a href="/portal" className="block" style={{ textDecoration: 'none' }}>
+            <div className="text-base" style={{ fontFamily: 'var(--font-dm-serif)', color: 'var(--text1)' }}>
+              AccountingIQ
+            </div>
+            <div className="text-xs" style={{ color: 'var(--teal)' }}>
+              Tally XML Analyser
+            </div>
+          </a>
+        </div>
 
-        {/* Module tabs */}
-        <nav className="flex items-center flex-1 gap-1">
+        {/* Module switcher */}
+        <div className="px-2 py-2 border-b shrink-0" style={{ borderColor: 'var(--border)' }}>
           {MODULES.map(mod => {
             const active = currentModule === mod.id;
             return (
               <button
                 key={mod.id}
                 onClick={() => switchModule(mod.id)}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md font-medium transition-all"
+                className="w-full flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-md transition-all text-left"
                 style={{
                   background: active ? 'var(--bg4)' : 'transparent',
                   color: active ? 'var(--teal)' : 'var(--text2)',
-                  borderBottom: active ? '2px solid var(--teal)' : '2px solid transparent',
-                  borderRadius: active ? '6px 6px 0 0' : '6px',
+                  borderLeft: active ? '2px solid var(--teal)' : '2px solid transparent',
                 }}
               >
-                <span style={{ fontSize: 12 }}>{mod.icon}</span>
+                <span style={{ fontSize: 13 }}>{mod.icon}</span>
                 {mod.label}
               </button>
             );
           })}
+        </div>
+
+        {/* Nav */}
+        <nav className="flex-1 py-3 overflow-y-auto">
+          {currentModule === 'accounting' && (
+            <>
+              {VIEWS.filter(v => ACCOUNTING_ALWAYS.includes(v.id)).map(v => (
+                <NavItem key={v.id} view={v} active={currentView === v.id} onClick={() => navigate(v.id)} />
+              ))}
+
+              {currentCompany && (
+                <>
+                  <div
+                    className="mx-3 my-1 px-3 py-2 rounded-lg border cursor-pointer text-xs"
+                    style={{ background: 'var(--bg3)', borderColor: 'var(--border)', color: 'var(--text2)' }}
+                    onClick={() => navigate('company-select')}
+                  >
+                    <div style={{ color: 'var(--text3)', fontSize: 10 }}>Working on</div>
+                    <div className="truncate font-semibold" style={{ color: 'var(--teal)' }}>
+                      {currentCompany.name}
+                    </div>
+                  </div>
+                  {VIEWS.filter(v => ACCOUNTING_COMPANY.includes(v.id)).map(v => (
+                    <NavItem key={v.id} view={v} active={currentView === v.id} onClick={() => navigate(v.id)} />
+                  ))}
+                </>
+              )}
+
+              {analysed && (
+                <>
+                  <div className="mx-4 my-2 border-t" style={{ borderColor: 'var(--border)' }} />
+                  {VIEWS.filter(v => ACCOUNTING_POST.includes(v.id)).map(v => {
+                    const isAILocked = v.id === 'aiAnalysis' && !aiConsentGiven;
+                    const showPulse = v.id === 'aiAnalysis' && aiAnalysisLoading;
+                    return (
+                      <NavItem
+                        key={v.id}
+                        view={v}
+                        active={currentView === v.id}
+                        onClick={() => navigate(v.id)}
+                        locked={isAILocked}
+                        showPulse={showPulse}
+                      />
+                    );
+                  })}
+                </>
+              )}
+            </>
+          )}
         </nav>
 
-        {/* Export Excel — only when analysis is done */}
+        {/* Tools row: Excel export */}
         {analysed && state.results && (
-          <button
-            onClick={handleExportExcel}
-            disabled={exporting}
-            title="Download Excel workbook"
-            className="flex items-center gap-1.5 px-3 h-8 rounded-lg border text-xs font-medium transition-all disabled:opacity-40"
-            style={{
-              background: 'var(--bg3)',
-              borderColor: 'var(--border)',
-              color: 'var(--text2)',
-              marginRight: 4,
-            }}
-            onMouseEnter={e => {
-              (e.currentTarget as HTMLElement).style.color = 'var(--teal)';
-              (e.currentTarget as HTMLElement).style.borderColor = 'var(--teal)';
-            }}
-            onMouseLeave={e => {
-              (e.currentTarget as HTMLElement).style.color = 'var(--text2)';
-              (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)';
-            }}
+          <div
+            className="px-3 py-2 border-t shrink-0"
+            style={{ borderColor: 'var(--border)' }}
           >
-            {exporting ? '⟳' : '⬇'} {exporting ? 'Generating…' : 'Excel'}
-          </button>
-        )}
-
-        {/* Theme toggle */}
-        <button
-          onClick={toggleTheme}
-          id="theme-toggle"
-          title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-          className="w-8 h-8 flex items-center justify-center rounded-lg border text-sm transition-all"
-          style={{
-            background: 'var(--bg3)',
-            borderColor: 'var(--border)',
-            color: 'var(--text2)',
-          }}
-          onMouseEnter={e => (e.currentTarget.style.color = 'var(--teal)')}
-          onMouseLeave={e => (e.currentTarget.style.color = 'var(--text2)')}
-        >
-          {theme === 'dark' ? '☀' : '☾'}
-        </button>
-      </header>
-
-      {/* ── Main body: sidebar + content ── */}
-      <div className="flex flex-1 min-h-0">
-        {/* Sidebar */}
-        <aside
-          className="flex flex-col shrink-0 border-r"
-          style={{ width: 200, background: 'var(--bg2)', borderColor: 'var(--border)' }}
-        >
-          {/* Nav */}
-          <nav className="flex-1 py-3 overflow-y-auto">
-            {currentModule === 'accounting' && (
-              <>
-                {/* Always visible */}
-                {VIEWS.filter(v => ACCOUNTING_ALWAYS.includes(v.id)).map(v => (
-                  <NavItem key={v.id} view={v} active={currentView === v.id} onClick={() => navigate(v.id)} />
-                ))}
-
-                {/* Working-on chip + company-gated views */}
-                {currentCompany && (
-                  <>
-                    <div
-                      className="mx-3 my-1 px-3 py-2 rounded-lg border cursor-pointer text-xs"
-                      style={{ background: 'var(--bg3)', borderColor: 'var(--border)', color: 'var(--text2)' }}
-                      onClick={() => navigate('company-select')}
-                    >
-                      <div style={{ color: 'var(--text3)', fontSize: 10 }}>Working on</div>
-                      <div className="truncate font-semibold" style={{ color: 'var(--teal)' }}>
-                        {currentCompany.name}
-                      </div>
-                    </div>
-                    {VIEWS.filter(v => ACCOUNTING_COMPANY.includes(v.id)).map(v => (
-                      <NavItem key={v.id} view={v} active={currentView === v.id} onClick={() => navigate(v.id)} />
-                    ))}
-                  </>
-                )}
-
-                {/* Divider + post-analysis */}
-                {analysed && (
-                  <>
-                    <div className="mx-4 my-2 border-t" style={{ borderColor: 'var(--border)' }} />
-                    {VIEWS.filter(v => ACCOUNTING_POST.includes(v.id)).map(v => {
-                      const isAILocked = v.id === 'aiAnalysis' && !aiConsentGiven;
-                      const showPulse = v.id === 'aiAnalysis' && aiAnalysisLoading;
-                      return (
-                        <NavItem
-                          key={v.id}
-                          view={v}
-                          active={currentView === v.id}
-                          onClick={() => navigate(v.id)}
-                          locked={isAILocked}
-                          showPulse={showPulse}
-                        />
-                      );
-                    })}
-                  </>
-                )}
-              </>
-            )}
-
-            {currentModule === 'mis' && (
-              <div className="px-5 py-4 text-xs" style={{ color: 'var(--text3)' }}>
-                {/* Sidebar nav intentionally left blank for MIS module to avoid redundant tabs */}
-              </div>
-            )}
-
-            {currentModule === 'reconciliation' && (
-              <div className="px-5 py-4 text-xs" style={{ color: 'var(--text3)' }}>
-                {/* Sidebar nav intentionally left blank for Reconciliation */}
-              </div>
-            )}
-          </nav>
-
-          {/* Clear session */}
-          <div className="px-3 pt-2" style={{ borderTop: `1px solid var(--border)` }}>
             <button
-              onClick={handleClear}
-              className="w-full text-xs px-3 py-2 rounded text-left transition-colors"
-              style={{ color: 'var(--text3)' }}
-              onMouseEnter={e => (e.currentTarget.style.color = 'var(--red)')}
-              onMouseLeave={e => (e.currentTarget.style.color = 'var(--text3)')}
+              onClick={handleExportExcel}
+              disabled={exporting}
+              title="Download Excel workbook"
+              className="flex items-center gap-1.5 px-3 h-7 rounded-md border text-xs font-medium w-full transition-all disabled:opacity-40"
+              style={{ background: 'var(--bg3)', borderColor: 'var(--border)', color: 'var(--text2)' }}
+              onMouseEnter={e => {
+                (e.currentTarget as HTMLElement).style.color = 'var(--teal)';
+                (e.currentTarget as HTMLElement).style.borderColor = 'var(--teal)';
+              }}
+              onMouseLeave={e => {
+                (e.currentTarget as HTMLElement).style.color = 'var(--text2)';
+                (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)';
+              }}
             >
-              ✕ Clear session
+              {exporting ? '⟳' : '⬇'} {exporting ? 'Generating…' : 'Excel'}
             </button>
           </div>
+        )}
 
-          {/* User footer */}
-          <UserFooter user={user} />
-        </aside>
-
-        {/* Main content */}
-        <div className="flex flex-col flex-1 min-w-0">
-          {/* Progress banner */}
-          {uploadProgress && (
-            <div
-              className="px-4 py-2 text-xs text-center shrink-0"
-              style={{ background: 'var(--bg4)', color: 'var(--amber)' }}
-            >
-              {uploadProgress}
-            </div>
-          )}
-
-          <main className="flex-1 overflow-y-auto">
-            <ViewComponent />
-          </main>
+        {/* Clear session */}
+        <div className="px-3 pb-1 shrink-0">
+          <button
+            onClick={handleClear}
+            className="w-full text-xs px-3 py-2 rounded text-left transition-colors"
+            style={{ color: 'var(--text3)' }}
+            onMouseEnter={e => (e.currentTarget.style.color = 'var(--red)')}
+            onMouseLeave={e => (e.currentTarget.style.color = 'var(--text3)')}
+          >
+            ✕ Clear session
+          </button>
         </div>
+
+        {/* User footer */}
+        <UserFooter user={user} />
+      </aside>
+
+      {/* Theme toggle — fixed top-right */}
+      <button
+        onClick={toggleTheme}
+        id="theme-toggle"
+        title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+        className="fixed flex items-center justify-center rounded-lg border text-sm transition-all"
+        style={{
+          top: 12, right: 16, width: 32, height: 32, zIndex: 50,
+          background: 'var(--bg3)', borderColor: 'var(--border)', color: 'var(--text2)',
+        }}
+        onMouseEnter={e => (e.currentTarget.style.color = 'var(--teal)')}
+        onMouseLeave={e => (e.currentTarget.style.color = 'var(--text2)')}
+      >
+        {theme === 'dark' ? '☀' : '☾'}
+      </button>
+
+      {/* Main content */}
+      <div className="flex flex-col flex-1 min-w-0 h-full">
+        {uploadProgress && (
+          <div
+            className="px-4 py-2 text-xs text-center shrink-0"
+            style={{ background: 'var(--bg4)', color: 'var(--amber)' }}
+          >
+            {uploadProgress}
+          </div>
+        )}
+        <main className="flex-1 overflow-y-auto">
+          <ViewComponent />
+        </main>
       </div>
     </div>
   );
@@ -332,8 +303,8 @@ function UserFooter({ user }: { user: UserInfo | null }) {
 
   return (
     <>
-      <div className="p-3 flex items-center gap-2.5 border-t" style={{ borderColor: 'var(--border)' }}>
-        {/* Avatar — clickable to open profile panel */}
+      {/* Avatar + name row */}
+      <div className="px-3 py-2.5 flex items-center gap-2.5 border-t" style={{ borderColor: 'var(--border)' }}>
         <button
           onClick={() => setProfileOpen(true)}
           className="flex items-center gap-2 flex-1 min-w-0 rounded-lg px-1 py-0.5 transition-colors text-left"
@@ -351,20 +322,33 @@ function UserFooter({ user }: { user: UserInfo | null }) {
             <div className="text-xs font-medium truncate" style={{ color: 'var(--text1)' }}>
               {displayName}
             </div>
-            <div className="text-xs" style={{ color: 'var(--text3)', fontSize: 10 }}>
-              View profile
-            </div>
+            <div style={{ fontSize: 10, color: 'var(--text3)' }}>View profile</div>
           </div>
         </button>
+      </div>
+
+      {/* Portal link + Sign out strip */}
+      <div
+        className="px-4 pb-3 flex items-center gap-4 border-t text-xs"
+        style={{ borderColor: 'var(--border)', paddingTop: 10 }}
+      >
+        <a
+          href="/portal"
+          className="transition-colors"
+          style={{ color: 'var(--text2)', textDecoration: 'none' }}
+          onMouseEnter={e => (e.currentTarget.style.color = 'var(--teal)')}
+          onMouseLeave={e => (e.currentTarget.style.color = 'var(--text2)')}
+        >
+          ← Portal
+        </a>
         <button
           onClick={handleSignOut}
-          className="text-xs transition-colors shrink-0"
-          style={{ color: 'var(--text3)' }}
-          title="Sign out"
+          className="transition-colors"
+          style={{ background: 'none', border: 'none', color: 'var(--text3)', cursor: 'pointer', fontSize: 12, padding: 0, fontFamily: 'inherit' }}
           onMouseEnter={e => (e.currentTarget.style.color = 'var(--red)')}
           onMouseLeave={e => (e.currentTarget.style.color = 'var(--text3)')}
         >
-          ⏻
+          Sign out
         </button>
       </div>
 
