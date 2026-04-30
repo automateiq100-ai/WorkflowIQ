@@ -1,11 +1,18 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useApp } from '@/lib/state';
 import { FILE_LABELS, FILE_DESCRIPTIONS, FILE_TIERS } from '@/lib/constants';
 import { analyseFiles } from '@/lib/engine';
 import { parseDAYBOOK_chunked } from '@/lib/chunkedParser';
 import type { FileKey, ParsedData } from '@/lib/types';
+import type { ConnectorSession, ReportKind } from '@/lib/connectors/types';
+
+const TALLY_SESSION_KEY = 'aiq.tallySession';
+const TALLY_KIND_TO_FILE: Record<ReportKind, FileKey> = {
+  master: 'master', trialbal: 'trialbal', pandl: 'pandl',
+  bsheet: 'bsheet', grpsum: 'grpsum', daybook: 'daybook',
+};
 
 const CHUNK_THRESHOLD = 10 * 1024 * 1024; // 10 MB
 
@@ -129,7 +136,17 @@ function UploadScreen({
   const [scanSummary, setScanSummary] = useState<{ total: number; matched: number; skipped: string[] } | null>(null);
   const [dragging, setDragging] = useState(false);
   const [showRequestModal, setShowRequestModal] = useState(false);
+  const [tallySession, setTallySession] = useState<ConnectorSession | null>(null);
+  const [tallyPulling, setTallyPulling] = useState(false);
+  const [tallyPullError, setTallyPullError] = useState<string | null>(null);
   const requiredLoaded = FILE_TIERS.required.every(k => files[k].hasContent);
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(TALLY_SESSION_KEY);
+      if (raw) setTallySession(JSON.parse(raw) as ConnectorSession);
+    } catch { /* ignore */ }
+  }, []);
 
   // Period selection
   const [periodType, setPeriodType] = useState<'monthly' | 'quarterly' | 'yearly' | 'custom'>('yearly');
@@ -262,7 +279,7 @@ function UploadScreen({
               dispatch({
                 type: 'FILE_LOADED',
                 key: 'daybook',
-                entry: { name: file.name, size: file.size, hasContent: true, content: null, chunkedStats: stats, sessionExpired: false },
+                entry: { name: file.name, size: file.size, hasContent: true, content: null, chunkedStats: stats, sessionExpired: false, source: 'upload' },
               });
               // Extract date range from chunked stats
               if (stats.dateSet && stats.dateSet.length > 0) {
@@ -307,7 +324,7 @@ function UploadScreen({
               dispatch({
                 type: 'FILE_LOADED',
                 key,
-                entry: { name: file.name, size: file.size, hasContent: true, content: null, chunkedStats: stats, sessionExpired: false },
+                entry: { name: file.name, size: file.size, hasContent: true, content: null, chunkedStats: stats, sessionExpired: false, source: 'upload' },
               });
               // Extract date range from chunked stats
               if (stats.dateSet && stats.dateSet.length > 0) {
@@ -336,7 +353,7 @@ function UploadScreen({
         dispatch({
           type: 'FILE_LOADED',
           key,
-          entry: { name: file.name, size: file.size, hasContent: true, content, chunkedStats: null, sessionExpired: false },
+          entry: { name: file.name, size: file.size, hasContent: true, content, chunkedStats: null, sessionExpired: false, source: 'upload' },
         });
         matched++;
       }
@@ -357,6 +374,60 @@ function UploadScreen({
     setDragging(false);
     const fl = e.dataTransfer.files;
     if (fl && fl.length > 0) processFolder(fl);
+  }
+
+  async function handlePullFromTally() {
+    if (!tallySession?.selectedCompany) {
+      setTallyPullError('Open Tally Connection and select a company first.');
+      return;
+    }
+    const expected = getExpectedRange();
+    if (!expected) {
+      setTallyPullError('Pick an analysis period first.');
+      return;
+    }
+    setTallyPullError(null);
+    setTallyPulling(true);
+    dispatch({ type: 'UPLOAD_PROGRESS', message: 'Pulling reports from Tally…' });
+    try {
+      const period = {
+        start: expected.start.toISOString().slice(0, 10),
+        end:   expected.end.toISOString().slice(0, 10),
+      };
+      const r = await fetch('/api/tally/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bridgeId: tallySession.bridgeId, period }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error ?? 'Sync failed');
+      const results = data.results as Record<string, { ok: boolean; xml?: string; error?: string }>;
+      const failed: string[] = [];
+      for (const [kind, res] of Object.entries(results)) {
+        const fileKey = TALLY_KIND_TO_FILE[kind as ReportKind];
+        if (!fileKey) continue;
+        if (!res.ok || !res.xml) { failed.push(`${kind}: ${res.error ?? 'unknown'}`); continue; }
+        dispatch({
+          type: 'FILE_LOADED',
+          key: fileKey,
+          entry: {
+            name: `${kind}.xml (Tally)`,
+            size: res.xml.length,
+            hasContent: true,
+            content: res.xml,
+            chunkedStats: null,
+            sessionExpired: false,
+            source: 'tally',
+          },
+        });
+      }
+      if (failed.length > 0) setTallyPullError(`Some reports failed: ${failed.join('; ')}`);
+    } catch (e) {
+      setTallyPullError((e as Error).message);
+    } finally {
+      dispatch({ type: 'UPLOAD_PROGRESS', message: null });
+      setTallyPulling(false);
+    }
   }
 
   async function handleAnalyse() {
@@ -427,6 +498,54 @@ function UploadScreen({
           {getMismatchWarning()}
         </div>
       )}
+
+      {/* Tally Prime live connection */}
+      <div
+        className="rounded-xl border p-4 mb-4"
+        style={{ background: 'var(--bg2)', borderColor: tallySession ? 'var(--teal)' : 'var(--border)' }}
+      >
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold flex items-center gap-2" style={{ color: 'var(--text1)' }}>
+              <span>⇌</span> Tally Prime — live connection
+              {tallySession?.selectedCompany && (
+                <span
+                  className="text-xs px-2 py-0.5 rounded-full"
+                  style={{ background: 'rgba(15,212,160,0.15)', color: 'var(--teal)' }}
+                >
+                  {tallySession.selectedCompany.name}
+                </span>
+              )}
+            </div>
+            <div className="text-xs mt-0.5" style={{ color: 'var(--text3)' }}>
+              {tallySession?.selectedCompany
+                ? 'Pull all 6 required reports from Tally for the selected period — no manual export.'
+                : 'Pair your local Tally Prime instance to skip folder uploads.'}
+            </div>
+          </div>
+          {tallySession?.selectedCompany ? (
+            <button
+              onClick={handlePullFromTally}
+              disabled={tallyPulling}
+              className="text-xs px-4 py-2 rounded-lg font-semibold disabled:opacity-50 shrink-0"
+              style={{ background: 'var(--teal)', color: '#000' }}
+            >
+              {tallyPulling ? 'Pulling…' : 'Pull from Tally'}
+            </button>
+          ) : (
+            <button
+              onClick={() => dispatch({ type: 'SET_VIEW', view: 'tally-connection' })}
+              className="text-xs px-4 py-2 rounded-lg border shrink-0"
+              style={{ borderColor: 'var(--teal)', color: 'var(--teal)' }}
+            >
+              Connect Tally Prime
+            </button>
+          )}
+        </div>
+        {tallyPullError && (
+          <div className="text-xs mt-2" style={{ color: 'var(--red)' }}>{tallyPullError}</div>
+        )}
+      </div>
 
       {/* Folder drop zone */}
       <div
@@ -772,7 +891,7 @@ function FileRow({
         (msg) => dispatch({ type: 'UPLOAD_PROGRESS', message: msg }),
         (stats) => {
           dispatch({ type: 'UPLOAD_PROGRESS', message: null });
-          dispatch({ type: 'FILE_LOADED', key: fileKey, entry: { name: file.name, size: file.size, hasContent: true, content: null, chunkedStats: stats, sessionExpired: false } });
+          dispatch({ type: 'FILE_LOADED', key: fileKey, entry: { name: file.name, size: file.size, hasContent: true, content: null, chunkedStats: stats, sessionExpired: false, source: 'upload' } });
         },
         (err) => {
           dispatch({ type: 'UPLOAD_PROGRESS', message: null });
@@ -781,7 +900,7 @@ function FileRow({
       );
     } else {
       readWithEncoding(file).then(content => {
-        dispatch({ type: 'FILE_LOADED', key: fileKey, entry: { name: file.name, size: file.size, hasContent: true, content, chunkedStats: null, sessionExpired: false } });
+        dispatch({ type: 'FILE_LOADED', key: fileKey, entry: { name: file.name, size: file.size, hasContent: true, content, chunkedStats: null, sessionExpired: false, source: 'upload' } });
       }).catch(() => alert(`Error reading ${file.name}`));
     }
   }
@@ -824,6 +943,14 @@ function FileRow({
             : FILE_DESCRIPTIONS[fileKey]
           }
         </span>
+        {loaded && entry.source === 'tally' && (
+          <span
+            className="text-xs px-1.5 py-0.5 rounded shrink-0"
+            style={{ background: 'rgba(15,212,160,0.15)', color: 'var(--teal)' }}
+          >
+            ⇌ live
+          </span>
+        )}
       </div>
 
       {/* Actions */}

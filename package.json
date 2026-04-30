@@ -1,15 +1,16 @@
 {
   "name": "workflowiq",
   "version": "1.0.0",
-  "description": "WorkFlowIQ — AccountingIQ + ResearchIQ, single-server",
+  "description": "WorkFlowIQ — AccountingIQ + ResearchIQ + PracticeIQ, single-server",
   "scripts": {
-    "build": "npm install --prefix accountingiq && npm run build --prefix accountingiq",
+    "build": "npm install --prefix accountingiq && npm run build --prefix accountingiq && npm install --prefix practiceiq && npm run build --prefix practiceiq",
     "start": "node server.js",
-    "dev": "NODE_ENV=development node server.js"
+    "dev": "set NODE_ENV=development && node server.js"
   },
   "workspaces": [
     "accountingiq",
-    "researchiq"
+    "researchiq",
+    "practiceiq"
   ],
   "dependencies": {
     "@supabase/supabase-js": "^2.99.3",

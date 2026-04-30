@@ -36,7 +36,12 @@ export async function proxy(request: NextRequest) {
     pathname === '/login' ||
     pathname.startsWith('/auth/') ||
     pathname.startsWith('/_next') ||
-    pathname === '/favicon.ico';
+    pathname === '/favicon.ico' ||
+    // Bridge API routes — authenticated by pairing code or Bearer token, not session cookie
+    pathname === '/api/tally/pair-claim' ||
+    pathname === '/api/tally/bridge-poll' ||
+    pathname === '/api/tally/bridge-result' ||
+    pathname === '/download/bridge';
 
   if (!user && !isPublic) {
     return NextResponse.redirect(new URL('/login', request.url));

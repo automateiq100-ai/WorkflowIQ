@@ -81,6 +81,7 @@ export const VIEWS: { id: ViewId; label: string; icon: string; }[] = [
   { id: 'rules',         label: 'Rules Engine',     icon: '⚙' },
   { id: 'data-view',     label: 'Data & Fix',       icon: '⊟' },
   { id: 'agent-fix',     label: 'Fix Planner',      icon: '⚑' },
+  { id: 'tally-connection', label: 'Tally Connection', icon: '⇌' },
   { id: 'mis-setup',     label: 'MIS Setup',        icon: '⊞' },
   { id: 'mis-report',    label: 'MIS Report',       icon: '▦' },
   { id: 'reconciliation',label: 'Reconciliation',   icon: '⇌' },
@@ -88,7 +89,7 @@ export const VIEWS: { id: ViewId; label: string; icon: string; }[] = [
 
 
 export const MODULE_VIEWS: Record<ModuleId, ViewId[]> = {
-  accounting: ['company-select', 'company-dashboard', 'upload', 'profile', 'dashboard', 'checklist', 'insights', 'aiAnalysis', 'health', 'flags', 'data-view', 'agent-fix', 'reports', 'rules'],
+  accounting: ['company-select', 'company-dashboard', 'upload', 'profile', 'dashboard', 'checklist', 'insights', 'aiAnalysis', 'health', 'flags', 'data-view', 'agent-fix', 'reports', 'rules', 'tally-connection'],
   mis: ['mis-setup', 'mis-report'],
   reconciliation: ['reconciliation'],
 };

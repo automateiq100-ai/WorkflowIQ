@@ -112,7 +112,8 @@ export type ViewId =
   | 'flags' | 'upload' | 'profile' | 'reports' | 'rules'
   | 'mis-setup' | 'mis-report'
   | 'reconciliation' | 'aiAnalysis'
-  | 'data-view' | 'agent-fix';
+  | 'data-view' | 'agent-fix'
+  | 'tally-connection';
 
 export type Theme = 'dark' | 'light';
 
@@ -128,6 +129,8 @@ export interface FileEntry {
   hasContent: boolean;
   chunkedStats: ChunkedStats | null;
   sessionExpired: boolean;
+  /** Where this file came from. Drives the "Live from Tally" badge in the UI. */
+  source?: 'upload' | 'tally';
 }
 
 export interface ChunkedStats {

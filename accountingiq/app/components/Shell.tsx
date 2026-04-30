@@ -29,6 +29,7 @@ const CompanySelectorView = dynamic(() => import('@/app/views/CompanySelectorVie
 const CompanyDashboardView = dynamic(() => import('@/app/views/CompanyDashboardView'));
 const DataView             = dynamic(() => import('@/app/views/DataView'));
 const AgentFixView         = dynamic(() => import('@/app/views/AgentFixView'));
+const TallyConnectionView  = dynamic(() => import('@/app/views/TallyConnectionView'));
 
 const VIEW_COMPONENTS: Record<ViewId, React.ComponentType> = {
   'company-select':    CompanySelectorView,
@@ -48,12 +49,13 @@ const VIEW_COMPONENTS: Record<ViewId, React.ComponentType> = {
   aiAnalysis:      AIAnalysisView,
   'data-view':     DataView,
   'agent-fix':     AgentFixView as React.ComponentType,
+  'tally-connection': TallyConnectionView,
 };
 
 // Accounting module: always visible
 const ACCOUNTING_ALWAYS: ViewId[] = ['company-select'];
 // Accounting module: visible only when a company is selected
-const ACCOUNTING_COMPANY: ViewId[] = ['company-dashboard', 'upload', 'profile', 'rules'];
+const ACCOUNTING_COMPANY: ViewId[] = ['company-dashboard', 'upload', 'tally-connection', 'profile', 'rules'];
 // Accounting module: visible only after analysis
 // Flags lives inside Checklist, Health inside Dashboard, Insights inside Analysis, Fix Planner inside Data & Fix
 const ACCOUNTING_POST: ViewId[] = ['dashboard', 'checklist', 'aiAnalysis', 'data-view', 'reports'];
@@ -100,6 +102,10 @@ export default function Shell({ user }: { user: UserInfo | null }) {
         periodLabel: (state.results.runAt
           ? new Date(state.results.runAt).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })
           : 'Export'),
+        sourceXml: {
+          pandl: state.files.pandl.content,
+          bsheet: state.files.bsheet.content,
+        },
       });
     } finally {
       setExporting(false);

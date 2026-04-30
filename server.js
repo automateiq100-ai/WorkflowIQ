@@ -22,11 +22,21 @@ const port = parseInt(process.env.PORT) || 3000;
 // ResearchIQ Express sub-app (all routes exported from researchiq/server.js)
 const researchiqApp = require('./researchiq/server');
 
-// Next.js app (AccountingIQ — portal, login, Tally XML tool)
-const nextApp = next({ dev, dir: path.join(__dirname, 'accountingiq') });
-const handle  = nextApp.getRequestHandler();
+// Next.js app — AccountingIQ (portal, login, Tally XML tool)
+const accountingiqApp = next({ dev, dir: path.join(__dirname, 'accountingiq') });
+const accountingHandle = accountingiqApp.getRequestHandler();
 
-nextApp.prepare().then(() => {
+// Next.js app — PracticeIQ (basePath: /practiceiq)
+const practiceiqApp = next({ dev, dir: path.join(__dirname, 'practiceiq') });
+const practiceHandle = practiceiqApp.getRequestHandler();
+
+// Backwards-compat alias used in the rest of this file
+const handle = accountingHandle;
+
+Promise.all([
+  accountingiqApp.prepare(),
+  practiceiqApp.prepare(),
+]).then(() => {
   const server = express();
   server.use(cors());
 
@@ -38,11 +48,18 @@ nextApp.prepare().then(() => {
   // ResearchIQ: all sub-routes (/config, /api/*, static files in public/)
   server.use('/researchiq', researchiqApp);
 
-  // Everything else → Next.js (portal, login, AccountingIQ)
+  // PracticeIQ: all routes under /practiceiq (Next.js basePath handles the prefix internally)
+  server.all('/practiceiq', (req, res) => practiceHandle(req, res));
+  server.all('/practiceiq/*splat', (req, res) => practiceHandle(req, res));
+
+  // Everything else → AccountingIQ Next.js (portal, login, Tally XML tool)
   server.all(/(.*)/, (req, res) => handle(req, res));
 
   server.listen(port, () => {
-    console.log(`\n🚀 WorkFlowIQ running on http://localhost:${port}\n`);
+    console.log(`\n🚀 WorkFlowIQ running on http://localhost:${port}`);
+    console.log(`   AccountingIQ → http://localhost:${port}/`);
+    console.log(`   ResearchIQ   → http://localhost:${port}/researchiq`);
+    console.log(`   PracticeIQ   → http://localhost:${port}/practiceiq\n`);
   });
 }).catch(err => {
   console.error('Failed to start:', err);

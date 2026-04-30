@@ -4,8 +4,9 @@
  */
 
 import * as XLSX from 'xlsx';
-import type { AnalysisResults, ParsedData, ChunkedStats, Check, TBLedger } from './types';
+import type { AnalysisResults, ParsedData, ChunkedStats, Check, TBLedger, ParsedStatement, FinancialNode } from './types';
 import { DIM_LABELS, DIM_WEIGHTS, getGrade } from './constants';
+import { decodeEntities, parseAmt, xmlText } from './parser';
 
 // ── Formatting helpers ────────────────────────────────────────────────────
 
@@ -29,6 +30,177 @@ function fmtPct(n: number): string {
 
 function colWidths(cols: number[]): { wch: number }[] {
   return cols.map(w => ({ wch: w }));
+}
+
+const INR_NUM_FMT = '"₹"#,##0.00;[Red]-"₹"#,##0.00';
+type StatementSheetRow = [string, string | number | null, string | number | null];
+
+function applyHeaderStyle(ws: XLSX.WorkSheet, range: XLSX.Range) {
+  for (let col = range.s.c; col <= range.e.c; col++) {
+    const addr = XLSX.utils.encode_cell({ r: range.s.r, c: col });
+    const cell = ws[addr];
+    if (!cell) continue;
+    cell.s = {
+      font: { bold: true, color: { rgb: 'FFFFFF' } },
+      fill: { fgColor: { rgb: '1F4E78' } },
+      alignment: { horizontal: 'center' },
+    };
+  }
+}
+
+function setCurrencyFormat(ws: XLSX.WorkSheet, range: XLSX.Range, cols: number[]) {
+  for (let row = range.s.r + 1; row <= range.e.r; row++) {
+    for (const col of cols) {
+      const cell = ws[XLSX.utils.encode_cell({ r: row, c: col })];
+      if (cell && typeof cell.v === 'number') cell.z = INR_NUM_FMT;
+    }
+  }
+}
+
+function walkStatementRows(
+  node: FinancialNode,
+  depth: number,
+  rows: StatementSheetRow[],
+  rowMeta: Array<{ depth: number; isParent: boolean }>,
+) {
+  const isParent = node.children.length > 0 || node.nodeType === 'main';
+  rows.push([
+    `${depth > 0 ? '  '.repeat(depth) : ''}${node.name}`,
+    isParent ? null : node.amount,
+    isParent ? node.amount : null,
+  ]);
+  rowMeta.push({ depth, isParent });
+
+  for (const child of node.children) {
+    walkStatementRows(child, depth + 1, rows, rowMeta);
+  }
+}
+
+interface ExpandedStatementRow {
+  name: string;
+  subAmount: number | null;
+  mainAmount: number | null;
+  depth: number;
+  isParent: boolean;
+}
+
+function parseExpandedStatementRows(xml: string): ExpandedStatementRow[] {
+  const rows: ExpandedStatementRow[] = [];
+  let hasActiveParent = false;
+  const tokenRe = /<DSPACCNAME\b[^>]*>([\s\S]*?)<\/DSPACCNAME>\s*<PLAMT\b[^>]*>([\s\S]*?)<\/PLAMT>|<BSNAME\b[^>]*>([\s\S]*?)<\/BSNAME>\s*<BSAMT\b[^>]*>([\s\S]*?)<\/BSAMT>/gi;
+  let m: RegExpExecArray | null;
+
+  while ((m = tokenRe.exec(xml)) !== null) {
+    const nameBlock = m[1] ?? m[3] ?? '';
+    const amountBlock = m[2] ?? m[4] ?? '';
+    const name = decodeEntities(xmlText(nameBlock, 'DSPDISPNAME').trim());
+    if (!name || name === 'undefined') continue;
+
+    const subRaw = xmlText(amountBlock, m[2] ? 'PLSUBAMT' : 'BSSUBAMT');
+    const mainRaw = xmlText(amountBlock, 'BSMAINAMT');
+    const isChild = subRaw.trim() !== '';
+    const isParent = !isChild;
+
+    if (isParent) hasActiveParent = true;
+
+    rows.push({
+      name,
+      subAmount: isChild ? parseAmt(subRaw) : null,
+      mainAmount: isParent && mainRaw.trim() !== '' ? parseAmt(mainRaw) : null,
+      depth: isChild && hasActiveParent ? 1 : 0,
+      isParent,
+    });
+  }
+
+  return rows;
+}
+
+function buildExpandedStatementSheet(xml: string, title: string): XLSX.WorkSheet {
+  const parsedRows = parseExpandedStatementRows(xml);
+  const rows: StatementSheetRow[] = [
+    ['Particulars', 'Sub-Amount', 'Main Amount'],
+    ...parsedRows.map(row => [
+      `${row.depth > 0 ? '  '.repeat(row.depth) : ''}${row.name}`,
+      row.subAmount,
+      row.mainAmount,
+    ] as [string, number | null, number | null]),
+  ];
+
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  const range = XLSX.utils.decode_range(ws['!ref'] ?? 'A1:C1');
+  ws['!cols'] = colWidths([46, 18, 18]);
+  ws['!freeze'] = { xSplit: 0, ySplit: 1 };
+  ws['!outline'] = { above: false, left: false };
+  ws['!rows'] = [{ level: 0 }, ...parsedRows.map(row => ({ level: row.depth }))];
+
+  applyHeaderStyle(ws, range);
+  setCurrencyFormat(ws, range, [1, 2]);
+
+  for (let row = range.s.r + 1; row <= range.e.r; row++) {
+    const meta = parsedRows[row - 1];
+    const nameCell = ws[XLSX.utils.encode_cell({ r: row, c: 0 })];
+    if (nameCell) {
+      nameCell.s = {
+        font: { bold: meta?.isParent ?? false },
+        alignment: { indent: meta?.depth ?? 0 },
+      };
+    }
+    if (meta?.isParent) {
+      for (const col of [1, 2]) {
+        const cell = ws[XLSX.utils.encode_cell({ r: row, c: col })];
+        if (cell) cell.s = { ...(cell.s ?? {}), font: { bold: true } };
+      }
+    }
+  }
+
+  ws['!autofilter'] = { ref: XLSX.utils.encode_range(range) };
+  ws['!sheet'] = { name: title };
+  return ws;
+}
+
+function buildDetailedStatementSheet(stmt: ParsedStatement, title: string): XLSX.WorkSheet {
+  const rows: StatementSheetRow[] = [
+    ['Particulars', 'Sub-Amount', 'Main Amount'],
+  ];
+  const rowMeta: Array<{ depth: number; isParent: boolean }> = [{ depth: 0, isParent: true }];
+
+  for (const node of stmt.nodes) {
+    walkStatementRows(node, 0, rows, rowMeta);
+  }
+
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  const range = XLSX.utils.decode_range(ws['!ref'] ?? 'A1:C1');
+  ws['!cols'] = colWidths([46, 18, 18]);
+  ws['!freeze'] = { xSplit: 0, ySplit: 1 };
+  ws['!outline'] = { above: false, left: false };
+  ws['!rows'] = rowMeta.map((meta, idx) => ({
+    level: idx === 0 ? 0 : meta.depth,
+    hidden: false,
+  }));
+
+  applyHeaderStyle(ws, range);
+  setCurrencyFormat(ws, range, [1, 2]);
+
+  for (let row = range.s.r + 1; row <= range.e.r; row++) {
+    const meta = rowMeta[row];
+    const nameCell = ws[XLSX.utils.encode_cell({ r: row, c: 0 })];
+    if (nameCell) {
+      nameCell.s = {
+        font: { bold: meta?.isParent ?? false },
+        alignment: { indent: meta?.depth ?? 0 },
+      };
+    }
+    if (meta?.isParent) {
+      for (const col of [1, 2]) {
+        const cell = ws[XLSX.utils.encode_cell({ r: row, c: col })];
+        if (cell) cell.s = { ...(cell.s ?? {}), font: { bold: true } };
+      }
+    }
+  }
+
+  ws['!autofilter'] = { ref: XLSX.utils.encode_range(range) };
+  ws['!sheet'] = { name: title };
+  return ws;
 }
 
 // ── Build sheets ─────────────────────────────────────────────────────────
@@ -228,8 +400,12 @@ export function exportToExcel(params: {
   dbStats: ChunkedStats | null;
   companyName: string;
   periodLabel: string;
+  sourceXml?: {
+    pandl?: string | null;
+    bsheet?: string | null;
+  };
 }): void {
-  const { results, parsedData, dbStats, companyName, periodLabel } = params;
+  const { results, parsedData, dbStats, companyName, periodLabel, sourceXml } = params;
   const pd = parsedData as Partial<ParsedData>;
 
   const wb = XLSX.utils.book_new();
@@ -244,6 +420,18 @@ export function exportToExcel(params: {
 
   // Sheet 3: Financial Summary
   XLSX.utils.book_append_sheet(wb, buildFinancialSheet(pd), 'Financial Summary');
+
+  if (sourceXml?.pandl) {
+    XLSX.utils.book_append_sheet(wb, buildExpandedStatementSheet(sourceXml.pandl, 'Detailed P&L'), 'Detailed P&L');
+  } else if (pd.pandlStatement?.nodes?.length) {
+    XLSX.utils.book_append_sheet(wb, buildDetailedStatementSheet(pd.pandlStatement, 'Detailed P&L'), 'Detailed P&L');
+  }
+
+  if (sourceXml?.bsheet) {
+    XLSX.utils.book_append_sheet(wb, buildExpandedStatementSheet(sourceXml.bsheet, 'Detailed Balance Sheet'), 'Detailed BS');
+  } else if (pd.bsheetStatement?.nodes?.length) {
+    XLSX.utils.book_append_sheet(wb, buildDetailedStatementSheet(pd.bsheetStatement, 'Detailed Balance Sheet'), 'Detailed BS');
+  }
 
   // Sheet 4: Analysis Checks
   if (results.checks && results.checks.length > 0) {

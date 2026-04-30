@@ -7,6 +7,7 @@ import StatusBadge from '@/app/components/StatusBadge';
 import type { DimKey, FilterMode, Check } from '@/lib/types';
 import { getRemediation } from '@/lib/remediation';
 import { generateFlags, deriveSeverity } from '@/lib/flags';
+import PushToTallyButton from '@/app/components/PushToTallyButton';
 
 const DIMS: DimKey[] = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
 
@@ -313,6 +314,7 @@ function CheckRow({ check }: { check: Check }) {
               >
                 Get AI explanation →
               </button>
+              <PushToTallyButton check={check} parsedData={state.parsedData ?? {}} />
             </div>
           )}
         </div>
