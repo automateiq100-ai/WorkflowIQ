@@ -30,6 +30,15 @@ const ALL_TOOLS = [
     description: 'Search and analyse thousands of legal cases. AI-powered relevancy scoring and synthesis memos.',
     href: null,
   },
+  {
+    id: 'practiceiq',
+    label: 'PracticeIQ',
+    tagline: 'CA Practice Management',
+    tagColor: 'var(--purple)',
+    icon: '📋',
+    description: 'Clients, recurring compliance tasks, documents, and invoices for Indian CA firms.',
+    href: '/practiceiq',
+  },
 ];
 
 export default function PortalShell({
