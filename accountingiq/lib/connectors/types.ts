@@ -6,10 +6,14 @@ import type { FileKey } from '@/lib/types';
 export type ConnectorId = 'tally' | 'busy' | 'quickbooks';
 
 // Reports the connector can pull. Aligned with FileKey so parsed XML can be
-// fed straight into the existing parser pipeline.
+// fed straight into the existing parser pipeline. Includes required + conditional
+// + optional reports — best-effort: optional reports may fail if the user's
+// Tally company doesn't have them enabled, which the sync route surfaces per-kind.
 export type ReportKind = Extract<
   FileKey,
-  'master' | 'trialbal' | 'pandl' | 'bsheet' | 'grpsum' | 'daybook'
+  | 'master' | 'trialbal' | 'pandl' | 'bsheet' | 'grpsum' | 'daybook'
+  | 'sales' | 'purchase' | 'bills' | 'payables' | 'cashflow'
+  | 'faregister' | 'stock' | 'bankrecon'
 >;
 
 export interface ReportPeriod {

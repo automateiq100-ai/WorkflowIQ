@@ -30,7 +30,7 @@ export async function POST(req: Request) {
   const issue = validateDraft(draft);
   if (issue) return NextResponse.json({ error: issue }, { status: 400 });
 
-  const session = getSessionForUser(userId, bridgeId);
+  const session = await getSessionForUser(userId, bridgeId);
   if (!session) return NextResponse.json({ error: 'No bridge session' }, { status: 404 });
 
   try {

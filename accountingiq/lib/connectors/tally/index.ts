@@ -20,7 +20,11 @@ import {
   buildVoucherImportRequest,
 } from './tdl';
 
-const READS: ReportKind[] = ['master', 'trialbal', 'pandl', 'bsheet', 'grpsum', 'daybook'];
+const READS: ReportKind[] = [
+  'master', 'trialbal', 'pandl', 'bsheet', 'grpsum', 'daybook',
+  'sales', 'purchase', 'bills', 'payables', 'cashflow',
+  'faregister', 'stock', 'bankrecon',
+];
 
 function parseCompanies(xml: string): ConnectorCompany[] {
   const out: ConnectorCompany[] = [];

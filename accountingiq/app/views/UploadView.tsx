@@ -12,13 +12,36 @@ const TALLY_SESSION_KEY = 'aiq.tallySession';
 const TALLY_KIND_TO_FILE: Record<ReportKind, FileKey> = {
   master: 'master', trialbal: 'trialbal', pandl: 'pandl',
   bsheet: 'bsheet', grpsum: 'grpsum', daybook: 'daybook',
+  sales: 'sales', purchase: 'purchase', bills: 'bills',
+  payables: 'payables', cashflow: 'cashflow',
+  faregister: 'faregister', stock: 'stock', bankrecon: 'bankrecon',
 };
 
 const CHUNK_THRESHOLD = 10 * 1024 * 1024; // 10 MB
 
+/**
+ * Default analysis period (Indian FY, Apr–Mar).
+ *
+ * Tally users typically analyse the books of the FY they just *closed*, not
+ * the one in progress. So during April–June (the closing window), we default
+ * to the *previous* FY. Otherwise (Jul–Mar), default to the FY currently in
+ * progress. This avoids the trap where a sync defaults to a future period and
+ * Tally legitimately returns zero closing balances.
+ */
 function currentFYDates() {
   const now = new Date();
-  const year = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+  const month = now.getMonth(); // 0=Jan … 11=Dec
+  let year: number;
+  if (month <= 2) {
+    // Jan–Mar: still inside the FY that started last calendar year
+    year = now.getFullYear() - 1;
+  } else if (month <= 5) {
+    // Apr–Jun: closing the prior FY's books — default to that prior FY
+    year = now.getFullYear() - 1;
+  } else {
+    // Jul–Dec: current FY well underway
+    year = now.getFullYear();
+  }
   return { start: new Date(year, 3, 1), end: new Date(year + 1, 2, 31) };
 }
 
@@ -151,11 +174,13 @@ function UploadScreen({
   // Period selection
   const [periodType, setPeriodType] = useState<'monthly' | 'quarterly' | 'yearly' | 'custom'>('yearly');
 
-  // Shared year (FY-starting for quarterly/yearly; calendar year for monthly)
-  const [periodYear, setPeriodYear] = useState<string>(() => {
-    const now = new Date();
-    return String(now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1);
-  });
+  // Shared year (FY-starting for quarterly/yearly; calendar year for monthly).
+  // Matches the Apr–Jun "closing window" default in currentFYDates so the
+  // picker, the offline-upload helpers and the live-Tally sync all start on
+  // the same FY by default.
+  const [periodYear, setPeriodYear] = useState<string>(() =>
+    String(currentFYDates().start.getFullYear()),
+  );
   // Monthly-only
   const [periodMonth, setPeriodMonth] = useState<string>(() =>
     String(new Date().getMonth() + 1).padStart(2, '0'),
@@ -386,6 +411,24 @@ function UploadScreen({
       setTallyPullError('Pick an analysis period first.');
       return;
     }
+    // Guard against the most common "all amounts ₹0" cause: a default FY that
+    // hasn't happened yet. Tally legitimately returns empty closing balances
+    // for a future period; warn the user before we waste a sync round-trip.
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (expected.end > today) {
+      const prevFY = expected.start.getFullYear() - 1;
+      const ok = window.confirm(
+        `The selected period ends on ${expected.end.toLocaleDateString('en-IN')} — that's in the future.\n\n` +
+        `Tally will return zero closing balances for periods that haven't completed.\n\n` +
+        `Switch to FY ${prevFY}-${(prevFY + 1) % 100}?  (Cancel to sync the future period anyway.)`
+      );
+      if (ok) {
+        setPeriodYear(String(prevFY));
+        setTallyPullError(`Switched to FY ${prevFY}-${(prevFY + 1) % 100}. Click "Pull from Tally" again.`);
+        return;
+      }
+    }
     setTallyPullError(null);
     setTallyPulling(true);
     dispatch({ type: 'UPLOAD_PROGRESS', message: 'Pulling reports from Tally…' });
@@ -406,6 +449,9 @@ function UploadScreen({
       for (const [kind, res] of Object.entries(results)) {
         const fileKey = TALLY_KIND_TO_FILE[kind as ReportKind];
         if (!fileKey) continue;
+        // Diagnostic: per-kind size in browser DevTools console — helps a user
+        // copy-paste evidence into a bug report without us asking for raw XML.
+        console.log('[tally-sync]', kind, res.ok ? 'ok' : 'fail', 'len=' + (res.xml?.length ?? 0), res.error ?? '');
         if (!res.ok || !res.xml) { failed.push(`${kind}: ${res.error ?? 'unknown'}`); continue; }
         dispatch({
           type: 'FILE_LOADED',

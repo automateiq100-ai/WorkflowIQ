@@ -53,13 +53,27 @@ function exportEnvelope({ reportName, company, period }: ExportArgs): string {
 
 // Map our ReportKind → the Tally REPORT id that returns the same shape the
 // existing parser in lib/parser.ts already understands.
+// Tally Prime built-in REPORT ids. These match the names Tally uses for
+// Display → Statements / Account Books / Inventory Books menus, which is the
+// same string Tally accepts as <ID> in an Export envelope.
 const REPORT_IDS: Record<ReportKind, string> = {
-  master: 'List of Accounts',
-  trialbal: 'Trial Balance',
-  pandl: 'Profit and Loss',
-  bsheet: 'Balance Sheet',
-  grpsum: 'Group Summary',
-  daybook: 'Day Book',
+  // Required (always pulled, parser depends on these)
+  master:     'List of Accounts',
+  trialbal:   'Trial Balance',
+  pandl:      'Profit and Loss',
+  bsheet:     'Balance Sheet',
+  grpsum:     'Group Summary',
+  daybook:    'Day Book',
+  // Conditional — depend on company having sales/purchase/billing modules enabled
+  sales:      'Sales Register',
+  purchase:   'Purchase Register',
+  bills:      'Bills Receivable',
+  payables:   'Bills Payable',
+  cashflow:   'Cash Flow',
+  // Optional — may not exist in every Tally setup; sync handles per-kind errors
+  faregister: 'Fixed Assets Register',
+  stock:      'Stock Summary',
+  bankrecon:  'Bank Reconciliation',
 };
 
 export function buildReportRequest(

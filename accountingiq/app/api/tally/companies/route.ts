@@ -12,7 +12,7 @@ export async function GET(req: Request) {
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const bridgeId = new URL(req.url).searchParams.get('bridgeId');
   if (!bridgeId) return NextResponse.json({ error: 'Missing bridgeId' }, { status: 400 });
-  const session = getSessionForUser(userId, bridgeId);
+  const session = await getSessionForUser(userId, bridgeId);
   if (!session) return NextResponse.json({ error: 'No bridge session' }, { status: 404 });
   try {
     const companies = await getConnector('tally').listCompanies(toClientSession(session));
@@ -29,8 +29,8 @@ export async function PUT(req: Request) {
   const bridgeId = body.bridgeId as string | undefined;
   const companyName = body.companyName as string | undefined;
   if (!bridgeId || !companyName) return NextResponse.json({ error: 'Missing fields' }, { status: 400 });
-  const session = getSessionForUser(userId, bridgeId);
+  const session = await getSessionForUser(userId, bridgeId);
   if (!session) return NextResponse.json({ error: 'No bridge session' }, { status: 404 });
-  setSessionCompany(bridgeId, { id: companyName, name: companyName });
+  await setSessionCompany(bridgeId, { id: companyName, name: companyName });
   return NextResponse.json({ ok: true });
 }

@@ -11,9 +11,9 @@ export async function POST(req: Request) {
   const body = await req.json().catch(() => ({}));
   const bridgeId = body.bridgeId as string | undefined;
   if (!bridgeId) return NextResponse.json({ error: 'Missing bridgeId' }, { status: 400 });
-  const s = getSessionForUser(userId, bridgeId);
+  const s = await getSessionForUser(userId, bridgeId);
   if (!s) return NextResponse.json({ ok: true }); // already gone
   dropBridge(bridgeId);
-  disconnectBridge(bridgeId);
+  await disconnectBridge(bridgeId);
   return NextResponse.json({ ok: true });
 }

@@ -10,7 +10,7 @@ import { bearerToken } from '@/lib/connectors/auth';
 export async function GET(req: Request) {
   const token = bearerToken(req);
   if (!token) return NextResponse.json({ error: 'Missing bearer token' }, { status: 401 });
-  const session = authenticateBridge(token);
+  const session = await authenticateBridge(token);
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const next = await pollNextJob(session.bridgeId, 25_000);

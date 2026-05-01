@@ -8,6 +8,12 @@ const TALLY_HOST = '127.0.0.1';
 const TALLY_PORT = parseInt(process.env.TALLY_PORT ?? '9000', 10);
 
 export function postToTally(xml) {
+  // Diagnostic: outgoing payload — lets us verify SVCURRENTCOMPANY + date range
+  // when the bridge owner shares their console log to debug "all amounts ₹0".
+  const reqSize = Buffer.byteLength(xml, 'utf8');
+  const reqPreview = xml.slice(0, 200).replace(/\s+/g, ' ');
+  console.log(`[bridge:tally] → POST 9000 ${reqSize}B  ${reqPreview}`);
+
   return new Promise((resolve, reject) => {
     const req = http.request(
       {
@@ -17,13 +23,23 @@ export function postToTally(xml) {
         path: '/',
         headers: {
           'Content-Type': 'text/xml; charset=utf-8',
-          'Content-Length': Buffer.byteLength(xml, 'utf8'),
+          'Content-Length': reqSize,
         },
       },
       (res) => {
         const chunks = [];
         res.on('data', (c) => chunks.push(c));
-        res.on('end', () => resolve(decodeBody(Buffer.concat(chunks))));
+        res.on('end', () => {
+          const buf = Buffer.concat(chunks);
+          const decoded = decodeBody(buf);
+          const bom = buf.length >= 4
+            ? `${buf[0].toString(16).padStart(2,'0')} ${buf[1].toString(16).padStart(2,'0')} ${buf[2].toString(16).padStart(2,'0')} ${buf[3].toString(16).padStart(2,'0')}`
+            : '(short)';
+          const preview = decoded.slice(0, 600).replace(/\s+/g, ' ');
+          console.log(`[bridge:tally] ← ${res.statusCode} bytes=${buf.length} bom=${bom} → utf8 chars=${decoded.length}`);
+          console.log(`[bridge:tally]   first600: ${preview}`);
+          resolve(decoded);
+        });
         res.on('error', reject);
       },
     );

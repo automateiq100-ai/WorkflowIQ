@@ -15,7 +15,7 @@ export async function POST(req: Request) {
   }
   const code = (body.code ?? '').trim();
   if (!code) return NextResponse.json({ error: 'Missing code' }, { status: 400 });
-  const claimed = claimPairingCode(code);
+  const claimed = await claimPairingCode(code);
   if (!claimed) return NextResponse.json({ error: 'Invalid or expired code' }, { status: 410 });
   return NextResponse.json({ bridgeId: claimed.bridgeId, bridgeToken: claimed.bridgeToken });
 }

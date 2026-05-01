@@ -10,10 +10,47 @@ import { getSessionForUser, toClientSession } from '@/lib/connectors/session-sto
 import { getConnector } from '@/lib/connectors/registry';
 import type { ReportKind, ReportPeriod } from '@/lib/connectors/types';
 
-const DEFAULT_KINDS: ReportKind[] = ['master', 'trialbal', 'pandl', 'bsheet', 'grpsum', 'daybook'];
+// All known reports — required + conditional + optional. Sync attempts each one
+// and returns per-kind ok/error so a missing optional report doesn't fail the run.
+const DEFAULT_KINDS: ReportKind[] = [
+  'master', 'trialbal', 'pandl', 'bsheet', 'grpsum', 'daybook',
+  'sales', 'purchase', 'bills', 'payables', 'cashflow',
+  'faregister', 'stock', 'bankrecon',
+];
 
 function isReportKind(s: string): s is ReportKind {
   return DEFAULT_KINDS.includes(s as ReportKind);
+}
+
+// ── Last-XML-per-kind ring (diagnostic) ───────────────────────────────────
+// Pinned to globalThis so it survives Next.js HMR and so the new
+// /api/tally/sync/debug route reads from the SAME map this route writes to,
+// even when bundled separately. Mirrors the bridge-bus.ts singleton pattern.
+export interface LastSyncEntry {
+  xml: string;
+  fetchedAt: number;
+  sizeBytes: number;
+  ok: boolean;
+  error?: string;
+}
+type LastSyncStore = Map<string, Map<ReportKind, LastSyncEntry>>;
+const LAST_SYNC: LastSyncStore =
+  ((globalThis as unknown as { __aiq_last_sync?: LastSyncStore }).__aiq_last_sync ??=
+    new Map());
+
+function lastSyncKey(userId: string, bridgeId: string): string {
+  return `${userId}::${bridgeId}`;
+}
+
+export function recordLastSync(userId: string, bridgeId: string, kind: ReportKind, entry: LastSyncEntry): void {
+  const key = lastSyncKey(userId, bridgeId);
+  let m = LAST_SYNC.get(key);
+  if (!m) { m = new Map(); LAST_SYNC.set(key, m); }
+  m.set(kind, entry);
+}
+
+export function readLastSync(userId: string, bridgeId: string): Map<ReportKind, LastSyncEntry> | undefined {
+  return LAST_SYNC.get(lastSyncKey(userId, bridgeId));
 }
 
 export async function POST(req: Request) {
@@ -31,7 +68,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Missing bridgeId or period' }, { status: 400 });
   }
 
-  const session = getSessionForUser(userId, bridgeId);
+  const session = await getSessionForUser(userId, bridgeId);
   if (!session) return NextResponse.json({ error: 'No bridge session' }, { status: 404 });
   if (!session.selectedCompany) return NextResponse.json({ error: 'No company selected' }, { status: 400 });
 
@@ -45,8 +82,24 @@ export async function POST(req: Request) {
     try {
       const r = await connector.fetchReport(clientSession, kind, period);
       results[kind] = { ok: true, xml: r.xml };
+      recordLastSync(userId, bridgeId, kind, {
+        xml: r.xml,
+        fetchedAt: Date.now(),
+        sizeBytes: r.xml.length,
+        ok: true,
+      });
+      console.log(`[tally-sync] ${kind} ok len=${r.xml.length} period=${period.start}..${period.end}`);
     } catch (err) {
-      results[kind] = { ok: false, error: (err as Error).message };
+      const msg = (err as Error).message;
+      results[kind] = { ok: false, error: msg };
+      recordLastSync(userId, bridgeId, kind, {
+        xml: '',
+        fetchedAt: Date.now(),
+        sizeBytes: 0,
+        ok: false,
+        error: msg,
+      });
+      console.log(`[tally-sync] ${kind} ERR ${msg}`);
     }
   }
 

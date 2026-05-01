@@ -1,16 +1,48 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import type { ConnectorSession, ConnectorCompany } from '@/lib/connectors/types';
+import type { ConnectorSession, ConnectorCompany, ReportKind } from '@/lib/connectors/types';
 
 const SESSION_KEY = 'aiq.tallySession';
+
+/** Indian-FY default that matches UploadView's currentFYDates: during Apr–Jun
+ * we default to the *previous* FY (closing-the-prior-year window). */
+function defaultPeriod(): { start: string; end: string } {
+  const now = new Date();
+  const month = now.getMonth();
+  const year = month <= 5 ? now.getFullYear() - 1 : now.getFullYear();
+  // FY year start = Apr 1 of `year`; end = Mar 31 of `year+1`.
+  const start = new Date(year, 3, 1).toISOString().slice(0, 10);
+  const end = new Date(year + 1, 2, 31).toISOString().slice(0, 10);
+  return { start, end };
+}
+
+interface DebugSyncEntry {
+  sizeBytes: number;
+  fetchedAt: number;
+  ok: boolean;
+  error?: string;
+  firstChars: string;
+  tallyError: string | null;
+}
 
 function loadSession(): ConnectorSession | null {
   if (typeof window === 'undefined') return null;
   try {
     const raw = sessionStorage.getItem(SESSION_KEY);
-    return raw ? (JSON.parse(raw) as ConnectorSession) : null;
-  } catch { return null; }
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<ConnectorSession>;
+    // Reject malformed sessions left over from earlier failed pairings — a
+    // session without bridgeId is unusable and would crash the render.
+    if (!parsed || typeof parsed.bridgeId !== 'string' || !parsed.bridgeId) {
+      sessionStorage.removeItem(SESSION_KEY);
+      return null;
+    }
+    return parsed as ConnectorSession;
+  } catch {
+    sessionStorage.removeItem(SESSION_KEY);
+    return null;
+  }
 }
 
 function saveSession(s: ConnectorSession | null): void {
@@ -27,7 +59,36 @@ export default function TallyConnectionView() {
   const [loadingCo, setLoadingCo] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => { setSession(loadSession()); }, []);
+  // ── Debug Sync state ──
+  // Lets the user run a small sync (trialbal + bills) and inspect the raw
+  // XML Tally returned. Primary use: confirm whether "all amounts ₹0" is
+  // due to a future-period query (Tally legitimately returns empty) or
+  // something else (Tally error envelope, gateway misconfig, etc.).
+  const [dbgPeriod, setDbgPeriod] = useState(defaultPeriod());
+  const [dbgRunning, setDbgRunning] = useState(false);
+  const [dbgResults, setDbgResults] = useState<Record<string, DebugSyncEntry> | null>(null);
+  const [dbgError, setDbgError] = useState<string | null>(null);
+  const [dbgExpanded, setDbgExpanded] = useState<string | null>(null);
+
+  // On mount: load from sessionStorage first; if absent, ask the cloud
+  // whether the user has an active bridge session already (e.g., paired in
+  // another tab, on another device, or here before sessionStorage was wiped).
+  useEffect(() => {
+    const local = loadSession();
+    if (local) { setSession(local); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch('/api/tally/active-session');
+        if (cancelled || !r.ok) return;
+        const data = (await r.json()) as { session: ConnectorSession | null };
+        if (cancelled || !data.session) return;
+        saveSession(data.session);
+        setSession(data.session);
+      } catch { /* ignore — fall back to manual pairing */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   // Long-poll for pair completion
   useEffect(() => {
@@ -125,6 +186,48 @@ export default function TallyConnectionView() {
     saveSession(null);
     setSession(null);
     setCompanies(null);
+  }
+
+  /** Run a cheap sync (trialbal + bills only) and read the snapshot back from
+   * the debug endpoint. Whole purpose is to give the user direct sight of the
+   * XML Tally returned for the chosen period. */
+  async function handleDebugSync() {
+    if (!session?.selectedCompany) return;
+    setDbgRunning(true);
+    setDbgError(null);
+    setDbgResults(null);
+    setDbgExpanded(null);
+    try {
+      const kinds: ReportKind[] = ['trialbal', 'bills'];
+      const r = await fetch('/api/tally/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bridgeId: session.bridgeId, period: dbgPeriod, kinds }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error ?? `HTTP ${r.status}`);
+      // Now pull the persisted snapshot for richer per-kind detail.
+      const snapRes = await fetch(`/api/tally/sync/debug?bridgeId=${encodeURIComponent(session.bridgeId)}`);
+      const snap = await snapRes.json();
+      if (!snapRes.ok) throw new Error(snap.error ?? `HTTP ${snapRes.status}`);
+      setDbgResults(snap.kinds ?? {});
+    } catch (e) {
+      setDbgError((e as Error).message);
+    } finally {
+      setDbgRunning(false);
+    }
+  }
+
+  function copySnippet(kind: string) {
+    const entry = dbgResults?.[kind];
+    if (!entry) return;
+    void navigator.clipboard.writeText(entry.firstChars);
+  }
+
+  function downloadFull(kind: string) {
+    if (!session) return;
+    const url = `/api/tally/sync/debug?bridgeId=${encodeURIComponent(session.bridgeId)}&full=1&kind=${encodeURIComponent(kind)}`;
+    window.open(url, '_blank');
   }
 
   return (
@@ -259,6 +362,120 @@ export default function TallyConnectionView() {
                   ))}
                 </div>
               )}
+            </div>
+          )}
+        </Section>
+      )}
+
+      {/* Step 4: Debug Sync — visible once a company is picked */}
+      {session?.selectedCompany && (
+        <Section title="4. Debug Sync (verify what Tally returns)" done={false}>
+          <p className="text-xs mb-3" style={{ color: 'var(--text3)' }}>
+            Pulls Trial Balance and Bills Receivable from Tally for the chosen
+            period and shows the raw XML. If amounts come back empty, this is
+            the fastest way to see whether Tally returned an error envelope, an
+            HTML page, or a legitimate empty period.
+          </p>
+          <div className="flex gap-2 mb-3 flex-wrap items-center text-xs">
+            <label style={{ color: 'var(--text2)' }}>From:&nbsp;
+              <input
+                type="date"
+                value={dbgPeriod.start}
+                onChange={e => setDbgPeriod(p => ({ ...p, start: e.target.value }))}
+                style={{ background: 'var(--bg3)', color: 'var(--text1)', border: '1px solid var(--border)', borderRadius: 6, padding: '2px 6px' }}
+              />
+            </label>
+            <label style={{ color: 'var(--text2)' }}>To:&nbsp;
+              <input
+                type="date"
+                value={dbgPeriod.end}
+                onChange={e => setDbgPeriod(p => ({ ...p, end: e.target.value }))}
+                style={{ background: 'var(--bg3)', color: 'var(--text1)', border: '1px solid var(--border)', borderRadius: 6, padding: '2px 6px' }}
+              />
+            </label>
+            <button
+              onClick={handleDebugSync}
+              disabled={dbgRunning}
+              className="px-3 py-1.5 rounded-lg border text-xs font-medium"
+              style={{ background: 'var(--teal)', color: '#000', border: '1px solid var(--teal)', opacity: dbgRunning ? 0.5 : 1 }}
+            >
+              {dbgRunning ? 'Querying Tally…' : 'Run Debug Sync'}
+            </button>
+            <button
+              onClick={() => setDbgPeriod(defaultPeriod())}
+              className="px-2 py-1.5 rounded-lg text-xs underline"
+              style={{ color: 'var(--text3)', background: 'transparent', border: 'none' }}
+              title="Reset to default FY"
+            >
+              Reset
+            </button>
+          </div>
+
+          {dbgError && (
+            <div className="text-xs mb-3 p-2 rounded" style={{ background: 'rgba(240,72,72,0.12)', color: 'var(--red)' }}>
+              {dbgError}
+            </div>
+          )}
+
+          {dbgResults && Object.keys(dbgResults).length > 0 && (
+            <div className="space-y-2">
+              {Object.entries(dbgResults).map(([kind, entry]) => {
+                const isExpanded = dbgExpanded === kind;
+                const badge = !entry.ok
+                  ? { text: 'fetch failed', color: 'var(--red)' }
+                  : entry.tallyError
+                    ? { text: entry.tallyError, color: 'var(--amber)' }
+                    : { text: 'looks OK', color: 'var(--teal)' };
+                return (
+                  <div key={kind} className="rounded-lg border p-2" style={{ borderColor: 'var(--border)', background: 'var(--bg3)' }}>
+                    <div className="flex items-center justify-between text-xs mb-1">
+                      <div className="flex items-center gap-2">
+                        <strong style={{ color: 'var(--text1)' }}>{kind}</strong>
+                        <span style={{ color: 'var(--text3)' }}>{entry.sizeBytes.toLocaleString()} chars</span>
+                        <span style={{ color: badge.color, fontWeight: 600 }}>{badge.text}</span>
+                      </div>
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => setDbgExpanded(isExpanded ? null : kind)}
+                          className="px-2 py-0.5 text-xs rounded border"
+                          style={{ borderColor: 'var(--border)', color: 'var(--text2)' }}
+                        >
+                          {isExpanded ? 'Collapse' : 'Show first 1000 chars'}
+                        </button>
+                        <button
+                          onClick={() => copySnippet(kind)}
+                          className="px-2 py-0.5 text-xs rounded border"
+                          style={{ borderColor: 'var(--border)', color: 'var(--text2)' }}
+                          disabled={!entry.firstChars}
+                        >
+                          Copy
+                        </button>
+                        <button
+                          onClick={() => downloadFull(kind)}
+                          className="px-2 py-0.5 text-xs rounded border"
+                          style={{ borderColor: 'var(--border)', color: 'var(--text2)' }}
+                          disabled={!entry.ok || entry.sizeBytes === 0}
+                        >
+                          Download full
+                        </button>
+                      </div>
+                    </div>
+                    {isExpanded && (
+                      <pre
+                        className="text-[11px] mt-2 p-2 rounded overflow-auto"
+                        style={{ background: 'var(--bg)', color: 'var(--text2)', border: '1px solid var(--border)', maxHeight: 280 }}
+                      >
+                        {entry.firstChars || '(empty)'}
+                      </pre>
+                    )}
+                    {entry.error && (
+                      <div className="text-xs mt-1" style={{ color: 'var(--red)' }}>
+                        Fetch error: {entry.error}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </Section>

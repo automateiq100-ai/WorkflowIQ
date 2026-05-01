@@ -8,7 +8,7 @@ import { createPairingCode, consumePairingResult } from '@/lib/connectors/sessio
 export async function POST() {
   const userId = await getUserId();
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-  const code = createPairingCode(userId);
+  const code = await createPairingCode(userId);
   return NextResponse.json({ code, expiresInSec: 300 });
 }
 
@@ -17,7 +17,7 @@ export async function GET(req: Request) {
   if (!userId) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   const code = new URL(req.url).searchParams.get('code');
   if (!code) return NextResponse.json({ error: 'Missing code' }, { status: 400 });
-  const session = consumePairingResult(code, userId);
+  const session = await consumePairingResult(code, userId);
   if (!session) return NextResponse.json({ paired: false });
   return NextResponse.json({ paired: true, session });
 }

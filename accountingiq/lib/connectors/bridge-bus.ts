@@ -24,7 +24,14 @@ interface BridgeQueue {
   pollers: Array<(j: PendingJob | null) => void>;
 }
 
-const QUEUES = new Map<string, BridgeQueue>();
+// Pin to globalThis so the same Map instance is shared across all route
+// bundles and survives Turbopack/HMR module re-evaluations. Without this,
+// dispatchJob (called from /api/tally/companies, /sync, /post-voucher) and
+// pollNextJob (/api/tally/bridge-poll) end up writing to and reading from
+// different Map instances and the bridge never sees the job → 60s timeout.
+const QUEUES: Map<string, BridgeQueue> =
+  ((globalThis as unknown as { __aiq_bridge_queues?: Map<string, BridgeQueue> }).__aiq_bridge_queues ??=
+    new Map<string, BridgeQueue>());
 const JOB_TIMEOUT_MS = 60_000;
 
 function ensure(bridgeId: string): BridgeQueue {

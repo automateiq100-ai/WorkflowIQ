@@ -19,8 +19,10 @@ export async function runRelay({ cloudUrl, bridgeToken, onLog }) {
       log(`job ${job.id} (${job.kind})`);
       try {
         const xml = await postToTally(job.payload);
+        log(`job ${job.id} → tally returned ${xml.length} chars`);
         await postResult(cloudUrl, bridgeToken, { jobId: job.id, xml });
       } catch (err) {
+        log(`job ${job.id} → tally error: ${err.message}`);
         await postResult(cloudUrl, bridgeToken, { jobId: job.id, error: err.message });
       }
     } catch (err) {

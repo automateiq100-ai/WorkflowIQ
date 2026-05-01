@@ -44,3 +44,27 @@ node src/pair.mjs --cloud https://accountingiq.example.com --code AB12CD
 # Then run the bridge in the background
 node src/main.mjs
 ```
+
+## Background mode (Windows)
+
+After first-run pairing, the bridge installs:
+
+1. A `accountingiq-bridge-launcher.vbs` next to the .exe — a one-line
+   `WScript.Shell` script that runs the bridge with `--silent` and
+   `WindowStyle = 0` (fully hidden, no console).
+2. A Startup folder shortcut (`AccountingIQ Bridge.lnk`) targeting `wscript.exe`
+   with the VBS as its argument. Windows runs this on every login.
+
+Result: at login, the bridge starts silently in the background — no flashing
+console, nothing in the taskbar. It shows up only as `accountingiq-bridge.exe`
+in Task Manager → Background processes.
+
+The shortcut is re-created on every interactive launch, so moving the .exe or
+upgrading from an older (visible-console) install transparently upgrades the
+auto-start.
+
+To run silently from the command line directly:
+
+```
+accountingiq-bridge.exe --silent
+```
