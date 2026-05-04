@@ -81,6 +81,11 @@ export default function PortalShell({
   function handleToolClick(tool: typeof ALL_TOOLS[number]) {
     if (tool.id === 'researchiq') {
       goToResearchIQ();
+    } else if (tool.id === 'practiceiq') {
+      // PracticeIQ is a separate Next.js app served by the Express proxy at
+      // /practiceiq. A client-side router.push would keep us inside the
+      // AccountingIQ workspace, so we need a hard navigation.
+      window.location.href = '/practiceiq';
     } else if (tool.href) {
       router.push(tool.href);
     }
