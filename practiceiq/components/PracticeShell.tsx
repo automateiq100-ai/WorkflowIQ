@@ -4,13 +4,25 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 
-const NAV = [
+type SubItem = { href: string; label: string };
+type NavItem = { href: string; label: string; icon: string; subItems?: SubItem[] };
+
+const NAV: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', icon: '🏠' },
   { href: '/clients', label: 'Clients', icon: '👥' },
   { href: '/tasks', label: 'Tasks', icon: '✅' },
   { href: '/tasks/recurring', label: 'Recurring', icon: '🔁' },
   { href: '/calendar', label: 'Calendar', icon: '📅' },
-  { href: '/documents', label: 'Documents', icon: '📁' },
+  {
+    href: '/documents',
+    label: 'Documents',
+    icon: '📁',
+    subItems: [
+      { href: '/documents', label: 'Inbox' },
+      { href: '/documents/follow-up', label: 'Follow-up Queue' },
+      { href: '/documents/ask-shalini', label: 'Ask Shalini' },
+    ],
+  },
   { href: '/invoices', label: 'Invoices', icon: '🧾' },
   { href: '/settings', label: 'Settings', icon: '⚙️' },
 ];
@@ -29,6 +41,11 @@ export default function PracticeShell({
     const supabase = createClient();
     await supabase.auth.signOut();
     router.push('/login');
+  }
+
+  function isActive(href: string, exact: boolean) {
+    if (exact) return pathname === href;
+    return pathname?.startsWith(href);
   }
 
   return (
@@ -55,24 +72,45 @@ export default function PracticeShell({
 
         <nav className="flex-1 py-3">
           {NAV.map(item => {
-            const active =
-              item.href === '/dashboard'
-                ? pathname === '/dashboard'
-                : pathname?.startsWith(item.href);
+            const exact = item.href === '/dashboard';
+            const active = isActive(item.href, exact);
+            const expanded = !!item.subItems && pathname?.startsWith(item.href);
             return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className="flex items-center gap-3 px-5 py-2 text-sm transition-colors"
-                style={{
-                  color: active ? 'var(--text1)' : 'var(--text2)',
-                  background: active ? 'var(--bg3)' : 'transparent',
-                  borderLeft: `3px solid ${active ? 'var(--purple)' : 'transparent'}`,
-                }}
-              >
-                <span>{item.icon}</span>
-                <span>{item.label}</span>
-              </Link>
+              <div key={item.href}>
+                <Link
+                  href={item.href}
+                  className="flex items-center gap-3 px-5 py-2 text-sm transition-colors"
+                  style={{
+                    color: active ? 'var(--text1)' : 'var(--text2)',
+                    background: active && !expanded ? 'var(--bg3)' : 'transparent',
+                    borderLeft: `3px solid ${active ? 'var(--purple)' : 'transparent'}`,
+                  }}
+                >
+                  <span>{item.icon}</span>
+                  <span>{item.label}</span>
+                </Link>
+                {expanded && item.subItems && (
+                  <div>
+                    {item.subItems.map(sub => {
+                      const subActive = pathname === sub.href;
+                      return (
+                        <Link
+                          key={sub.href}
+                          href={sub.href}
+                          className="flex items-center gap-3 pl-12 pr-5 py-1.5 text-sm transition-colors"
+                          style={{
+                            color: subActive ? 'var(--text1)' : 'var(--text3)',
+                            background: subActive ? 'var(--bg3)' : 'transparent',
+                            borderLeft: `3px solid ${subActive ? 'var(--purple)' : 'transparent'}`,
+                          }}
+                        >
+                          {sub.label}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             );
           })}
         </nav>
