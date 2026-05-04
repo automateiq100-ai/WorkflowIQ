@@ -13,9 +13,9 @@ export default async function OnboardingPage() {
     process.env.SUPABASE_SERVICE_KEY!,
   );
 
-  // Mark any legacy user with onboarding_done: false as done — company details
-  // are now collected inside AccountingIQ's CompanySelectorView.
-  await admin.from('user_profiles').update({ onboarding_done: true }).eq('id', user.id);
+  // Onboarding is just tool selection (collected at signup). Company details
+  // are collected inside AccountingIQ's CompanySelectorView per company.
+  await admin.from('workflowiq_clients').update({ onboarding_done: true }).eq('id', user.id);
 
   redirect('/portal');
 }

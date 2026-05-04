@@ -315,30 +315,9 @@ export interface UserProfile {
   email: string;
   full_name: string | null;
   mobile: string | null;
-  company_name: string | null;
-  company_type: string | null;
   selected_tools: string[];
-  gst_applicable: boolean;
-  gst_regular: boolean;
-  tds_applicable: boolean;
-  has_employees: boolean;
-  has_fa_filter: boolean;
-  is_goods: boolean;
-  full_fy: boolean;
   theme: 'dark' | 'light';
   onboarding_done: boolean;
-}
-
-export function dbProfileToFilters(p: Partial<UserProfile>): CompanyProfile {
-  return {
-    gstApplicable: p.gst_applicable ?? false,
-    gstRegular:    p.gst_regular ?? false,
-    tdsApplicable: p.tds_applicable ?? false,
-    hasEmployees:  p.has_employees ?? false,
-    hasFAfilter:   p.has_fa_filter ?? false,
-    isGoods:       p.is_goods ?? false,
-    fullFY:        p.full_fy ?? true,
-  };
 }
 
 export interface MISSetup {
@@ -349,8 +328,10 @@ export interface MISSetup {
 
 export interface Company {
   id: string;
-  user_id: string;
+  owner_user_id: string;
   name: string;
+  gstin: string | null;
+  pan: string | null;
   company_type: string | null;
   gst_applicable: boolean;
   gst_regular: boolean;
@@ -359,7 +340,10 @@ export interface Company {
   has_fa_filter: boolean;
   is_goods: boolean;
   full_fy: boolean;
+  tally_company_id: string | null;
+  tally_company_name: string | null;
   created_at: string;
+  updated_at: string;
 }
 
 export interface ActiveCompany {

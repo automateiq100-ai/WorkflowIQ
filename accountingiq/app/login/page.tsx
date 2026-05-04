@@ -8,6 +8,7 @@ type Tab = 'signin' | 'signup';
 
 const TOOLS = [
   { id: 'accountingiq', label: 'AccountingIQ', description: 'Tally XML Analyser — 60 checks, 0–100 score' },
+  { id: 'practiceiq',   label: 'PracticeIQ',   description: 'CA Practice Management — clients, tasks, invoices' },
   { id: 'researchiq',   label: 'ResearchIQ',   description: 'AI-Powered Legal Research' },
 ];
 

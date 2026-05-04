@@ -2,8 +2,6 @@ import { createServerClient } from '@supabase/ssr';
 import { createClient } from '@supabase/supabase-js';
 import { cookies } from 'next/headers';
 import { NextRequest, NextResponse } from 'next/server';
-import type { CompanyProfile } from '@/lib/types';
-import { dbProfileToFilters } from '@/lib/types';
 
 async function getUser() {
   const cookieStore = await cookies();
@@ -38,21 +36,18 @@ export async function GET() {
 
   const admin = adminClient();
   const { data, error } = await admin
-    .from('user_profiles')
-    .select('company_name, company_type, selected_tools, gst_applicable, gst_regular, tds_applicable, has_employees, has_fa_filter, is_goods, full_fy, theme, full_name, mobile')
+    .from('workflowiq_clients')
+    .select('selected_tools, theme, full_name, mobile')
     .eq('id', user.id)
-    .single();
+    .maybeSingle();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   return NextResponse.json({
-    company_name: data.company_name,
-    company_type: data.company_type,
-    selected_tools: data.selected_tools ?? [],
-    filters: dbProfileToFilters(data),
-    theme: data.theme ?? 'dark',
-    full_name: data.full_name ?? null,
-    mobile: data.mobile ?? null,
+    selected_tools: data?.selected_tools ?? user.user_metadata?.selected_tools ?? [],
+    theme: data?.theme ?? 'dark',
+    full_name: data?.full_name ?? user.user_metadata?.full_name ?? null,
+    mobile: data?.mobile ?? user.user_metadata?.mobile ?? null,
   });
 }
 
@@ -68,25 +63,12 @@ export async function PATCH(request: NextRequest) {
   if (body.theme !== undefined) updates.theme = body.theme;
   if (body.full_name !== undefined) updates.full_name = body.full_name;
   if (body.mobile !== undefined) updates.mobile = body.mobile;
-  if (body.company_name !== undefined) updates.company_name = body.company_name;
-  if (body.company_type !== undefined) updates.company_type = body.company_type;
-
-  if (body.filters) {
-    const f = body.filters as CompanyProfile;
-    updates.gst_applicable = f.gstApplicable;
-    updates.gst_regular    = f.gstRegular;
-    updates.tds_applicable = f.tdsApplicable;
-    updates.has_employees  = f.hasEmployees;
-    updates.has_fa_filter  = f.hasFAfilter;
-    updates.is_goods       = f.isGoods;
-    updates.full_fy        = f.fullFY;
-  }
 
   if (Object.keys(updates).length === 0) {
     return NextResponse.json({ ok: true });
   }
 
-  const { error } = await admin.from('user_profiles').update(updates).eq('id', user.id);
+  const { error } = await admin.from('workflowiq_clients').update(updates).eq('id', user.id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ ok: true });
 }

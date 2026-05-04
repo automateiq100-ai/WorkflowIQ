@@ -33,9 +33,9 @@ export async function GET(req: Request) {
 
   // 2. Their checklists, statuses, follow-up history (parallel)
   const [checkRes, statusRes, fuRes] = await Promise.all([
-    supabase.from('dociq_document_checklist').select('*').in('client_id', clientIds),
-    supabase.from('dociq_document_status').select('client_id, doc_type, status, received_at').in('client_id', clientIds),
-    supabase.from('dociq_followup_log').select('client_id, doc_type, sent_at').in('client_id', clientIds).order('sent_at', { ascending: false }),
+    supabase.from('practiceiq_document_checklist').select('*').in('client_id', clientIds),
+    supabase.from('practiceiq_document_status').select('client_id, doc_type, status, received_at').in('client_id', clientIds),
+    supabase.from('practiceiq_followup_log').select('client_id, doc_type, sent_at').in('client_id', clientIds).order('sent_at', { ascending: false }),
   ]);
 
   if (checkRes.error) return NextResponse.json({ error: checkRes.error.message }, { status: 500 });

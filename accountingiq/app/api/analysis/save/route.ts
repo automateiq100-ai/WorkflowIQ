@@ -34,8 +34,8 @@ export async function POST(request: NextRequest) {
     process.env.SUPABASE_SERVICE_KEY!,
   );
 
-  const { data, error } = await admin.from('analysis_runs').insert({
-    user_id: user.id,
+  const { data, error } = await admin.from('accountingiq_analysis_runs').insert({
+    owner_user_id: user.id,
     company_id:        company_id        ?? null,
     overall_score,
     capped_score,

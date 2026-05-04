@@ -49,7 +49,7 @@ export async function GET(request: NextRequest) {
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_KEY!,
     );
-    await admin.from('user_profiles').upsert({
+    await admin.from('workflowiq_clients').upsert({
       id: user.id,
       email: user.email,
       full_name: user.user_metadata?.full_name ?? null,
@@ -61,7 +61,7 @@ export async function GET(request: NextRequest) {
       } : {}),
     }, { onConflict: 'id' });
     await admin.rpc('increment_login_count', { user_id: user.id });
-    await admin.from('login_sessions').insert({
+    await admin.from('workflowiq_login_sessions').insert({
       user_id: user.id,
       app: 'accountingiq',
     });

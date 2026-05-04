@@ -97,7 +97,7 @@ Single-tenant per CA in V1:
 ```
 client DMs bot
   → /start → DPDPA consent in Hinglish (single Q: "Haan/Nahi"); writes practiceiq_clients.consent_given
-  → text     → save to dociq_messages + embed → generate_client_message (Deepseek) → reply + save outbound + embed
+  → text     → save to practiceiq_messages + embed → generate_client_message (Deepseek) → reply + save outbound + embed
   → document → validate (≤50MB, MIME in allowlist)
               → classify doc_type via GPT-4o-mini (filename + caption + checklist)
               → upload to Supabase Storage bucket `practiceiq-docs`,
@@ -106,25 +106,25 @@ client DMs bot
               → embed (caption + filename + ocr_text[:2000])
               → INSERT practiceiq_documents (source='telegram', source_ref=<msg_id>, uploaded_by='shalini',
                                               status='received', retention_until = today + 1 year)
-              → INSERT dociq_messages (message_type='document', document_id=<new>, embedding)
-              → UPDATE dociq_document_status → received
+              → INSERT practiceiq_messages (message_type='document', document_id=<new>, embedding)
+              → UPDATE practiceiq_document_status → received
               → reply with remaining pending docs (Hinglish)
               → if checklist complete → send Telegram message to practiceiq_settings.ca_telegram_chat_id
   → voice/audio → "V2 mein aayega" (V1 does not transcribe)
 ```
 
 ## Daily 09:00 IST scheduler
-- `daily_followup_job` — for each consented client × each pending doc where `today >= followup_start_date` and no follow-up sent today: increment counter, generate Hinglish message via Shalini, send, log to `dociq_followup_log`.
+- `daily_followup_job` — for each consented client × each pending doc where `today >= followup_start_date` and no follow-up sent today: increment counter, generate Hinglish message via Shalini, send, log to `practiceiq_followup_log`.
 - `ca_digest_job` — single Telegram message to CA summarizing overdue + T-1 clients.
-- `chat_retention_job` — delete `dociq_messages` older than 365 days.
+- `chat_retention_job` — delete `practiceiq_messages` older than 365 days.
 - `doc_retention_job` — soft-delete `practiceiq_documents` past `retention_until` (`deleted_at = now()`).
 
 ## CA query flow (`POST /api/shalini/query`)
 GPT-4o tool-call loop, cap 5 iterations. Tools:
 - `get_client_status(client_name_or_id)`
-- `search_chat_history(client_id, query)` — `hybrid_search` RPC over `dociq_messages`
+- `search_chat_history(client_id, query)` — `hybrid_search` RPC over `practiceiq_messages`
 - `search_doc_contents(query, client_id?)` — `documents_hybrid_search` RPC over `practiceiq_documents.ocr_text`
-- `get_all_pending(ca_firm_id)` — joins `dociq_document_status` + `dociq_document_checklist`
+- `get_all_pending(ca_firm_id)` — joins `practiceiq_document_status` + `practiceiq_document_checklist`
 - `send_reminder(client_id, doc_type)` — **returns draft only**, does not send
 - `mark_received_manually(client_id, doc_type)`
 
@@ -152,13 +152,13 @@ GPT-4o tool-call loop, cap 5 iterations. Tools:
 | `practiceiq_clients` | extended with `telegram_chat_id` (text+UNIQUE), `telegram_username`, `telegram_first_name`, `consent_given`, `consent_at`, `filing_period`, `entity_type` |
 | `practiceiq_settings` | extended with `ca_telegram_chat_id` (text) |
 | `practiceiq_documents` | extended with `source`, `source_ref`, `uploaded_by`, `mime_type`, `doc_type`, `filing_period`, `ocr_text`, `embedding vector(1536)`, `status`, `verified_by`, `verified_at`, `rejection_reason`, `deleted_at`, `retention_until`, `is_sensitive`. HNSW + FTS indexes. |
-| `dociq_messages` | bot conversation log; `document_id` FK → `practiceiq_documents` |
-| `dociq_document_checklist` | what to collect per client per period |
-| `dociq_document_status` | pending/received/overdue per client × doc_type |
-| `dociq_followup_log` | every reminder Shalini sent |
+| `practiceiq_messages` | bot conversation log; `document_id` FK → `practiceiq_documents` |
+| `practiceiq_document_checklist` | what to collect per client per period |
+| `practiceiq_document_status` | pending/received/overdue per client × doc_type |
+| `practiceiq_followup_log` | every reminder Shalini sent |
 
 ### RPCs
-- `hybrid_search(p_client_id, p_query_text, p_query_embedding, p_doc_type?, p_period?, p_match_count=5)` — RRF over `dociq_messages` (vector + FTS)
+- `hybrid_search(p_client_id, p_query_text, p_query_embedding, p_doc_type?, p_period?, p_match_count=5)` — RRF over `practiceiq_messages` (vector + FTS)
 - `documents_hybrid_search(p_owner_user_id, p_query_text, p_query_embedding, p_client_id?, p_doc_type?, p_period?, p_match_count=5)` — same shape over `practiceiq_documents.ocr_text`
 
 ### Storage

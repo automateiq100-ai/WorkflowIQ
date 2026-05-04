@@ -24,28 +24,15 @@ export async function POST(request: NextRequest) {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const body = await request.json();
-  const {
-    company_name, company_type, selected_tools,
-    gst_applicable, gst_regular, tds_applicable,
-    has_employees, has_fa_filter, is_goods, full_fy,
-  } = body;
+  const { selected_tools } = body;
 
   const admin = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_KEY!,
   );
 
-  const { error } = await admin.from('user_profiles').update({
-    company_name: company_name ?? null,
-    company_type: company_type ?? null,
+  const { error } = await admin.from('workflowiq_clients').update({
     selected_tools: selected_tools ?? ['accountingiq'],
-    gst_applicable: gst_applicable ?? false,
-    gst_regular: gst_regular ?? false,
-    tds_applicable: tds_applicable ?? false,
-    has_employees: has_employees ?? false,
-    has_fa_filter: has_fa_filter ?? false,
-    is_goods: is_goods ?? false,
-    full_fy: full_fy ?? true,
     onboarding_done: true,
   }).eq('id', user.id);
 
