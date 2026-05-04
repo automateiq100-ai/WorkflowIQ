@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
 
-const DOCIQ_BACKEND_URL = process.env.DOCIQ_BACKEND_URL || 'http://localhost:8000';
+const DOCUMENTS_BACKEND_URL = process.env.DOCUMENTS_BACKEND_URL || 'http://localhost:8000';
 
 export async function POST(req: Request) {
   const supabase = await createClient();
@@ -18,7 +18,7 @@ export async function POST(req: Request) {
 
   let upstream: Response;
   try {
-    upstream = await fetch(`${DOCIQ_BACKEND_URL}/api/shalini/query`, {
+    upstream = await fetch(`${DOCUMENTS_BACKEND_URL}/api/shalini/query`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -29,7 +29,7 @@ export async function POST(req: Request) {
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'fetch failed';
     return NextResponse.json(
-      { error: `Shalini backend unreachable at ${DOCIQ_BACKEND_URL}: ${msg}` },
+      { error: `Shalini backend unreachable at ${DOCUMENTS_BACKEND_URL}: ${msg}` },
       { status: 503 }
     );
   }
