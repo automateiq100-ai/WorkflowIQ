@@ -82,9 +82,8 @@ export default async function DashboardPage() {
 
       <div className="mt-6 flex gap-3 flex-wrap">
         <Link href="/clients" style={btn('var(--blue)')}>+ Add Client</Link>
-        <Link href="/tasks" style={btn('var(--teal)')}>+ New Task</Link>
-        <Link href="/invoices/new" style={btn('var(--coral)')}>+ Invoice</Link>
-        <Link href="/tasks/recurring" style={btn('var(--purple)')}>Manage Recurring</Link>
+        <Link href="/services" style={btn('var(--purple)')}>Manage Services</Link>
+        <Link href="/documents" style={btn('var(--teal)')}>Documents</Link>
       </div>
     </div>
   );

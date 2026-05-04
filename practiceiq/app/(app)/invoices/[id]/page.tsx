@@ -3,7 +3,7 @@
 import { useEffect, useState, use } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import type { Invoice, Client, FirmSettings, InvoiceStatus } from '@/lib/practiceiq/types';
+import type { Invoice, Client, ClientEmail, FirmSettings, InvoiceStatus } from '@/lib/practiceiq/types';
 import { api } from '@/lib/api';
 
 const STATUSES: InvoiceStatus[] = ['draft', 'sent', 'paid', 'overdue'];
@@ -13,14 +13,21 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const router = useRouter();
   const [inv, setInv] = useState<Invoice | null>(null);
   const [client, setClient] = useState<Client | null>(null);
+  const [primaryEmail, setPrimaryEmail] = useState<string | null>(null);
   const [settings, setSettings] = useState<FirmSettings | null>(null);
 
   async function load() {
     const i = await fetch(api(`/api/practiceiq/invoices/${id}`)).then(r => r.json());
     setInv(i.data ?? null);
     if (i.data?.client_id) {
-      const c = await fetch(api(`/api/practiceiq/clients/${i.data.client_id}`)).then(r => r.json());
+      const [c, em] = await Promise.all([
+        fetch(api(`/api/practiceiq/clients/${i.data.client_id}`)).then(r => r.json()),
+        fetch(api(`/api/practiceiq/clients/${i.data.client_id}/emails`)).then(r => r.json()),
+      ]);
       setClient(c.data ?? null);
+      const list: ClientEmail[] = em.data ?? [];
+      const primary = list.find(e => e.is_primary) ?? list[0];
+      setPrimaryEmail(primary?.email ?? null);
     }
     const s = await fetch(api('/api/practiceiq/settings')).then(r => r.json());
     setSettings(s.data ?? null);
@@ -76,7 +83,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             <div className="text-sm" style={{ color: 'var(--text1)' }}>{client.name}</div>
             {client.address && <div className="text-xs" style={{ color: 'var(--text2)' }}>{client.address}</div>}
             {client.gstin && <div className="text-xs" style={{ color: 'var(--text3)' }}>GSTIN: {client.gstin}</div>}
-            {client.email && <div className="text-xs" style={{ color: 'var(--text3)' }}>{client.email}</div>}
+            {primaryEmail && <div className="text-xs" style={{ color: 'var(--text3)' }}>{primaryEmail}</div>}
           </div>
         )}
 

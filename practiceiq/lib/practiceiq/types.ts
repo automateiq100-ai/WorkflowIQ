@@ -1,5 +1,4 @@
 export type ClientType = 'individual' | 'company' | 'llp' | 'partnership';
-export type ServiceTag = 'gst' | 'tds' | 'itr' | 'audit' | 'roc' | 'bookkeeping';
 
 export interface Client {
   id: string;
@@ -7,14 +6,94 @@ export interface Client {
   name: string;
   pan: string | null;
   gstin: string | null;
-  email: string | null;
   phone: string | null;
   address: string | null;
   client_type: ClientType | null;
-  services: ServiceTag[] | null;
   assigned_to: string | null;
   notes: string | null;
+  followup_broadcast: boolean;
   created_at: string;
+}
+
+export interface ClientServiceDocType {
+  id: string;
+  client_service_id: string;
+  owner_user_id: string;
+  doc_type: string;
+  label: string | null;
+  created_at: string;
+}
+
+export interface ServiceTemplateDocType {
+  id: string;
+  template_id: string;
+  owner_user_id: string;
+  doc_type: string;
+  label: string | null;
+  created_at: string;
+}
+
+export interface ServiceTemplate {
+  id: string;
+  owner_user_id: string;
+  service: string;
+  cadence: Cadence;
+  deadline_day: number | null;
+  deadline_month: number | null;
+  followup_lead_days: number | null;
+  active: boolean;
+  created_at: string;
+  doc_types?: ServiceTemplateDocType[];
+}
+
+export interface ClientService {
+  id: string;
+  client_id: string;
+  owner_user_id: string;
+  service: string;
+  cadence: Cadence;
+  deadline_day: number | null;
+  deadline_month: number | null;
+  followup_lead_days: number | null;
+  active: boolean;
+  created_at: string;
+  doc_types?: ClientServiceDocType[];
+}
+
+export interface ClientEmail {
+  id: string;
+  client_id: string;
+  owner_user_id: string;
+  email: string;
+  label: string | null;
+  is_primary: boolean;
+  added_at: string;
+}
+
+export interface ClientTelegramAccount {
+  id: string;
+  client_id: string;
+  owner_user_id: string;
+  telegram_chat_id: number;
+  telegram_username: string | null;
+  telegram_first_name: string | null;
+  label: string | null;
+  consent_given: boolean;
+  consent_at: string | null;
+  is_primary: boolean;
+  added_at: string;
+}
+
+export interface TelegramInvite {
+  token: string;
+  client_id: string;
+  owner_user_id: string;
+  label: string | null;
+  created_by: string;
+  created_at: string;
+  expires_at: string;
+  consumed_at: string | null;
+  consumed_by_chat_id: number | null;
 }
 
 export type TaskStatus = 'open' | 'in_progress' | 'review' | 'done';
@@ -31,27 +110,11 @@ export interface Task {
   due_date: string | null;
   assigned_to: string | null;
   fee_amount: number | null;
-  recurring_template_id: string | null;
   completed_at: string | null;
   created_at: string;
 }
 
 export type Cadence = 'monthly' | 'quarterly' | 'annual';
-
-export interface RecurringTemplate {
-  id: string;
-  owner_user_id: string;
-  client_id: string | null;
-  title: string;
-  cadence: Cadence;
-  day_of_month: number | null;
-  month_of_year: number | null;
-  fee_amount: number | null;
-  assigned_to: string | null;
-  active: boolean;
-  last_spawned_for: string | null;
-  created_at: string;
-}
 
 export interface InvoiceLineItem {
   description: string;

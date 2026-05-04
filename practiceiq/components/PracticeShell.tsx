@@ -10,8 +10,7 @@ type NavItem = { href: string; label: string; icon: string; subItems?: SubItem[]
 const NAV: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', icon: '🏠' },
   { href: '/clients', label: 'Clients', icon: '👥' },
-  { href: '/tasks', label: 'Tasks', icon: '✅' },
-  { href: '/tasks/recurring', label: 'Recurring', icon: '🔁' },
+  { href: '/services', label: 'Services', icon: '🛠️' },
   { href: '/calendar', label: 'Calendar', icon: '📅' },
   {
     href: '/documents',
@@ -23,7 +22,6 @@ const NAV: NavItem[] = [
       { href: '/documents/ask-shalini', label: 'Ask Shalini' },
     ],
   },
-  { href: '/invoices', label: 'Invoices', icon: '🧾' },
   { href: '/settings', label: 'Settings', icon: '⚙️' },
 ];
 
