@@ -40,10 +40,10 @@ export async function GET(
   const { id } = await params;
   const admin = adminClient();
   const { data, error } = await admin
-    .from('companies')
+    .from('accountingiq_companies')
     .select('*')
     .eq('id', id)
-    .eq('user_id', user.id)
+    .eq('owner_user_id', user.id)
     .single();
 
   if (error || !data) return NextResponse.json({ error: 'Not found' }, { status: 404 });
@@ -64,6 +64,8 @@ export async function PATCH(
   const updates: Record<string, unknown> = {};
   if (body.name !== undefined)           updates.name           = body.name;
   if (body.company_type !== undefined)   updates.company_type   = body.company_type || null;
+  if (body.gstin !== undefined)          updates.gstin          = body.gstin || null;
+  if (body.pan !== undefined)            updates.pan            = body.pan || null;
   if (body.gst_applicable !== undefined) updates.gst_applicable = body.gst_applicable;
   if (body.gst_regular !== undefined)    updates.gst_regular    = body.gst_regular;
   if (body.tds_applicable !== undefined) updates.tds_applicable = body.tds_applicable;
@@ -74,11 +76,13 @@ export async function PATCH(
 
   if (Object.keys(updates).length === 0) return NextResponse.json({ ok: true });
 
+  updates.updated_at = new Date().toISOString();
+
   const { data, error } = await admin
-    .from('companies')
+    .from('accountingiq_companies')
     .update(updates)
     .eq('id', id)
-    .eq('user_id', user.id)
+    .eq('owner_user_id', user.id)
     .select('*')
     .single();
 
@@ -96,10 +100,10 @@ export async function DELETE(
   const { id } = await params;
   const admin = adminClient();
   const { error } = await admin
-    .from('companies')
+    .from('accountingiq_companies')
     .delete()
     .eq('id', id)
-    .eq('user_id', user.id);
+    .eq('owner_user_id', user.id);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ ok: true });

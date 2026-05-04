@@ -14,7 +14,7 @@ export default async function PortalPage() {
     process.env.SUPABASE_SERVICE_KEY!,
   );
   const { data: profile } = await admin
-    .from('user_profiles')
+    .from('workflowiq_clients')
     .select('onboarding_done, selected_tools')
     .eq('id', user.id)
     .single();
@@ -22,7 +22,7 @@ export default async function PortalPage() {
   if (!profile) {
     // Profile row missing (e.g. email-confirm disabled and init call lost the cookie race).
     // Bootstrap it now from auth metadata.
-    await admin.from('user_profiles').upsert({
+    await admin.from('workflowiq_clients').upsert({
       id: user.id,
       email: user.email,
       full_name: user.user_metadata?.full_name ?? null,
@@ -32,7 +32,7 @@ export default async function PortalPage() {
       last_seen: new Date().toISOString(),
     }, { onConflict: 'id' });
   } else if (!profile.onboarding_done) {
-    await admin.from('user_profiles').update({ onboarding_done: true }).eq('id', user.id);
+    await admin.from('workflowiq_clients').update({ onboarding_done: true }).eq('id', user.id);
   }
 
   const selectedTools: string[] =

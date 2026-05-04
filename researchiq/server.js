@@ -294,7 +294,7 @@ app.use('/api', requireAuth);
 app.post('/api/auth/login', async (req, res) => {
     const { id, email, user_metadata } = req.user;
     const { sessionId } = req.body;
-    await supabaseAdmin.from('user_profiles').upsert({
+    await supabaseAdmin.from('workflowiq_clients').upsert({
         id,
         email,
         full_name: user_metadata?.full_name ?? null,
@@ -302,7 +302,7 @@ app.post('/api/auth/login', async (req, res) => {
         last_seen: new Date().toISOString(),
     }, { onConflict: 'id' });
     await supabaseAdmin.rpc('increment_login_count', { user_id: id });
-    await supabaseAdmin.from('login_sessions').insert({
+    await supabaseAdmin.from('workflowiq_login_sessions').insert({
         id: sessionId,
         user_id: id,
         app: 'workflowiq',
@@ -312,7 +312,7 @@ app.post('/api/auth/login', async (req, res) => {
 
 app.post('/api/auth/heartbeat', async (req, res) => {
     const { sessionId } = req.body;
-    await supabaseAdmin.from('login_sessions')
+    await supabaseAdmin.from('workflowiq_login_sessions')
         .update({ last_active: new Date().toISOString() })
         .eq('id', sessionId);
     res.json({ ok: true });
@@ -321,10 +321,10 @@ app.post('/api/auth/heartbeat', async (req, res) => {
 app.post('/api/auth/logout', async (req, res) => {
     const { sessionId } = req.body;
     const { data } = await supabaseAdmin
-        .from('login_sessions').select('signed_in_at').eq('id', sessionId).single();
+        .from('workflowiq_login_sessions').select('signed_in_at').eq('id', sessionId).single();
     if (data) {
         const durationMin = (Date.now() - new Date(data.signed_in_at).getTime()) / 60000;
-        await supabaseAdmin.from('login_sessions')
+        await supabaseAdmin.from('workflowiq_login_sessions')
             .update({ signed_out_at: new Date().toISOString(), duration_min: parseFloat(durationMin.toFixed(2)) })
             .eq('id', sessionId);
     }

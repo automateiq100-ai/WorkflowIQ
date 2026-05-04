@@ -92,7 +92,7 @@ function isExpired(createdAtIso: string): boolean {
 export async function createPairingCode(userId: string): Promise<string> {
   // Avoid 0/O/1/I — easier to read on a small bridge UI.
   const code = rand(6, '23456789ABCDEFGHJKLMNPQRSTUVWXYZ');
-  const { error } = await admin().from('pairing_codes').insert({
+  const { error } = await admin().from('accountingiq_pairing_codes').insert({
     code,
     user_id: userId,
   });
@@ -112,7 +112,7 @@ export async function claimPairingCode(
 ): Promise<{ bridgeId: string; bridgeToken: string; userId: string } | null> {
   const upper = code.toUpperCase();
   const { data, error } = await admin()
-    .from('pairing_codes')
+    .from('accountingiq_pairing_codes')
     .select('*')
     .eq('code', upper)
     .maybeSingle();
@@ -120,7 +120,7 @@ export async function claimPairingCode(
 
   const row = data as PairingCodeRow;
   if (isExpired(row.created_at)) {
-    await admin().from('pairing_codes').delete().eq('code', upper);
+    await admin().from('accountingiq_pairing_codes').delete().eq('code', upper);
     return null;
   }
   if (row.bridge_id) return null; // already claimed
@@ -129,7 +129,7 @@ export async function claimPairingCode(
   const bridgeToken = rand(48, 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789');
   const tokenHash = hashToken(bridgeToken);
 
-  const { error: insertErr } = await admin().from('bridge_sessions').insert({
+  const { error: insertErr } = await admin().from('accountingiq_bridge_sessions').insert({
     bridge_id: bridgeId,
     bridge_token_hash: tokenHash,
     user_id: row.user_id,
@@ -143,7 +143,7 @@ export async function claimPairingCode(
   // Mark the code as claimed so the user's browser poll picks up the result.
   // If this update races with the cloud's poll, the worst case is the browser
   // takes one more poll cycle to see the bridge_id — harmless.
-  await admin().from('pairing_codes').update({ bridge_id: bridgeId }).eq('code', upper);
+  await admin().from('accountingiq_pairing_codes').update({ bridge_id: bridgeId }).eq('code', upper);
 
   return { bridgeId, bridgeToken, userId: row.user_id };
 }
@@ -151,7 +151,7 @@ export async function claimPairingCode(
 export async function consumePairingResult(code: string, userId: string): Promise<ConnectorSession | null> {
   const upper = code.toUpperCase();
   const { data } = await admin()
-    .from('pairing_codes')
+    .from('accountingiq_pairing_codes')
     .select('*')
     .eq('code', upper)
     .eq('user_id', userId)
@@ -160,7 +160,7 @@ export async function consumePairingResult(code: string, userId: string): Promis
   if (!row || !row.bridge_id) return null;
   // Single-use: delete the row once the browser picks up the result. The
   // persistent bridge_sessions row remains.
-  await admin().from('pairing_codes').delete().eq('code', upper);
+  await admin().from('accountingiq_pairing_codes').delete().eq('code', upper);
   return {
     connectorId: 'tally',
     bridgeId: row.bridge_id,
@@ -177,7 +177,7 @@ export async function consumePairingResult(code: string, userId: string): Promis
 export async function authenticateBridge(token: string): Promise<BridgeSessionRecord | null> {
   const tokenHash = hashToken(token);
   const { data, error } = await admin()
-    .from('bridge_sessions')
+    .from('accountingiq_bridge_sessions')
     .select('*')
     .eq('bridge_token_hash', tokenHash)
     .maybeSingle();
@@ -192,7 +192,7 @@ export async function authenticateBridge(token: string): Promise<BridgeSessionRe
   // execute when `.then()` is called or awaited, so a bare `void builder()` is
   // a no-op. Trigger execution with `.then()` and swallow errors (next poll retries).
   admin()
-    .from('bridge_sessions')
+    .from('accountingiq_bridge_sessions')
     .update({ last_seen_at: new Date().toISOString() })
     .eq('bridge_id', row.bridge_id)
     .then(() => {}, () => {});
@@ -206,7 +206,7 @@ export async function authenticateBridge(token: string): Promise<BridgeSessionRe
 export async function getActiveSessionForUser(userId: string): Promise<BridgeSessionRecord | null> {
   const cutoffIso = new Date(Date.now() - SESSION_IDLE_MS).toISOString();
   const { data, error } = await admin()
-    .from('bridge_sessions')
+    .from('accountingiq_bridge_sessions')
     .select('*')
     .eq('user_id', userId)
     .gte('last_seen_at', cutoffIso)
@@ -219,7 +219,7 @@ export async function getActiveSessionForUser(userId: string): Promise<BridgeSes
 
 export async function getSessionForUser(userId: string, bridgeId: string): Promise<BridgeSessionRecord | null> {
   const { data, error } = await admin()
-    .from('bridge_sessions')
+    .from('accountingiq_bridge_sessions')
     .select('*')
     .eq('bridge_id', bridgeId)
     .eq('user_id', userId)
@@ -230,7 +230,7 @@ export async function getSessionForUser(userId: string, bridgeId: string): Promi
 
 export async function setSessionCompany(bridgeId: string, company: ConnectorCompany): Promise<void> {
   await admin()
-    .from('bridge_sessions')
+    .from('accountingiq_bridge_sessions')
     .update({
       selected_company_id: company.id,
       selected_company_name: company.name,
@@ -239,7 +239,7 @@ export async function setSessionCompany(bridgeId: string, company: ConnectorComp
 }
 
 export async function disconnectBridge(bridgeId: string): Promise<void> {
-  await admin().from('bridge_sessions').delete().eq('bridge_id', bridgeId);
+  await admin().from('accountingiq_bridge_sessions').delete().eq('bridge_id', bridgeId);
 }
 
 export function toClientSession(rec: BridgeSessionRecord): ConnectorSession {
