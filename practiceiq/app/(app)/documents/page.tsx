@@ -19,6 +19,12 @@ type InboxDoc = {
   uploaded_by?: string | null;
   category?: string | null;
   fy?: string | null;
+  source_telegram_account_id?: string | null;
+  source_telegram_account?: {
+    label: string | null;
+    telegram_first_name: string | null;
+    telegram_username: string | null;
+  } | null;
 };
 
 const DOC_TYPES = [
@@ -302,6 +308,14 @@ export default function DocumentsInboxPage() {
                     <td className="px-4 py-3" style={{ color: 'var(--text3)' }}>{d.filing_period ?? d.fy ?? '—'}</td>
                     <td className="px-4 py-3 text-xs" style={{ color: 'var(--text3)' }}>
                       {d.source ? (SOURCE_BADGE[d.source] ?? d.source) : '—'}
+                      {d.source === 'telegram' && d.source_telegram_account && (
+                        <div className="text-[11px] mt-0.5" style={{ color: 'var(--text2)' }}>
+                          via {d.source_telegram_account.label
+                            || d.source_telegram_account.telegram_first_name
+                            || (d.source_telegram_account.telegram_username && `@${d.source_telegram_account.telegram_username}`)
+                            || 'unknown'}
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-3">
                       <span className="text-xs px-2 py-1 rounded" style={{ background: badge.bg, color: badge.fg }}>

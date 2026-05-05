@@ -25,7 +25,7 @@ export async function GET(req: Request) {
 
   let q = supabase
     .from('practiceiq_documents')
-    .select('*')
+    .select('*, source_telegram_account:practiceiq_client_telegram_accounts(label, telegram_first_name, telegram_username)')
     .eq('owner_user_id', user.id)
     .is('deleted_at', null)
     .order('uploaded_at', { ascending: false });

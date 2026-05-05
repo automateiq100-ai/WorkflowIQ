@@ -5,7 +5,20 @@ import type { Client } from '@/lib/practiceiq/types';
 import { api } from '@/lib/api';
 
 type ChatRole = 'user' | 'assistant';
-type ChatMsg = { role: ChatRole; content: string };
+type Citation = {
+  kind: 'chat' | 'document' | 'email' | 'client';
+  label: string;
+  when: string | null;
+  client_id?: string | null;
+};
+type ChatMsg = { role: ChatRole; content: string; citations?: Citation[] };
+
+const CITATION_ICON: Record<Citation['kind'], string> = {
+  chat: '💬',
+  document: '📄',
+  email: '✉️',
+  client: '👤',
+};
 
 export default function AskShaliniPage() {
   const [clients, setClients] = useState<Client[]>([]);
@@ -51,7 +64,8 @@ export default function AskShaliniPage() {
       }
       const j = await r.json();
       const reply = j.reply ?? j.content ?? '(empty reply)';
-      setHistory(h => [...h, { role: 'assistant', content: reply }]);
+      const citations: Citation[] = Array.isArray(j.citations) ? j.citations : [];
+      setHistory(h => [...h, { role: 'assistant', content: reply, citations }]);
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'send failed';
       setHistory(h => [...h, { role: 'assistant', content: `⚠ ${msg}` }]);
@@ -126,14 +140,41 @@ export default function AskShaliniPage() {
           <div className="space-y-3">
             {history.map((m, i) => (
               <div key={i} className={m.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
-                <div
-                  className="max-w-[80%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap"
-                  style={{
-                    background: m.role === 'user' ? 'var(--purple)' : 'var(--bg3)',
-                    color: m.role === 'user' ? 'white' : 'var(--text1)',
-                  }}
-                >
-                  {m.content}
+                <div className="max-w-[80%] flex flex-col">
+                  <div
+                    className="rounded-lg px-3 py-2 text-sm whitespace-pre-wrap"
+                    style={{
+                      background: m.role === 'user' ? 'var(--purple)' : 'var(--bg3)',
+                      color: m.role === 'user' ? 'white' : 'var(--text1)',
+                    }}
+                  >
+                    {m.content}
+                  </div>
+                  {m.role === 'assistant' && m.citations && m.citations.length > 0 && (
+                    <div
+                      className="mt-1 text-[11px] rounded-lg px-3 py-2"
+                      style={{
+                        background: 'var(--bg2)',
+                        border: '1px solid var(--border)',
+                        color: 'var(--text3)',
+                      }}
+                    >
+                      <div className="uppercase mb-1" style={{ color: 'var(--text3)' }}>Sources</div>
+                      <ul className="space-y-0.5">
+                        {m.citations.map((c, j) => (
+                          <li key={j}>
+                            <span className="mr-1">{CITATION_ICON[c.kind]}</span>
+                            <span style={{ color: 'var(--text2)' }}>{c.label}</span>
+                            {c.when && (
+                              <span className="ml-1" style={{ color: 'var(--text3)' }}>
+                                · {new Date(c.when).toLocaleDateString()}
+                              </span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}

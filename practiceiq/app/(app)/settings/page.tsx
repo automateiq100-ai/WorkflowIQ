@@ -3,19 +3,50 @@
 import { useEffect, useState } from 'react';
 import type { FirmSettings } from '@/lib/practiceiq/types';
 import { api } from '@/lib/api';
+import { BASE_PATH } from '@/lib/api';
+
+type GmailStatus = { email: string; connected_at: string; last_history_id: string | null };
 
 export default function SettingsPage() {
   const [form, setForm] = useState<Partial<FirmSettings>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [gmail, setGmail] = useState<GmailStatus | null>(null);
+  const [gmailMsg, setGmailMsg] = useState<string | null>(null);
+
+  async function loadGmail() {
+    const res = await fetch(api('/api/practiceiq/integrations/gmail/status')).then(r => r.json());
+    setGmail(res.data ?? null);
+  }
 
   useEffect(() => {
     fetch(api('/api/practiceiq/settings')).then(r => r.json()).then(res => {
       setForm(res.data ?? { default_tax_rate: 18, invoice_prefix: 'INV', invoice_counter: 1 });
       setLoading(false);
     });
+    loadGmail();
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const status = params.get('gmail');
+      if (status === 'connected') setGmailMsg('✓ Gmail connected');
+      else if (status === 'error') setGmailMsg(`Gmail connect failed: ${params.get('msg') || 'unknown'}`);
+      if (status) {
+        // Strip query params after consuming them.
+        const u = new URL(window.location.href);
+        u.searchParams.delete('gmail');
+        u.searchParams.delete('msg');
+        window.history.replaceState({}, '', u.toString());
+      }
+    }
   }, []);
+
+  async function disconnectGmail() {
+    if (!confirm('Disconnect Gmail? Email ingestion will stop.')) return;
+    await fetch(api('/api/practiceiq/integrations/gmail/disconnect'), { method: 'POST' });
+    setGmail(null);
+    setGmailMsg('Disconnected.');
+  }
 
   async function save() {
     setSaving(true);
@@ -53,6 +84,52 @@ export default function SettingsPage() {
             {saving ? 'Saving...' : 'Save Settings'}
           </button>
         </div>
+      </div>
+
+      <h2 className="text-lg mt-8 mb-1" style={{ fontFamily: 'var(--font-dm-serif)', color: 'var(--text1)' }}>
+        Gmail integration
+      </h2>
+      <p className="text-sm mb-4" style={{ color: 'var(--text2)' }}>
+        Connect a firm Gmail. Attachments from known clients land in the Documents inbox automatically; bodies are searchable in Ask Shalini.
+      </p>
+
+      <div className="rounded-xl border p-6 space-y-3" style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}>
+        {gmail ? (
+          <>
+            <div className="text-sm" style={{ color: 'var(--text1)' }}>
+              ✓ Connected as <span style={{ fontFamily: 'var(--font-dm-mono)' }}>{gmail.email}</span>
+            </div>
+            <div className="text-xs" style={{ color: 'var(--text3)' }}>
+              Connected on {new Date(gmail.connected_at).toLocaleDateString()}
+              {gmail.last_history_id && ` · last sync historyId ${gmail.last_history_id}`}
+            </div>
+            <button
+              onClick={disconnectGmail}
+              className="text-sm px-3 py-1.5 rounded"
+              style={{ background: 'var(--bg3)', color: 'var(--red)', border: '1px solid var(--border)' }}
+            >
+              Disconnect Gmail
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="text-sm" style={{ color: 'var(--text2)' }}>
+              No Gmail connected. The bot can still collect via Telegram in the meantime.
+            </div>
+            <a
+              href={`${BASE_PATH}/api/practiceiq/integrations/gmail/start`}
+              className="inline-block text-sm px-3 py-1.5 rounded"
+              style={{ background: 'var(--purple)', color: '#fff' }}
+            >
+              Connect Gmail
+            </a>
+          </>
+        )}
+        {gmailMsg && (
+          <div className="text-xs mt-2" style={{ color: gmailMsg.startsWith('✓') ? 'var(--green)' : 'var(--red)' }}>
+            {gmailMsg}
+          </div>
+        )}
       </div>
     </div>
   );
