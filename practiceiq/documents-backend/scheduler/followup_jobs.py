@@ -38,19 +38,20 @@ async def daily_followup_job():
     logger.info("daily_followup_job: starting")
     today = date.today().isoformat()
 
-    def _list_owners():
-        return supa().table("practiceiq_clients").select("owner_user_id").execute()
+    def _list_firms():
+        return supa().table("practiceiq_firms").select("id").execute()
 
-    res = await db_tools._run(_list_owners)
-    owners = list({r["owner_user_id"] for r in (res.data or [])})
+    res = await db_tools._run(_list_firms)
+    firm_ids = [r["id"] for r in (res.data or [])]
 
     sent = 0
-    for owner_user_id in owners:
+    for firm_id in firm_ids:
+        firm = await db_tools.get_firm_settings(firm_id)
         clients_res = await db_tools._run(
-            lambda oid=owner_user_id: supa()
+            lambda fid=firm_id: supa()
             .table("practiceiq_clients")
             .select("id, name, followup_broadcast")
-            .eq("owner_user_id", oid)
+            .eq("firm_id", fid)
             .execute()
         )
         for client in clients_res.data or []:
@@ -83,6 +84,8 @@ async def daily_followup_job():
                     pending_docs=[doc],
                     days_to_deadline=days,
                     followup_number=count,
+                    firm_name=firm["firm_name"],
+                    custom_system=firm["client_agent_prompt"],
                 )
                 # Fan out.
                 ext_ids = []
@@ -96,6 +99,7 @@ async def daily_followup_job():
                 # One log row regardless of fan-out count.
                 await db_tools.log_followup(
                     client_id=client["id"],
+                    firm_id=firm_id,
                     doc_type=doc["doc_type"],
                     period=doc.get("period"),
                     urgency_level=_urgency_label(days),
@@ -105,6 +109,7 @@ async def daily_followup_job():
                 # Save to messages too.
                 await db_tools.save_message(
                     client_id=client["id"],
+                    firm_id=firm_id,
                     sender="shalini",
                     message_type="text",
                     raw_text=msg,
@@ -143,18 +148,18 @@ async def ca_digest_job():
         return (
             supa()
             .table("practiceiq_settings")
-            .select("owner_user_id, ca_telegram_chat_id")
+            .select("firm_id, ca_telegram_chat_id")
             .not_.is_("ca_telegram_chat_id", "null")
             .execute()
         )
     res = await db_tools._run(_q)
     for row in res.data or []:
-        owner_user_id = row["owner_user_id"]
+        firm_id = row["firm_id"]
         try:
             ca_chat = int(row["ca_telegram_chat_id"])
         except (ValueError, TypeError):
             continue
-        items = await db_tools.get_all_pending_clients(owner_user_id)
+        items = await db_tools.get_all_pending_clients(firm_id)
         if not items:
             continue
         lines = [f"📋 Pending docs digest — {date.today().isoformat()}"]
@@ -166,7 +171,7 @@ async def ca_digest_job():
         try:
             await telegram_tools.send_ca_notification(ca_chat, "\n".join(lines))
         except Exception as e:
-            logger.warning(f"ca_digest send failed for owner={owner_user_id}: {e}")
+            logger.warning(f"ca_digest send failed for firm={firm_id}: {e}")
 
 
 # ---------- retention jobs ---------- #
@@ -233,8 +238,8 @@ def start_scheduler() -> AsyncIOScheduler:
     # Optional Gmail poll (Phase B). Imported lazily so backend boots even without Gmail set up.
     if os.environ.get("GMAIL_CLIENT_ID") and os.environ.get("GMAIL_CLIENT_SECRET"):
         try:
-            from integrations.gmail import poll_all_owners  # type: ignore
-            sched.add_job(poll_all_owners, "interval", minutes=5, id="gmail_poll", replace_existing=True)
+            from integrations.gmail import poll_all_firms  # type: ignore
+            sched.add_job(poll_all_firms, "interval", minutes=5, id="gmail_poll", replace_existing=True)
             logger.info("Gmail poll job scheduled (5 min interval)")
         except Exception as e:
             logger.info(f"Gmail integration not available: {e}")

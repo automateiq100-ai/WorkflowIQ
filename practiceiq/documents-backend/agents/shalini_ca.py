@@ -180,51 +180,58 @@ def _summarize_for_citation(name: str, result: Any) -> list[dict]:
 
 # ---------- Tool dispatcher ---------- #
 
-async def _dispatch(name: str, args: dict, owner_user_id: str) -> Any:
+async def _dispatch(name: str, args: dict, firm_id: str) -> Any:
     if name == "get_client_status":
-        return await db_tools.get_full_status(args["client_name_or_id"], owner_user_id)
+        return await db_tools.get_full_status(args["client_name_or_id"], firm_id)
     if name == "search_chat_history":
         return await search_tools.hybrid_search(
             client_id=args["client_id"], query_text=args["query"], match_count=5
         )
     if name == "search_doc_contents":
         return await search_tools.documents_hybrid_search(
-            owner_user_id=owner_user_id,
+            firm_id=firm_id,
             query_text=args["query"],
             client_id=args.get("client_id"),
             match_count=5,
         )
     if name == "search_email_history":
         return await search_tools.emails_hybrid_search(
-            owner_user_id=owner_user_id,
+            firm_id=firm_id,
             query_text=args["query"],
             client_id=args.get("client_id"),
             match_count=5,
         )
     if name == "get_all_pending":
-        return await db_tools.get_all_pending_clients(owner_user_id)
+        return await db_tools.get_all_pending_clients(firm_id)
     if name == "send_reminder":
         # Draft a reminder via the client agent but DO NOT send.
         from .shalini_client import generate_client_message
         client = await db_tools.get_client_by_id(args["client_id"])
         if not client:
             return {"error": "client not found"}
-        if client.get("owner_user_id") != owner_user_id:
+        if client.get("firm_id") != firm_id:
             return {"error": "not authorized"}
         pending = await db_tools.get_pending_docs(args["client_id"])
+        firm = await db_tools.get_firm_settings(firm_id)
         draft = await generate_client_message(
             client=client,
             trigger_context="scheduled_followup",
             pending_docs=[p for p in pending if p["doc_type"] == args["doc_type"]],
             followup_number=0,
             days_to_deadline=3,
+            firm_name=firm["firm_name"],
+            custom_system=firm["client_agent_prompt"],
         )
         return {"draft": draft, "note": "review and send manually from the UI"}
     if name == "mark_received_manually":
-        # Use a synthetic system message so the audit log exists.
+        # Verify the targeted client belongs to this firm before mutating.
+        target_client = await db_tools.get_client_by_id(args["client_id"])
+        if not target_client or target_client.get("firm_id") != firm_id:
+            return {"error": "client not in firm"}
         from datetime import datetime, timezone
         message_id = await db_tools.save_message(
             client_id=args["client_id"],
+            firm_id=firm_id,
             sender="shalini",
             message_type="system",
             raw_text=f"Manually marked {args['doc_type']} ({args['period']}) as received by CA at {datetime.now(timezone.utc).isoformat()}",
@@ -233,6 +240,7 @@ async def _dispatch(name: str, args: dict, owner_user_id: str) -> Any:
         )
         await db_tools.update_document_status(
             client_id=args["client_id"],
+            firm_id=firm_id,
             doc_type=args["doc_type"],
             period=args["period"],
             status="received",
@@ -244,7 +252,7 @@ async def _dispatch(name: str, args: dict, owner_user_id: str) -> Any:
 
 # ---------- Main entry ---------- #
 
-async def query_shalini(*, owner_user_id: str, conversation_history: list[dict]) -> dict:
+async def query_shalini(*, firm_id: str, conversation_history: list[dict]) -> dict:
     """Returns {"reply": str, "citations": [...]}.
 
     conversation_history is the OpenAI-format messages list [{role, content}, ...].
@@ -295,7 +303,7 @@ async def query_shalini(*, owner_user_id: str, conversation_history: list[dict])
                 args = json.loads(tc.function.arguments or "{}")
             except json.JSONDecodeError:
                 args = {}
-            result = await _dispatch(tc.function.name, args, owner_user_id)
+            result = await _dispatch(tc.function.name, args, firm_id)
             citations.extend(_summarize_for_citation(tc.function.name, result))
             messages.append({
                 "role": "tool",

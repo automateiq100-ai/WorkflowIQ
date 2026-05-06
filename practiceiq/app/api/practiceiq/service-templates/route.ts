@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { getFirmContext } from '@/lib/practiceiq/auth';
 
 export async function GET() {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const ctx = await getFirmContext(supabase);
+  if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const { data, error } = await supabase
     .from('practiceiq_service_templates')
@@ -17,8 +18,8 @@ export async function GET() {
 
 export async function POST(req: Request) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const ctx = await getFirmContext(supabase);
+  if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const body = await req.json();
   const docTypes: Array<{ doc_type: string; label?: string | null }> = Array.isArray(body.doc_types)
@@ -26,7 +27,7 @@ export async function POST(req: Request) {
     : [];
 
   const insert = {
-    owner_user_id: user.id,
+    firm_id: ctx.firmId, owner_user_id: ctx.userId,
     service: body.service,
     cadence: body.cadence,
     deadline_day: body.deadline_day ?? null,
@@ -46,7 +47,7 @@ export async function POST(req: Request) {
   if (docTypes.length) {
     const rows = docTypes.map(dt => ({
       template_id: template.id,
-      owner_user_id: user.id,
+      firm_id: ctx.firmId, owner_user_id: ctx.userId,
       doc_type: dt.doc_type,
       label: dt.label ?? null,
     }));

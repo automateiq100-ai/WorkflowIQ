@@ -31,9 +31,9 @@ async def get_telegram_account(chat_id: int) -> Optional[dict]:
             supa()
             .table("practiceiq_client_telegram_accounts")
             .select(
-                "id, client_id, owner_user_id, telegram_chat_id, telegram_username, "
+                "id, client_id, firm_id, owner_user_id, telegram_chat_id, telegram_username, "
                 "telegram_first_name, label, consent_given, consent_at, is_primary, "
-                "practiceiq_clients!inner(id, name, owner_user_id, followup_broadcast)"
+                "practiceiq_clients!inner(id, name, firm_id, owner_user_id, followup_broadcast)"
             )
             .eq("telegram_chat_id", chat_id)
             .limit(1)
@@ -51,6 +51,7 @@ async def get_telegram_account(chat_id: int) -> Optional[dict]:
     return {
         "account_id": row["id"],
         "client_id": row["client_id"],
+        "firm_id": row["firm_id"],
         "owner_user_id": row["owner_user_id"],
         "client_name": parent.get("name"),
         "followup_broadcast": parent.get("followup_broadcast", False),
@@ -77,7 +78,7 @@ async def consume_telegram_invite(
         client = supa()
         invite_res = (
             client.table("practiceiq_telegram_invites")
-            .select("token, client_id, owner_user_id, label, expires_at, consumed_at")
+            .select("token, client_id, firm_id, owner_user_id, label, expires_at, consumed_at")
             .eq("token", token)
             .limit(1)
             .execute()
@@ -98,6 +99,7 @@ async def consume_telegram_invite(
                 client.table("practiceiq_client_telegram_accounts")
                 .insert({
                     "client_id": inv["client_id"],
+                    "firm_id": inv["firm_id"],
                     "owner_user_id": inv["owner_user_id"],
                     "telegram_chat_id": chat_id,
                     "telegram_username": username,
@@ -125,6 +127,7 @@ async def consume_telegram_invite(
     return {
         "account_id": row["id"],
         "client_id": row["client_id"],
+        "firm_id": row["firm_id"],
         "owner_user_id": row["owner_user_id"],
         "label": row.get("label"),
         "consent_given": False,
@@ -186,6 +189,7 @@ async def get_primary_account(client_id: str) -> Optional[dict]:
 async def save_message(
     *,
     client_id: str,
+    firm_id: str,
     sender: str,            # 'client' | 'shalini'
     message_type: str,      # 'text' | 'document' | 'image' | 'system'
     raw_text: str | None = None,
@@ -200,6 +204,7 @@ async def save_message(
             .table("practiceiq_messages")
             .insert({
                 "client_id": client_id,
+                "firm_id": firm_id,
                 "sender": sender,
                 "message_type": message_type,
                 "raw_text": raw_text,
@@ -233,6 +238,7 @@ async def update_message_embedding(message_id: str, embedding: list[float]) -> N
 async def save_document(
     *,
     client_id: str,
+    firm_id: str,
     owner_user_id: str,
     storage_path: str,
     filename: str,
@@ -254,6 +260,7 @@ async def save_document(
             .table("practiceiq_documents")
             .insert({
                 "client_id": client_id,
+                "firm_id": firm_id,
                 "owner_user_id": owner_user_id,
                 "storage_path": storage_path,
                 "filename": filename,
@@ -281,6 +288,7 @@ async def save_document(
 async def update_document_status(
     *,
     client_id: str,
+    firm_id: str,
     doc_type: str,
     period: str | None,
     status: str,
@@ -289,6 +297,7 @@ async def update_document_status(
     """Upsert (client_id, doc_type, period) → status."""
     payload: dict[str, Any] = {
         "client_id": client_id,
+        "firm_id": firm_id,
         "doc_type": doc_type,
         "period": period,
         "status": status,
@@ -362,16 +371,16 @@ async def get_received_docs(client_id: str, period: str | None = None) -> list[d
     return res.data or []
 
 
-async def get_full_status(client_name_or_id: str, owner_user_id: str) -> dict | None:
+async def get_full_status(client_name_or_id: str, firm_id: str) -> dict | None:
     """Used by CA agent tool. Accepts either id or fuzzy name."""
 
     def _q_by_id():
         return (
             supa()
             .table("practiceiq_clients")
-            .select("id, name, owner_user_id")
+            .select("id, name, firm_id")
             .eq("id", client_name_or_id)
-            .eq("owner_user_id", owner_user_id)
+            .eq("firm_id", firm_id)
             .limit(1)
             .execute()
         )
@@ -380,8 +389,8 @@ async def get_full_status(client_name_or_id: str, owner_user_id: str) -> dict | 
         return (
             supa()
             .table("practiceiq_clients")
-            .select("id, name, owner_user_id")
-            .eq("owner_user_id", owner_user_id)
+            .select("id, name, firm_id")
+            .eq("firm_id", firm_id)
             .ilike("name", f"%{client_name_or_id}%")
             .limit(1)
             .execute()
@@ -404,14 +413,14 @@ async def get_full_status(client_name_or_id: str, owner_user_id: str) -> dict | 
     }
 
 
-async def get_all_pending_clients(owner_user_id: str) -> list[dict]:
+async def get_all_pending_clients(firm_id: str) -> list[dict]:
     """For CA digest + 'get_all_pending' tool."""
     def _q():
         return (
             supa()
             .table("practiceiq_clients")
             .select("id, name")
-            .eq("owner_user_id", owner_user_id)
+            .eq("firm_id", firm_id)
             .execute()
         )
 
@@ -466,6 +475,7 @@ async def followup_sent_today(client_id: str, doc_type: str, period: str | None 
 async def log_followup(
     *,
     client_id: str,
+    firm_id: str,
     doc_type: str,
     period: str | None,
     urgency_level: str,
@@ -478,6 +488,7 @@ async def log_followup(
             .table("practiceiq_followup_log")
             .insert({
                 "client_id": client_id,
+                "firm_id": firm_id,
                 "doc_type": doc_type,
                 "period": period,
                 "urgency_level": urgency_level,
@@ -493,13 +504,83 @@ async def log_followup(
 
 # ---------- Settings ---------- #
 
-async def get_ca_telegram_chat_id(owner_user_id: str) -> int | None:
+async def consume_ca_setup_token(token: str, chat_id: int) -> Optional[dict]:
+    """Validate + consume a CA self-onboarding token, writing chat_id into
+    practiceiq_settings.ca_telegram_chat_id atomically.
+
+    Returns {"firm_id": str} on success, None for missing/expired/consumed tokens.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    def _consume():
+        client = supa()
+        token_res = (
+            client.table("practiceiq_ca_telegram_setup")
+            .select("token, firm_id, expires_at, consumed_at")
+            .eq("token", token)
+            .limit(1)
+            .execute()
+        )
+        rows = token_res.data or []
+        if not rows:
+            return None
+        row = rows[0]
+        if row.get("consumed_at"):
+            return None
+        if row["expires_at"] <= now_iso:
+            return None
+
+        firm_id = row["firm_id"]
+
+        # Upsert into practiceiq_settings (chat_id stored as text per existing schema).
+        client.table("practiceiq_settings").upsert(
+            {"firm_id": firm_id, "ca_telegram_chat_id": str(chat_id)},
+            on_conflict="firm_id",
+        ).execute()
+
+        client.table("practiceiq_ca_telegram_setup").update({
+            "consumed_at": now_iso,
+            "consumed_by_chat_id": chat_id,
+        }).eq("token", token).execute()
+
+        return {"firm_id": firm_id}
+
+    return await _run(_consume)
+
+
+async def get_firm_settings(firm_id: str) -> dict:
+    """Returns firm-level settings used by the bot's prompt construction.
+
+    Always returns a dict (never None) so callers can spread without checks.
+    Missing or empty fields come back as None.
+    """
+    def _q():
+        return (
+            supa()
+            .table("practiceiq_settings")
+            .select("firm_name, client_agent_prompt, ca_telegram_chat_id")
+            .eq("firm_id", firm_id)
+            .limit(1)
+            .execute()
+        )
+
+    res = await _run(_q)
+    rows = res.data or []
+    row = rows[0] if rows else {}
+    return {
+        "firm_name": (row.get("firm_name") or None),
+        "client_agent_prompt": (row.get("client_agent_prompt") or None),
+        "ca_telegram_chat_id": row.get("ca_telegram_chat_id"),
+    }
+
+
+async def get_ca_telegram_chat_id(firm_id: str) -> int | None:
     def _q():
         return (
             supa()
             .table("practiceiq_settings")
             .select("ca_telegram_chat_id")
-            .eq("owner_user_id", owner_user_id)
+            .eq("firm_id", firm_id)
             .limit(1)
             .execute()
         )
@@ -526,7 +607,7 @@ async def get_client_by_id(client_id: str) -> dict | None:
         return (
             supa()
             .table("practiceiq_clients")
-            .select("id, name, owner_user_id, followup_broadcast")
+            .select("id, name, firm_id, owner_user_id, followup_broadcast")
             .eq("id", client_id)
             .limit(1)
             .execute()
@@ -536,13 +617,13 @@ async def get_client_by_id(client_id: str) -> dict | None:
     return rows[0] if rows else None
 
 
-async def list_clients(owner_user_id: str) -> list[dict]:
+async def list_clients(firm_id: str) -> list[dict]:
     def _q():
         return (
             supa()
             .table("practiceiq_clients")
             .select("id, name")
-            .eq("owner_user_id", owner_user_id)
+            .eq("firm_id", firm_id)
             .execute()
         )
     res = await _run(_q)

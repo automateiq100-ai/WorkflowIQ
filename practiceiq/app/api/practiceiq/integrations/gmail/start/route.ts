@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { getFirmContext } from '@/lib/practiceiq/auth';
 
 const GMAIL_AUTH = 'https://accounts.google.com/o/oauth2/v2/auth';
 const SCOPES = [
@@ -7,10 +8,10 @@ const SCOPES = [
   'https://www.googleapis.com/auth/userinfo.email',
 ];
 
-export async function GET(req: Request) {
+export async function GET() {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const ctx = await getFirmContext(supabase);
+  if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const clientId = process.env.GMAIL_CLIENT_ID;
   const redirectUri = process.env.GMAIL_REDIRECT_URI;
@@ -29,7 +30,9 @@ export async function GET(req: Request) {
   url.searchParams.set('access_type', 'offline');
   url.searchParams.set('prompt', 'consent');           // force refresh_token issuance
   url.searchParams.set('include_granted_scopes', 'true');
-  url.searchParams.set('state', user.id);              // bind to the requesting CA
+  // State carries firm_id so the callback can persist credentials at firm scope.
+  // The callback re-verifies the firm_id against the user's session as a CSRF guard.
+  url.searchParams.set('state', ctx.firmId);
 
   return NextResponse.redirect(url.toString());
 }

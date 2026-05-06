@@ -1,7 +1,7 @@
 """FastAPI app + Telegram bot + APScheduler.
 
 Endpoints:
-  POST /api/shalini/query   — CA-facing agent. Body: {prompt, history?}. Header: X-Owner-User-Id.
+  POST /api/shalini/query   — CA-facing agent. Body: {prompt, history?}. Header: X-Firm-Id.
   POST /telegram/webhook    — Telegram update receiver (only when TELEGRAM_MODE=webhook).
   GET  /health              — liveness.
 """
@@ -87,10 +87,10 @@ async def health():
 @app.post("/api/shalini/query")
 async def shalini_query(
     request: Request,
-    x_owner_user_id: str | None = Header(default=None, alias="X-Owner-User-Id"),
+    x_firm_id: str | None = Header(default=None, alias="X-Firm-Id"),
 ):
-    if not x_owner_user_id:
-        raise HTTPException(status_code=400, detail="X-Owner-User-Id header required")
+    if not x_firm_id:
+        raise HTTPException(status_code=400, detail="X-Firm-Id header required")
     body: dict[str, Any] = await request.json()
 
     # Accept either {messages: [{role, content}]} or {prompt, history}.
@@ -103,7 +103,7 @@ async def shalini_query(
             raise HTTPException(status_code=400, detail="prompt or messages[] is required")
         convo = [*history, {"role": "user", "content": prompt}]
 
-    result = await query_shalini(owner_user_id=x_owner_user_id, conversation_history=convo)
+    result = await query_shalini(firm_id=x_firm_id, conversation_history=convo)
     return result
 
 

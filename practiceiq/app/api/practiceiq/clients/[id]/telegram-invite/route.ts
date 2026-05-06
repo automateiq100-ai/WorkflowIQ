@@ -1,14 +1,15 @@
 import { NextResponse } from 'next/server';
 import { randomBytes } from 'node:crypto';
 import { createClient } from '@/lib/supabase/server';
+import { getFirmContext } from '@/lib/practiceiq/auth';
 
 const INVITE_TTL_DAYS = 7;
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id: clientId } = await params;
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const ctx = await getFirmContext(supabase);
+  if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const body = await req.json().catch(() => ({}));
   const label: string | null = typeof body.label === 'string' ? body.label : null;
@@ -21,8 +22,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     .insert({
       token,
       client_id: clientId,
-      owner_user_id: user.id,
-      created_by: user.id,
+      firm_id: ctx.firmId, owner_user_id: ctx.userId,
+      created_by: ctx.userId,
       label,
       expires_at: expiresAt,
     })

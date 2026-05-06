@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { getFirmContext } from '@/lib/practiceiq/auth';
 import { buildDeliverables, type Deliverable } from '@/lib/practiceiq/deliverables';
 import type { Cadence } from '@/lib/practiceiq/types';
 
@@ -7,8 +8,8 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 export async function GET(req: Request) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const ctx = await getFirmContext(supabase);
+  if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const url = new URL(req.url);
   const fromStr = url.searchParams.get('from');
@@ -26,7 +27,7 @@ export async function GET(req: Request) {
     .from('practiceiq_client_services')
     .select('service, cadence, deadline_day, deadline_month, followup_lead_days, client_id, practiceiq_clients!inner(name)')
     .eq('active', true)
-    .eq('owner_user_id', user.id);
+    .eq('firm_id', ctx.firmId);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 

@@ -1,3 +1,39 @@
+export type FirmRole = 'admin' | 'dept_head' | 'staff' | 'hr_admin';
+
+export interface Firm {
+  id: string;
+  name: string;
+  gstin: string | null;
+  pan: string | null;
+  address: string | null;
+  state_code: string | null;
+  created_at: string;
+}
+
+export interface FirmUser {
+  firm_id: string;
+  user_id: string;
+  role: FirmRole;
+  department_id: string | null;
+  created_at: string;
+  // Joined fields (populated when listing users with profile data)
+  email?: string;
+  display_name?: string;
+}
+
+export interface FirmInvite {
+  token: string;
+  firm_id: string;
+  email: string;
+  role: FirmRole;
+  department_id: string | null;
+  created_by: string;
+  created_at: string;
+  expires_at: string;
+  consumed_at: string | null;
+  consumed_by_user_id: string | null;
+}
+
 export type ClientType = 'individual' | 'company' | 'llp' | 'partnership';
 
 export interface Client {
@@ -156,7 +192,7 @@ export interface DocumentMeta {
 }
 
 export interface FirmSettings {
-  owner_user_id: string;
+  firm_id: string;
   firm_name: string | null;
   firm_gstin: string | null;
   firm_pan: string | null;
@@ -164,6 +200,8 @@ export interface FirmSettings {
   default_tax_rate: number;
   invoice_prefix: string;
   invoice_counter: number;
+  ca_telegram_chat_id: string | null;
+  client_agent_prompt: string | null;
 }
 
 export interface ComplianceEvent {

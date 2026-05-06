@@ -36,3 +36,10 @@ Thumbs.db
 
 # Large sample data files (>100 MB — GitHub limit)
 accountingiq/Sample data/Real data/DayBook-001.xml
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/

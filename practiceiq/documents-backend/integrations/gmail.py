@@ -81,7 +81,7 @@ async def _refresh_access_token(creds: dict) -> str | None:
                 "access_token_expires_at": new_exp,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             })
-            .eq("owner_user_id", creds["owner_user_id"])
+            .eq("firm_id", creds["firm_id"])
             .execute()
         )
 
@@ -105,14 +105,14 @@ async def _api(http: httpx.AsyncClient, access_token: str, path: str, params: di
 
 # ---------- Poll one owner ---------- #
 
-async def poll_owner(owner_user_id: str) -> int:
+async def poll_firm(firm_id: str) -> int:
     """Returns count of NEW emails ingested."""
     def _load():
         return (
             supa()
             .table("practiceiq_gmail_credentials")
             .select("*")
-            .eq("owner_user_id", owner_user_id)
+            .eq("firm_id", firm_id)
             .limit(1)
             .execute()
         )
@@ -163,11 +163,11 @@ async def poll_owner(owner_user_id: str) -> int:
         latest_history_id = creds.get("last_history_id")
 
         # Build set of known client emails for matching.
-        client_emails = await _load_client_emails(owner_user_id)
+        client_emails = await _load_client_emails(firm_id)
 
         for msg_id in message_ids[:MAX_MESSAGES_PER_POLL]:
             try:
-                ingested = await _ingest_message(http, access, owner_user_id, msg_id, client_emails)
+                ingested = await _ingest_message(http, access, firm_id, msg_id, client_emails)
                 if ingested:
                     new_count += 1
                     if ingested.get("history_id"):
@@ -181,7 +181,7 @@ async def poll_owner(owner_user_id: str) -> int:
                     supa()
                     .table("practiceiq_gmail_credentials")
                     .update({"last_history_id": str(latest_history_id), "updated_at": datetime.now(timezone.utc).isoformat()})
-                    .eq("owner_user_id", owner_user_id)
+                    .eq("firm_id", firm_id)
                     .execute()
                 )
             await asyncio.to_thread(_save_history)
@@ -189,14 +189,14 @@ async def poll_owner(owner_user_id: str) -> int:
     return new_count
 
 
-async def _load_client_emails(owner_user_id: str) -> dict[str, dict]:
+async def _load_client_emails(firm_id: str) -> dict[str, dict]:
     """Returns {lowercase email: {client_email_id, client_id}} for fast match."""
     def _q():
         return (
             supa()
             .table("practiceiq_client_emails")
             .select("id, email, client_id")
-            .eq("owner_user_id", owner_user_id)
+            .eq("firm_id", firm_id)
             .execute()
         )
     res = await asyncio.to_thread(_q)
@@ -210,11 +210,11 @@ async def _load_client_emails(owner_user_id: str) -> dict[str, dict]:
 async def _ingest_message(
     http: httpx.AsyncClient,
     access_token: str,
-    owner_user_id: str,
+    firm_id: str,
     msg_id: str,
     client_emails: dict[str, dict],
 ) -> dict | None:
-    """Fetch + persist one message (idempotent via UNIQUE owner_user_id+gmail_message_id).
+    """Fetch + persist one message (idempotent via UNIQUE firm_id+gmail_message_id).
     Returns {"history_id": ...} if newly ingested, else None.
     """
     # Skip if we've already ingested this gmail_message_id for this owner.
@@ -223,7 +223,7 @@ async def _ingest_message(
             supa()
             .table("practiceiq_emails")
             .select("id")
-            .eq("owner_user_id", owner_user_id)
+            .eq("firm_id", firm_id)
             .eq("gmail_message_id", msg_id)
             .limit(1)
             .execute()
@@ -264,7 +264,7 @@ async def _ingest_message(
             supa()
             .table("practiceiq_emails")
             .insert({
-                "owner_user_id": owner_user_id,
+                "firm_id": firm_id,
                 "client_id": client_id,
                 "client_email_id": client_email_id,
                 "gmail_message_id": msg_id,
@@ -293,7 +293,7 @@ async def _ingest_message(
     if attachments and client_id:
         for att in attachments:
             try:
-                await _save_attachment(http, access_token, owner_user_id, client_id, msg_id, email_id, att)
+                await _save_attachment(http, access_token, firm_id, client_id, msg_id, email_id, att)
             except Exception as e:
                 logger.warning(f"attachment save failed msg={msg_id} att={att.get('filename')}: {e}")
 
@@ -301,7 +301,7 @@ async def _ingest_message(
         period = datetime.now(timezone.utc).strftime("%Y-%m")
         remaining = await db_tools.get_pending_docs(client_id, period=period)
         if not remaining:
-            ca_chat = await db_tools.get_ca_telegram_chat_id(owner_user_id)
+            ca_chat = await db_tools.get_ca_telegram_chat_id(firm_id)
             if ca_chat:
                 client_row = await db_tools.get_client_by_id(client_id)
                 client_name = (client_row or {}).get("name") or "Client"
@@ -399,7 +399,7 @@ def _decode_b64url(data: str) -> str:
 async def _save_attachment(
     http: httpx.AsyncClient,
     access_token: str,
-    owner_user_id: str,
+    firm_id: str,
     client_id: str,
     gmail_message_id: str,
     email_id: str,
@@ -423,7 +423,7 @@ async def _save_attachment(
 
     period = datetime.now(timezone.utc).strftime("%Y-%m")
     storage_path = await telegram_tools.upload_to_supabase_storage(
-        owner_user_id=owner_user_id,
+        firm_id=firm_id,
         client_id=client_id,
         filing_period=period,
         doc_type="email_attachment",
@@ -444,7 +444,7 @@ async def _save_attachment(
             .table("practiceiq_documents")
             .insert({
                 "client_id": client_id,
-                "owner_user_id": owner_user_id,
+                "firm_id": firm_id,
                 "storage_path": storage_path,
                 "filename": att["filename"],
                 "mime_type": att.get("mimeType"),
@@ -469,23 +469,23 @@ async def _save_attachment(
 
 # ---------- Public entry ---------- #
 
-async def poll_all_owners() -> None:
+async def poll_all_firms() -> None:
     """Scheduler entrypoint — poll every connected CA."""
     def _list():
         return (
             supa()
             .table("practiceiq_gmail_credentials")
-            .select("owner_user_id")
+            .select("firm_id")
             .execute()
         )
     res = await asyncio.to_thread(_list)
-    owners = [r["owner_user_id"] for r in (res.data or [])]
-    if not owners:
+    firms = [r["firm_id"] for r in (res.data or [])]
+    if not firms:
         return
     total = 0
-    for o in owners:
+    for f in firms:
         try:
-            total += await poll_owner(o)
+            total += await poll_firm(f)
         except Exception as e:
             logger.warning(f"gmail poll failed for owner={o}: {e}")
     if total:

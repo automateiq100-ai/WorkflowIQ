@@ -60,7 +60,7 @@ def _safe_filename(filename: str) -> str:
 
 async def upload_to_supabase_storage(
     *,
-    owner_user_id: str,
+    firm_id: str,
     client_id: str,
     filing_period: str,
     doc_type: str,
@@ -68,10 +68,12 @@ async def upload_to_supabase_storage(
     file_bytes: bytes,
     content_type: str | None = None,
 ) -> str:
-    """Upload to bucket `practiceiq-docs`. Returns the storage path."""
+    """Upload to bucket `practiceiq-docs`. Returns the storage path.
+    Path is firm-scoped so any member of the firm can download via signed URL.
+    """
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     safe = _safe_filename(filename)
-    path = f"{owner_user_id}/{client_id}/{filing_period}/{doc_type}/{ts}_{safe}"
+    path = f"{firm_id}/{client_id}/{filing_period}/{doc_type}/{ts}_{safe}"
 
     def _upload():
         opts = {"content-type": content_type} if content_type else {}

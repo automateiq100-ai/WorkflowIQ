@@ -3,9 +3,10 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
+import type { FirmRole } from '@/lib/practiceiq/types';
 
 type SubItem = { href: string; label: string };
-type NavItem = { href: string; label: string; icon: string; subItems?: SubItem[] };
+type NavItem = { href: string; label: string; icon: string; subItems?: SubItem[]; adminOnly?: boolean };
 
 const NAV: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', icon: '🏠' },
@@ -23,14 +24,26 @@ const NAV: NavItem[] = [
     ],
   },
   { href: '/settings', label: 'Settings', icon: '⚙️' },
+  {
+    href: '/admin/firm',
+    label: 'Admin',
+    icon: '🛡️',
+    adminOnly: true,
+    subItems: [
+      { href: '/admin/firm', label: 'Firm details' },
+      { href: '/admin/users', label: 'Team' },
+    ],
+  },
 ];
 
 export default function PracticeShell({
   children,
   userEmail,
+  role,
 }: {
   children: React.ReactNode;
   userEmail: string;
+  role: FirmRole;
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -69,7 +82,7 @@ export default function PracticeShell({
         </div>
 
         <nav className="flex-1 py-3">
-          {NAV.map(item => {
+          {NAV.filter(item => !item.adminOnly || role === 'admin').map(item => {
             const exact = item.href === '/dashboard';
             const active = isActive(item.href, exact);
             const expanded = !!item.subItems && pathname?.startsWith(item.href);

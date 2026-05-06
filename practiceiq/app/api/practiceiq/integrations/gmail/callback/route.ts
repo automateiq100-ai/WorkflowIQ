@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient as createServerSupabase } from '@/lib/supabase/server';
 import { createClient as createServiceSupabase } from '@supabase/supabase-js';
+import { getFirmContext } from '@/lib/practiceiq/auth';
 
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const USERINFO_URL = 'https://www.googleapis.com/oauth2/v2/userinfo';
@@ -20,10 +21,10 @@ export async function GET(req: Request) {
   if (errParam) return settingsRedirect(false, errParam);
   if (!code || !state) return settingsRedirect(false, 'missing_code_or_state');
 
-  // Re-verify the user matches the state value.
+  // Re-verify the user belongs to the firm encoded in `state`.
   const supabase = await createServerSupabase();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user || user.id !== state) return settingsRedirect(false, 'session_mismatch');
+  const ctx = await getFirmContext(supabase);
+  if (!ctx || ctx.firmId !== state) return settingsRedirect(false, 'session_mismatch');
 
   const clientId = process.env.GMAIL_CLIENT_ID;
   const clientSecret = process.env.GMAIL_CLIENT_SECRET;
@@ -84,7 +85,7 @@ export async function GET(req: Request) {
   const { error: upErr } = await admin
     .from('practiceiq_gmail_credentials')
     .upsert({
-      owner_user_id: user.id,
+      firm_id: ctx.firmId,
       email,
       refresh_token: tokenJson.refresh_token,
       access_token: tokenJson.access_token ?? null,

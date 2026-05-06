@@ -96,7 +96,7 @@ async def hybrid_search(
 
 async def documents_hybrid_search(
     *,
-    owner_user_id: str,
+    firm_id: str,
     query_text: str,
     client_id: str | None = None,
     doc_type: str | None = None,
@@ -112,7 +112,7 @@ async def documents_hybrid_search(
         return supa().rpc(
             "documents_hybrid_search",
             {
-                "p_owner_user_id": owner_user_id,
+                "p_firm_id": firm_id,
                 "p_query_text": query_text,
                 "p_query_embedding": embedding,
                 "p_client_id": client_id,
@@ -132,7 +132,7 @@ async def documents_hybrid_search(
 
 async def emails_hybrid_search(
     *,
-    owner_user_id: str,
+    firm_id: str,
     query_text: str,
     client_id: str | None = None,
     match_count: int = 5,
@@ -146,7 +146,7 @@ async def emails_hybrid_search(
         return supa().rpc(
             "emails_hybrid_search",
             {
-                "p_owner_user_id": owner_user_id,
+                "p_firm_id": firm_id,
                 "p_query_text": query_text,
                 "p_query_embedding": embedding,
                 "p_client_id": client_id,

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { getFirmContext } from '@/lib/practiceiq/auth';
 
 const DOCUMENTS_BACKEND_URL = process.env.DOCUMENTS_BACKEND_URL || 'http://localhost:8000';
 
@@ -11,8 +12,8 @@ const DOCUMENTS_BACKEND_URL = process.env.DOCUMENTS_BACKEND_URL || 'http://local
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id: clientId } = await params;
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const ctx = await getFirmContext(supabase);
+  if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const body = await req.json().catch(() => ({}));
   const docType = body.doc_type as string | undefined;
@@ -23,7 +24,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     .from('practiceiq_clients')
     .select('id, telegram_chat_id, consent_given')
     .eq('id', clientId)
-    .eq('owner_user_id', user.id)
+    .eq('firm_id', ctx.firmId)
     .maybeSingle();
   if (cErr) return NextResponse.json({ error: cErr.message }, { status: 500 });
   if (!client) return NextResponse.json({ error: 'client not found' }, { status: 404 });
@@ -40,7 +41,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Owner-User-Id': user.id,
+        'X-Owner-User-Id': ctx.userId,
       },
       body: JSON.stringify({ doc_type: docType }),
     });

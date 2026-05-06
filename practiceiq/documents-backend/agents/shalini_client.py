@@ -35,6 +35,8 @@ async def generate_client_message(
     days_to_deadline: int | None = None,
     followup_number: int = 0,
     inbound_text: str | None = None,
+    firm_name: str | None = None,
+    custom_system: str | None = None,
 ) -> str:
     system, user = build_client_prompt(
         client=client,
@@ -44,6 +46,8 @@ async def generate_client_message(
         followup_number=followup_number,
         trigger_context=trigger_context,
         inbound_text=inbound_text,
+        firm_name=firm_name,
+        custom_system=custom_system,
     )
 
     try:

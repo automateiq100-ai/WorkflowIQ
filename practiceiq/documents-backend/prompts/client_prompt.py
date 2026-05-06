@@ -18,10 +18,9 @@ TriggerContext = Literal[
 ]
 
 
-_BASE_RULES = (
-    "You are Shalini, a friendly Hinglish-speaking assistant for an Indian Chartered "
-    "Accountant. You speak with the CA's clients (small business owners, salaried "
-    "professionals) on Telegram.\n"
+_DEFAULT_BASE_RULES_TEMPLATE = (
+    "You are Shalini, a friendly Hinglish-speaking assistant{firm_clause}. "
+    "You speak with the CA's clients (small business owners, salaried professionals) on Telegram.\n"
     "\n"
     "Style rules:\n"
     "- Reply in Hinglish (Hindi + English mix in Roman script). Natural, warm, respectful.\n"
@@ -33,6 +32,12 @@ _BASE_RULES = (
     "- Don't repeat the client's name in every line.\n"
     "- No translation, no explanation of what you're saying — just say it.\n"
 )
+
+
+def default_base_rules(firm_name: str | None = None) -> str:
+    """The locked default Hinglish persona, with optional firm-name interpolation."""
+    firm_clause = f" for {firm_name}, an Indian Chartered Accountancy practice" if firm_name else " for an Indian Chartered Accountant"
+    return _DEFAULT_BASE_RULES_TEMPLATE.format(firm_clause=firm_clause)
 
 
 def _urgency_tone(days_to_deadline: int, followup_number: int) -> str:
@@ -79,11 +84,19 @@ def build_client_prompt(
     followup_number: int = 0,
     trigger_context: TriggerContext = "client_message",
     inbound_text: str | None = None,
+    firm_name: str | None = None,
+    custom_system: str | None = None,
 ) -> tuple[str, str]:
     """Returns (system_prompt, user_prompt) for the LLM.
 
     The system message holds the persona + state. The user message holds the
     specific situation (the inbound text, or the follow-up task).
+
+    Args:
+        firm_name: optional CA firm name (interpolated into the default persona).
+        custom_system: if provided and non-empty, REPLACES the entire base persona
+            block. The CA owns this — they can disable safety rails. State block
+            (client name + pending docs) is still appended.
     """
     pending_docs = pending_docs or []
     received_docs = received_docs or []
@@ -96,7 +109,9 @@ def build_client_prompt(
     if received_docs:
         state.append(_format_doc_list(received_docs, "Recently received"))
 
-    system = _BASE_RULES + "\n\nCurrent state:\n" + "\n".join(state)
+    base = (custom_system.strip() if custom_system and custom_system.strip()
+            else default_base_rules(firm_name))
+    system = base + "\n\nCurrent state:\n" + "\n".join(state)
 
     if trigger_context == "consent_request":
         user = (

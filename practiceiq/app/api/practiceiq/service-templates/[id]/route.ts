@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { getFirmContext } from '@/lib/practiceiq/auth';
 
 export async function PATCH(
   req: Request,
@@ -7,8 +8,8 @@ export async function PATCH(
 ) {
   const { id } = await params;
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const ctx = await getFirmContext(supabase);
+  if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const body = await req.json();
   const docTypes: Array<{ id?: string; doc_type: string; label?: string | null }> | undefined =
@@ -37,7 +38,7 @@ export async function PATCH(
     if (docTypes.length) {
       const rows = docTypes.map(dt => ({
         template_id: id,
-        owner_user_id: user.id,
+        firm_id: ctx.firmId, owner_user_id: ctx.userId,
         doc_type: dt.doc_type,
         label: dt.label ?? null,
       }));
@@ -64,8 +65,8 @@ export async function DELETE(
 ) {
   const { id } = await params;
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const ctx = await getFirmContext(supabase);
+  if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const { error } = await supabase
     .from('practiceiq_service_templates')

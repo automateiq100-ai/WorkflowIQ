@@ -7,13 +7,10 @@ Guard rails:
 """
 from __future__ import annotations
 
-import json
-import os
 from datetime import date, datetime, timezone
 from typing import Optional
 
 from loguru import logger
-from openai import AsyncOpenAI
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -24,19 +21,12 @@ from telegram.ext import (
 )
 
 from agents.shalini_client import generate_client_message
-from tools import db_tools, search_tools, telegram_tools, extract_tools
+from tools import classify_tools, db_tools, search_tools, telegram_tools, extract_tools
 
-CLASSIFIER_MODEL = "gpt-4o-mini"
-MAX_DOC_BYTES = 50 * 1024 * 1024  # 50 MB
-
-_oa: AsyncOpenAI | None = None
-
-
-def _openai() -> AsyncOpenAI:
-    global _oa
-    if _oa is None:
-        _oa = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    return _oa
+# Telegram Bot API caps cloud-hosted bot file downloads at ~20 MB even though
+# clients can upload up to 50 MB. We reject at 18 MB to leave headroom and
+# avoid the confusing case where a file uploads but we can't fetch it.
+MAX_DOC_BYTES = 18 * 1024 * 1024
 
 
 def _now_period() -> str:
@@ -71,7 +61,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat is None or user is None:
         return
 
-    # /start invite_<token> path.
+    # /start invite_<token> path (client onboarding).
     args = context.args or []
     if args and args[0].startswith("invite_"):
         token = args[0][len("invite_"):]
@@ -91,6 +81,23 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _send_consent_request(full)
         return
 
+    # /start ca_<token> path (CA self-onboard — captures CA's chat_id into practiceiq_settings).
+    if args and args[0].startswith("ca_"):
+        token = args[0][len("ca_"):]
+        result = await db_tools.consume_ca_setup_token(token=token, chat_id=chat.id)
+        if result is None:
+            logger.info(f"ca_setup_invalid chat_id={chat.id} token_prefix={token[:8]}")
+            return  # silent reject
+        try:
+            await telegram_tools.send_text(
+                chat.id,
+                "✓ Telegram connected to PracticeIQ. Aapko ab daily digest aur completion notifications yahan milengi.",
+            )
+        except Exception as e:
+            logger.warning(f"ca_setup confirmation send failed: {type(e).__name__}")
+        logger.info(f"ca_setup_complete firm_id={result['firm_id']} chat_id={chat.id}")
+        return
+
     # Bare /start — must already be a known account.
     account = await require_known_account(update)
     if account is None:
@@ -100,8 +107,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = "Namaste! Aap already register hain. Documents bhej sakte hain ya pending list ke liye 'pending' likhiye."
         ext_id = await telegram_tools.send_text(account["telegram_chat_id"], msg)
         await db_tools.save_message(
-            client_id=account["client_id"], sender="shalini",
-            message_type="text", raw_text=msg, external_message_id=str(ext_id),
+            client_id=account["client_id"], firm_id=account["firm_id"],
+            sender="shalini", message_type="text", raw_text=msg,
+            external_message_id=str(ext_id),
         )
         return
 
@@ -109,13 +117,16 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _send_consent_request(account: dict):
+    firm = await db_tools.get_firm_settings(account["firm_id"])
     msg = await generate_client_message(
         client={"name": account.get("client_name") or account.get("label") or "ji"},
         trigger_context="consent_request",
+        firm_name=firm["firm_name"],
+        custom_system=firm["client_agent_prompt"],
     )
     ext_id = await telegram_tools.send_text(account["telegram_chat_id"], msg)
     await db_tools.save_message(
-        client_id=account["client_id"], sender="shalini",
+        client_id=account["client_id"], firm_id=account["firm_id"], sender="shalini",
         message_type="text", raw_text=msg, external_message_id=str(ext_id),
     )
 
@@ -130,7 +141,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Save inbound message + embed in background-ish (sequential is fine).
     msg_id = await db_tools.save_message(
-        client_id=account["client_id"],
+        client_id=account["client_id"], firm_id=account["firm_id"],
         sender="client",
         message_type="text",
         raw_text=text,
@@ -153,7 +164,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply = "Pehle consent ke liye 'Haan' ya 'Nahi' likh dijiye please."
         ext_id = await telegram_tools.send_text(account["telegram_chat_id"], reply)
         await db_tools.save_message(
-            client_id=account["client_id"], sender="shalini",
+            client_id=account["client_id"], firm_id=account["firm_id"], sender="shalini",
             message_type="text", raw_text=reply, external_message_id=str(ext_id),
         )
         return
@@ -161,16 +172,19 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Normal reply via Deepseek.
     pending = await db_tools.get_pending_docs(account["client_id"])
     received = await db_tools.get_received_docs(account["client_id"])
+    firm = await db_tools.get_firm_settings(account["firm_id"])
     reply = await generate_client_message(
         client={"name": account.get("client_name") or "ji"},
         trigger_context="client_message",
         pending_docs=pending,
         received_docs=received,
         inbound_text=text,
+        firm_name=firm["firm_name"],
+        custom_system=firm["client_agent_prompt"],
     )
     ext_id = await telegram_tools.send_text(account["telegram_chat_id"], reply)
     out_msg_id = await db_tools.save_message(
-        client_id=account["client_id"], sender="shalini",
+        client_id=account["client_id"], firm_id=account["firm_id"], sender="shalini",
         message_type="text", raw_text=reply, external_message_id=str(ext_id),
     )
     out_embedding = await search_tools.embed_text(reply)
@@ -208,7 +222,10 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if size and size > MAX_DOC_BYTES:
-        await telegram_tools.send_text(account["telegram_chat_id"], "File 50MB se badi hai, please chhoti file bhejein.")
+        await telegram_tools.send_text(
+            account["telegram_chat_id"],
+            "File 18MB se badi hai, Telegram bot API allow nahi karta. Please thodi chhoti file bhejein, ya Email pe bhej dijiye.",
+        )
         return
     if not extract_tools.is_allowed(mime_type):
         await telegram_tools.send_text(account["telegram_chat_id"], "Yeh file type allowed nahi hai. PDF/JPG/PNG/XLSX/CSV bhejein.")
@@ -222,7 +239,7 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Download + upload.
     file_bytes = await telegram_tools.download_file(tg_file_id)
     storage_path = await telegram_tools.upload_to_supabase_storage(
-        owner_user_id=account["owner_user_id"],
+        firm_id=account["firm_id"],
         client_id=account["client_id"],
         filing_period=period,
         doc_type=doc_type or "uncategorized",
@@ -237,7 +254,7 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     embedding = await search_tools.embed_text(embed_input) if embed_input.strip() else None
 
     document_id = await db_tools.save_document(
-        client_id=account["client_id"],
+        client_id=account["client_id"], firm_id=account["firm_id"],
         owner_user_id=account["owner_user_id"],
         storage_path=storage_path,
         filename=filename,
@@ -255,7 +272,7 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Save the chat-side row (links to document_id).
     chat_msg_id = await db_tools.save_message(
-        client_id=account["client_id"],
+        client_id=account["client_id"], firm_id=account["firm_id"],
         sender="client",
         message_type="document",
         raw_text=caption or filename,
@@ -267,7 +284,7 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if doc_type:
         await db_tools.update_document_status(
-            client_id=account["client_id"],
+            client_id=account["client_id"], firm_id=account["firm_id"],
             doc_type=doc_type,
             period=period,
             status="received",
@@ -276,20 +293,23 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Reply with remaining pending.
     remaining = await db_tools.get_pending_docs(account["client_id"], period=period)
+    firm = await db_tools.get_firm_settings(account["firm_id"])
     reply = await generate_client_message(
         client={"name": account.get("client_name") or "ji"},
         trigger_context="document_received",
         pending_docs=remaining,
+        firm_name=firm["firm_name"],
+        custom_system=firm["client_agent_prompt"],
     )
     ext_id = await telegram_tools.send_text(account["telegram_chat_id"], reply)
     await db_tools.save_message(
-        client_id=account["client_id"], sender="shalini",
+        client_id=account["client_id"], firm_id=account["firm_id"], sender="shalini",
         message_type="text", raw_text=reply, external_message_id=str(ext_id),
     )
 
     # Notify CA when checklist for this period is now empty.
     if not remaining:
-        ca_chat = await db_tools.get_ca_telegram_chat_id(account["owner_user_id"])
+        ca_chat = await db_tools.get_ca_telegram_chat_id(account["firm_id"])
         if ca_chat:
             client_name = account.get("client_name") or "Client"
             await telegram_tools.send_ca_notification(
@@ -307,7 +327,7 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply = "Voice notes V2 mein aayega — abhi text ya document bhejein please."
     ext_id = await telegram_tools.send_text(account["telegram_chat_id"], reply)
     await db_tools.save_message(
-        client_id=account["client_id"], sender="shalini",
+        client_id=account["client_id"], firm_id=account["firm_id"], sender="shalini",
         message_type="text", raw_text=reply, external_message_id=str(ext_id),
     )
 
@@ -315,40 +335,15 @@ async def on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------- Doc type classifier ---------- #
 
 async def classify_doc_type(*, filename: str, caption: str, pending: list[dict]) -> str | None:
-    """Use GPT-4o-mini to pick the best doc_type from the pending checklist.
+    """Telegram-side wrapper around the shared classifier.
 
-    Returns None if no pending types or classifier abstains.
+    Telegram only consumes the doc_type (period defaults to current month;
+    confidence isn't surfaced). Email path uses the full result dict.
     """
-    if not pending:
-        return None
-    options = [{"doc_type": p["doc_type"], "label": p.get("label") or p["doc_type"]} for p in pending]
-    sys = (
-        "You classify a Telegram document into one of the client's pending document types. "
-        "Return STRICT JSON: {\"doc_type\": \"<one of the options>\"} or {\"doc_type\": null} if you can't tell."
+    result = await classify_tools.classify_doc_type(
+        filename=filename, caption=caption, pending=pending
     )
-    user = (
-        f"Filename: {filename}\nCaption: {caption}\n"
-        f"Options: {json.dumps(options)}"
-    )
-    try:
-        resp = await _openai().chat.completions.create(
-            model=CLASSIFIER_MODEL,
-            messages=[
-                {"role": "system", "content": sys},
-                {"role": "user", "content": user},
-            ],
-            temperature=0.0,
-            response_format={"type": "json_object"},
-        )
-        raw = resp.choices[0].message.content or "{}"
-        parsed = json.loads(raw)
-        chosen = parsed.get("doc_type")
-        valid = {p["doc_type"] for p in pending}
-        if chosen in valid:
-            return chosen
-    except Exception as e:
-        logger.warning(f"doc classify failed: {e}")
-    return None
+    return result["doc_type"]
 
 
 # ---------- Registration ---------- #
