@@ -75,8 +75,12 @@ export async function POST(req: Request) {
     const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
     if (url && serviceKey) {
       const admin = createServiceClient(url, serviceKey, { auth: { persistSession: false } });
+      // Send the magic link through PracticeIQ's auth callback so the Supabase
+      // code-exchange happens server-side (cookies get set), then bounce to
+      // /practiceiq/dashboard. Without the callback hop, the magic-link token
+      // arrives but no session is established.
       const { error: inviteErr } = await admin.auth.admin.inviteUserByEmail(email, {
-        redirectTo: `${siteUrl}/practiceiq/dashboard`,
+        redirectTo: `${siteUrl}/practiceiq/auth/callback?next=/practiceiq/dashboard`,
       });
       if (inviteErr) {
         emailError = inviteErr.message;

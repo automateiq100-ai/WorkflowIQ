@@ -13,7 +13,10 @@ export async function GET(request: NextRequest) {
   const token_hash = searchParams.get('token_hash');
   const type = searchParams.get('type') as 'signup' | 'email' | 'recovery' | null;
   const isSignup = type === 'signup';
-  const next = searchParams.get('next') ?? '/portal';
+
+  // Sanitize `next` — only allow paths into our own apps to prevent open-redirect.
+  const rawNext = searchParams.get('next') ?? '/portal';
+  const next = isSafeNextPath(rawNext) ? rawNext : '/portal';
 
   const cookieStore = await cookies();
   const supabase = createServerClient(
@@ -68,4 +71,30 @@ export async function GET(request: NextRequest) {
   }
 
   return NextResponse.redirect(new URL(next, origin));
+}
+
+/**
+ * Allow only same-origin paths into our own apps. Rejects:
+ *  - Absolute URLs (anything with a scheme or `//host`).
+ *  - Anything not starting with one of the known app prefixes.
+ *
+ * Our app prefixes:
+ *  - `/portal` and `/login` — AccountingIQ (the portal itself)
+ *  - `/practiceiq` — PracticeIQ
+ *  - `/researchiq` — ResearchIQ
+ */
+function isSafeNextPath(p: string): boolean {
+  if (!p || typeof p !== 'string') return false;
+  if (!p.startsWith('/')) return false;       // must be a relative path
+  if (p.startsWith('//')) return false;       // protocol-relative URL
+  return (
+    p === '/portal' ||
+    p.startsWith('/portal/') ||
+    p === '/login' ||
+    p.startsWith('/login/') ||
+    p === '/practiceiq' ||
+    p.startsWith('/practiceiq/') ||
+    p === '/researchiq' ||
+    p.startsWith('/researchiq/')
+  );
 }
