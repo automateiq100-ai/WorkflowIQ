@@ -16,7 +16,7 @@ export async function PATCH(
     Array.isArray(body.doc_types) ? body.doc_types : undefined;
 
   const patch: Record<string, unknown> = {};
-  for (const k of ['service', 'cadence', 'deadline_day', 'deadline_month', 'followup_lead_days', 'active'] as const) {
+  for (const k of ['service', 'cadence', 'deadline_day', 'deadline_month', 'followup_lead_days', 'active', 'module_id'] as const) {
     if (k in body) patch[k] = body[k];
   }
 

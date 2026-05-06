@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import type { FirmUser, FirmInvite, FirmRole } from '@/lib/practiceiq/types';
 import { api } from '@/lib/api';
@@ -87,9 +88,18 @@ export default function AdminUsersPage() {
                 {m.role}{m.department_id ? ` · dept ${m.department_id.slice(0, 6)}…` : ''}
               </div>
             </div>
-            {m.role !== 'admin' && (
-              <button onClick={() => removeMember(m.user_id)} className="text-xs" style={{ color: 'var(--red)' }}>Remove</button>
-            )}
+            <div className="flex items-center gap-3">
+              <Link
+                href={`/admin/users/${m.user_id}`}
+                className="text-xs"
+                style={{ color: 'var(--purple)' }}
+              >
+                Manage
+              </Link>
+              {m.role !== 'admin' && (
+                <button onClick={() => removeMember(m.user_id)} className="text-xs" style={{ color: 'var(--red)' }}>Remove</button>
+              )}
+            </div>
           </div>
         ))}
       </div>

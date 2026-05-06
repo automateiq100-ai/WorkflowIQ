@@ -69,15 +69,31 @@ export interface ServiceTemplateDocType {
   created_at: string;
 }
 
+export interface ServiceModule {
+  id: string;
+  firm_id: string;
+  name: string;
+  code: string;
+  description: string | null;
+  icon: string | null;
+  color: string | null;
+  sort_order: number;
+  is_system: boolean;
+  created_at: string;
+  filing_count?: number;
+}
+
 export interface ServiceTemplate {
   id: string;
   owner_user_id: string;
+  module_id: string | null;
   service: string;
   cadence: Cadence;
   deadline_day: number | null;
   deadline_month: number | null;
   followup_lead_days: number | null;
   active: boolean;
+  is_system: boolean;
   created_at: string;
   doc_types?: ServiceTemplateDocType[];
 }
@@ -86,6 +102,7 @@ export interface ClientService {
   id: string;
   client_id: string;
   owner_user_id: string;
+  module_id: string | null;
   service: string;
   cadence: Cadence;
   deadline_day: number | null;
@@ -132,7 +149,7 @@ export interface TelegramInvite {
   consumed_by_chat_id: number | null;
 }
 
-export type TaskStatus = 'open' | 'in_progress' | 'review' | 'done';
+export type TaskStatus = 'open' | 'processing' | 'review' | 'done';
 export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';
 
 export interface Task {
@@ -147,6 +164,149 @@ export interface Task {
   assigned_to: string | null;
   fee_amount: number | null;
   completed_at: string | null;
+  created_at: string;
+  // RBAC + dashboard extensions
+  task_number: number | null;
+  service_type: string | null;
+  chargeable: boolean;
+  financial_year: string | null;
+}
+
+export interface TaskStats {
+  due_today: number;
+  due_tomorrow: number;
+  due_in_7_days: number;
+  due_after_7_days: number;
+  overdue_le_7_days: number;
+  overdue_gt_7_days: number;
+  due_total: number;
+  chargeable_total: number;
+  non_chargeable_total: number;
+}
+
+export type PermissionModule =
+  | 'dashboard' | 'clients' | 'services' | 'calendar' | 'tasks' | 'documents'
+  | 'invoices' | 'hrms' | 'hrms_admin' | 'admin' | 'reports';
+
+export const ALL_PERMISSION_MODULES: PermissionModule[] = [
+  'dashboard','clients','services','calendar','tasks','documents',
+  'invoices','hrms','hrms_admin','admin','reports',
+];
+
+export interface Role {
+  id: string;
+  firm_id: string;
+  name: string;
+  description: string | null;
+  is_system: boolean;
+  system_key: string | null;
+  restrict_to_assigned_clients: boolean;
+  created_at: string;
+}
+
+export interface RolePermission {
+  role_id: string;
+  module: PermissionModule;
+  can_read: boolean;
+  can_write: boolean;
+}
+
+export type PermissionMap = Record<PermissionModule, { can_read: boolean; can_write: boolean }>;
+
+export interface UserClientAssignment {
+  firm_id: string;
+  user_id: string;
+  client_id: string;
+  assigned_at: string;
+  assigned_by: string | null;
+}
+
+// ===== HRMS =====
+export type EmployeeStatus = 'active' | 'inactive';
+
+export interface Department {
+  id: string;
+  firm_id: string;
+  name: string;
+  head_employee_id: string | null;
+  created_at: string;
+}
+
+export interface Employee {
+  id: string;
+  firm_id: string;
+  user_id: string | null;
+  employee_code: string;
+  full_name: string;
+  email: string | null;
+  phone: string | null;
+  designation: string | null;
+  department_id: string | null;
+  manager_id: string | null;
+  date_of_joining: string | null;
+  status: EmployeeStatus;
+  created_at: string;
+}
+
+export interface AttendanceRecord {
+  id: string;
+  firm_id: string;
+  employee_id: string;
+  date: string; // yyyy-mm-dd
+  check_in_at: string | null;
+  check_out_at: string | null;
+  source: 'web' | 'manual';
+}
+
+export type LeaveType = 'casual' | 'sick' | 'earned' | 'unpaid';
+export type LeaveStatus = 'pending' | 'approved' | 'rejected';
+
+export interface LeaveRequest {
+  id: string;
+  firm_id: string;
+  employee_id: string;
+  leave_type: LeaveType;
+  from_date: string;
+  to_date: string;
+  days: number;
+  reason: string | null;
+  status: LeaveStatus;
+  approver_employee_id: string | null;
+  decided_at: string | null;
+  decision_note: string | null;
+  created_at: string;
+}
+
+export type ExpenseCategory = 'travel' | 'meals' | 'supplies' | 'other';
+export type ExpenseStatus = 'pending' | 'approved' | 'rejected';
+
+export interface ExpenseClaim {
+  id: string;
+  firm_id: string;
+  employee_id: string;
+  claim_date: string;
+  category: ExpenseCategory;
+  amount: number;
+  currency: string;
+  description: string | null;
+  receipt_url: string | null;
+  status: ExpenseStatus;
+  approver_employee_id: string | null;
+  decided_at: string | null;
+  decision_note: string | null;
+  created_at: string;
+}
+
+export interface TimesheetEntry {
+  id: string;
+  firm_id: string;
+  employee_id: string;
+  date: string;
+  client_id: string | null;
+  task_id: string | null;
+  hours: number;
+  description: string | null;
+  billable: boolean;
   created_at: string;
 }
 

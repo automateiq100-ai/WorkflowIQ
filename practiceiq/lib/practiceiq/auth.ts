@@ -85,12 +85,16 @@ async function bootstrapFirmForUser(
       .maybeSingle();
 
     if (invite) {
+      // Look up the matching system role_id for this firm so the new
+      // membership row points at the seeded role.
+      const inviteRoleId = await lookupSystemRoleId(admin, invite.firm_id, invite.role);
       const { error: insertErr } = await admin
         .from('practiceiq_firm_users')
         .insert({
           firm_id: invite.firm_id,
           user_id: userId,
           role: invite.role,
+          role_id: inviteRoleId,
           department_id: invite.department_id,
         });
       if (!insertErr) {
@@ -98,6 +102,7 @@ async function bootstrapFirmForUser(
           .from('practiceiq_firm_invites')
           .update({ consumed_at: new Date().toISOString(), consumed_by_user_id: userId })
           .eq('token', invite.token);
+        await ensureEmployeeRow(admin, invite.firm_id, userId, email);
         return {
           firmId: invite.firm_id,
           userId,
@@ -121,13 +126,33 @@ async function bootstrapFirmForUser(
     return null;
   }
 
+  // Seed the four default roles for the brand-new firm.
+  const { error: seedErr } = await admin.rpc('seed_default_roles_for_firm', { p_firm_id: firm.id });
+  if (seedErr) {
+    console.error('bootstrapFirmForUser: seed roles failed:', seedErr.message);
+  }
+
+  const adminRoleId = await lookupSystemRoleId(admin, firm.id, 'admin');
+
   const { error: memErr } = await admin
     .from('practiceiq_firm_users')
-    .insert({ firm_id: firm.id, user_id: userId, role: 'admin' });
+    .insert({ firm_id: firm.id, user_id: userId, role: 'admin', role_id: adminRoleId });
   if (memErr) {
     console.error('bootstrapFirmForUser: firm_users insert failed:', memErr.message);
     return null;
   }
+
+  // Seed the standard service modules + their default filings now that the
+  // admin row exists (the seed function records owner_user_id on each filing).
+  const { error: modSeedErr } = await admin.rpc('seed_default_service_modules_for_firm', {
+    p_firm_id: firm.id,
+    p_owner_user_id: userId,
+  });
+  if (modSeedErr) {
+    console.error('bootstrapFirmForUser: seed service modules failed:', modSeedErr.message);
+  }
+
+  await ensureEmployeeRow(admin, firm.id, userId, email);
 
   return {
     firmId: firm.id,
@@ -136,6 +161,50 @@ async function bootstrapFirmForUser(
     departmentId: null,
     email,
   };
+}
+
+async function lookupSystemRoleId(
+  admin: SupabaseClient,
+  firmId: string,
+  systemKey: string,
+): Promise<string | null> {
+  const { data } = await admin
+    .from('practiceiq_roles')
+    .select('id')
+    .eq('firm_id', firmId)
+    .eq('is_system', true)
+    .eq('system_key', systemKey)
+    .maybeSingle();
+  return data?.id ?? null;
+}
+
+/** Idempotently create a practiceiq_employees row for the firm member. */
+async function ensureEmployeeRow(
+  admin: SupabaseClient,
+  firmId: string,
+  userId: string,
+  email: string | null,
+): Promise<void> {
+  const { data: existing } = await admin
+    .from('practiceiq_employees')
+    .select('id')
+    .eq('firm_id', firmId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (existing) return;
+
+  // Pull display name from auth.users metadata if available.
+  const fullName = email?.split('@')[0] ?? 'Team member';
+  await admin
+    .from('practiceiq_employees')
+    .insert({
+      firm_id: firmId,
+      user_id: userId,
+      employee_code: '', // trigger fills this with EMP#####
+      full_name: fullName,
+      email,
+      status: 'active',
+    });
 }
 
 /** Helper: 401-respond if no auth, 403 if no firm context, otherwise return ctx. */

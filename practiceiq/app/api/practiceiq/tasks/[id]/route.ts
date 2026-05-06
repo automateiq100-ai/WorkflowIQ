@@ -12,6 +12,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   delete body.firm_id;
   delete body.owner_user_id;
   delete body.created_at;
+  delete body.task_number; // immutable once assigned
   if (body.status === 'done' && !body.completed_at) body.completed_at = new Date().toISOString();
   if (body.status && body.status !== 'done') body.completed_at = null;
   const { data, error } = await supabase

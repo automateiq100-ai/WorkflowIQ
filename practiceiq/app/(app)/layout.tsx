@@ -3,6 +3,9 @@ import { headers } from 'next/headers';
 import { createClient } from '@/lib/supabase/server';
 import PracticeShell from '@/components/PracticeShell';
 import { getFirmContext } from '@/lib/practiceiq/auth';
+import { getPermissionMap } from '@/lib/practiceiq/permissions';
+import { ALL_PERMISSION_MODULES } from '@/lib/practiceiq/types';
+import type { PermissionMap } from '@/lib/practiceiq/types';
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient();
@@ -32,8 +35,24 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   // Resolve firm context (auto-bootstraps a firm on first sign-in).
   const ctx = await getFirmContext(supabase);
 
+  // Resolve module permissions for nav rendering. Fallback: empty map (UI
+  // layer treats missing perms as "no access" so nav items hide gracefully).
+  let permissions: PermissionMap;
+  if (ctx) {
+    permissions = await getPermissionMap(supabase, ctx);
+  } else {
+    permissions = ALL_PERMISSION_MODULES.reduce((acc, m) => {
+      acc[m] = { can_read: false, can_write: false };
+      return acc;
+    }, {} as PermissionMap);
+  }
+
   return (
-    <PracticeShell userEmail={user.email ?? ''} role={ctx?.role ?? 'staff'}>
+    <PracticeShell
+      userEmail={user.email ?? ''}
+      role={ctx?.role ?? 'staff'}
+      permissions={permissions}
+    >
       {children}
     </PracticeShell>
   );
