@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useApp } from '@/lib/state';
-import { getGrade, DIM_LABELS, DIM_WEIGHTS, DIM_COLORS } from '@/lib/constants';
+import { getGrade, DIM_LABELS, DIM_WEIGHTS, DIM_COLORS, TOTAL_FILE_COUNT } from '@/lib/constants';
 import { generateFlags } from '@/lib/flags';
 import { generateInsights } from '@/lib/insights';
 import { generateHealthSignals } from '@/lib/health';
@@ -422,7 +422,7 @@ function buildMISGroup1(results: AnalysisResults, parsedData: Partial<ParsedData
   const currentRatio  = ca > 0 && cl > 0 ? (ca / cl).toFixed(2) + '×' : '—';
   const workingCap    = ca - cl;
   const netMargin     = revenue > 0 ? ((netProfit / revenue) * 100).toFixed(1) + '%' : '—';
-  const misReadiness  = Math.round((filesLoaded.length / 13) * 100);
+  const misReadiness  = Math.round((filesLoaded.length / TOTAL_FILE_COUNT) * 100);
   const misScore      = Math.round(results.cappedScore * (misReadiness / 100));
 
   const profileTags = Object.entries(filters)
@@ -961,7 +961,7 @@ function MISReportViewer({
   const currentRatio = ca > 0 && cl > 0 ? ca / cl : null;
 
   const filesLoaded = Object.values(files).filter(f => f.hasContent);
-  const misReadiness = Math.round((filesLoaded.length / 13) * 100);
+  const misReadiness = Math.round((filesLoaded.length / TOTAL_FILE_COUNT) * 100);
   const misScore     = Math.round(results.cappedScore * (misReadiness / 100));
 
   const PROFILE_LABELS_SHORT: Record<string, string> = {
@@ -1045,7 +1045,7 @@ function MISReportViewer({
             {/* Files */}
             <div>
               <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--text3)' }}>
-                Files Analysed ({filesLoaded.length} of 13)
+                Files Analysed ({filesLoaded.length} of {TOTAL_FILE_COUNT})
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {filesLoaded.map(f => (

@@ -3,7 +3,8 @@
 import React, { useState, useMemo } from 'react';
 import { useApp } from '@/lib/state';
 import type { TBLedger, TBFullRow, ParsedData, ChunkedStats, PLSection, Voucher, FinancialNode, ParsedStatement, MasterEntry } from '@/lib/types';
-import { classifyBSSide } from '@/lib/parser';
+import { classifyBSSide, parseMasterMap } from '@/lib/parser';
+import { classifyLedger, buildBSHierarchyMap, LEDGER_CATEGORY_OPTIONS, type ClassificationConfidence } from '@/lib/tally-groups';
 import AgentFixView from '@/app/views/AgentFixView';
 
 // ── Bill parser ────────────────────────────────────────────────────────────
@@ -54,8 +55,16 @@ function parseBills(xml: string, type: 'receivable' | 'payable'): Bill[] {
     const amount = parseFloat(amtRaw.replace(/,/g, '')) || 0;
     if (!party && !ref && amount === 0) return;
     const dueDt = parseBillDate(dueStr);
-    const overdue = overdueRaw.toLowerCase() === 'yes' || overdueRaw === '1'
-      || (dueDt ? dueDt < today : false);
+    // <BILLOVERDUE> may be a Y/N flag, "1"/"0", or — in the Tally TDL Bills
+    // Receivable/Payable export — a count of days past due (e.g. "365").
+    // Any positive numeric value means the bill is overdue.
+    const overdueRawTrim = overdueRaw.trim();
+    const overdueDays = parseFloat(overdueRawTrim);
+    const overdue =
+      overdueRawTrim.toLowerCase() === 'yes' ||
+      overdueRawTrim === '1' ||
+      (Number.isFinite(overdueDays) && overdueDays > 0) ||
+      (dueDt ? dueDt < today : false);
     bills.push({ party, billRef: ref, amount: Math.abs(amount), dueDate: dueStr, overdue, type });
   }
 
@@ -67,9 +76,25 @@ function parseBills(xml: string, type: 'receivable' | 'payable'): Bill[] {
     pushBill(
       tagVal(i, 'DSPBILLPARTY', 'DSPPARTYNAME', 'DSPBILLLEDGERNAME'),
       tagVal(i, 'DSPBILLREF', 'DSPBILLNAME', 'DSPBILLREFNAME'),
-      tagVal(i, 'DSPBILLFINAL', 'DSPBILLFINALAMT', 'DSPBILLPENDAMT', 'DSPCLAMTA', 'DSPCURRENTBAL'),
-      tagVal(i, 'DSPBILLDUE', 'DSPBILLDUEDATE'),
-      tagVal(i, 'DSPBILLOVERDUE'),
+      tagVal(i,
+        // Display-report format (Tally wraps amounts in <FOO><FOOA>…</FOOA></FOO>;
+        // tagVal matches both inner-A and outer tags so we list both variants).
+        'DSPBILLFINALAMTA', 'DSPBILLFINALAMT', 'DSPBILLFINAL',
+        'DSPBILLPENDAMTA',  'DSPBILLPENDAMT',
+        'DSPBILLAMTA',      'DSPBILLAMT',
+        'DSPBILLOSAMTA',    'DSPBILLOSAMT',
+        'DSPCLAMTA',        'DSPCLAMT',
+        'DSPCLDRAMTA',      'DSPCLCRAMTA',
+        'DSPCURRENTBAL',
+      ),
+      tagVal(i,
+        'DSPBILLDUEDATE', 'DSPBILLDUE',
+        'DSPBILLDATEA',   'DSPBILLDATE',
+      ),
+      tagVal(i,
+        'DSPBILLOVERDUEA', 'DSPBILLOVERDUE',
+        'DSPBILLOVRDUE',   'DSPBILLOVRDUEA',
+      ),
     );
   }
 
@@ -81,9 +106,25 @@ function parseBills(xml: string, type: 'receivable' | 'payable'): Bill[] {
       pushBill(
         tagVal(i, 'DSPBILLPARTY', 'DSPPARTYNAME', 'DSPBILLLEDGERNAME'),
         tagVal(i, 'DSPBILLREF', 'DSPBILLNAME', 'DSPBILLREFNAME'),
-        tagVal(i, 'DSPBILLFINAL', 'DSPBILLFINALAMT', 'DSPBILLPENDAMT', 'DSPCLAMTA', 'DSPCURRENTBAL'),
-        tagVal(i, 'DSPBILLDUE', 'DSPBILLDUEDATE'),
-        tagVal(i, 'DSPBILLOVERDUE'),
+        tagVal(i,
+          // Display-report format (Tally wraps amounts in <FOO><FOOA>…</FOOA></FOO>;
+          // tagVal matches both inner-A and outer tags so we list both variants).
+          'DSPBILLFINALAMTA', 'DSPBILLFINALAMT', 'DSPBILLFINAL',
+          'DSPBILLPENDAMTA',  'DSPBILLPENDAMT',
+          'DSPBILLAMTA',      'DSPBILLAMT',
+          'DSPBILLOSAMTA',    'DSPBILLOSAMT',
+          'DSPCLAMTA',        'DSPCLAMT',
+          'DSPCLDRAMTA',      'DSPCLCRAMTA',
+          'DSPCURRENTBAL',
+        ),
+        tagVal(i,
+          'DSPBILLDUEDATE', 'DSPBILLDUE',
+          'DSPBILLDATEA',   'DSPBILLDATE',
+        ),
+        tagVal(i,
+          'DSPBILLOVERDUEA', 'DSPBILLOVERDUE',
+          'DSPBILLOVRDUE',   'DSPBILLOVRDUEA',
+        ),
       );
     }
   }
@@ -96,9 +137,25 @@ function parseBills(xml: string, type: 'receivable' | 'payable'): Bill[] {
       pushBill(
         tagVal(i, 'DSPBILLPARTY', 'DSPPARTYNAME', 'DSPBILLLEDGERNAME'),
         tagVal(i, 'DSPBILLREF', 'DSPBILLNAME', 'DSPBILLREFNAME'),
-        tagVal(i, 'DSPBILLFINAL', 'DSPBILLFINALAMT', 'DSPBILLPENDAMT', 'DSPCLAMTA', 'DSPCURRENTBAL'),
-        tagVal(i, 'DSPBILLDUE', 'DSPBILLDUEDATE'),
-        tagVal(i, 'DSPBILLOVERDUE'),
+        tagVal(i,
+          // Display-report format (Tally wraps amounts in <FOO><FOOA>…</FOOA></FOO>;
+          // tagVal matches both inner-A and outer tags so we list both variants).
+          'DSPBILLFINALAMTA', 'DSPBILLFINALAMT', 'DSPBILLFINAL',
+          'DSPBILLPENDAMTA',  'DSPBILLPENDAMT',
+          'DSPBILLAMTA',      'DSPBILLAMT',
+          'DSPBILLOSAMTA',    'DSPBILLOSAMT',
+          'DSPCLAMTA',        'DSPCLAMT',
+          'DSPCLDRAMTA',      'DSPCLCRAMTA',
+          'DSPCURRENTBAL',
+        ),
+        tagVal(i,
+          'DSPBILLDUEDATE', 'DSPBILLDUE',
+          'DSPBILLDATEA',   'DSPBILLDATE',
+        ),
+        tagVal(i,
+          'DSPBILLOVERDUEA', 'DSPBILLOVERDUE',
+          'DSPBILLOVRDUE',   'DSPBILLOVRDUEA',
+        ),
       );
     }
   }
@@ -124,15 +181,24 @@ function parseBills(xml: string, type: 'receivable' | 'payable'): Bill[] {
   }
 
   // ── Format 5: flat BILLFIXED structure ──
+  // Tally's Bills Receivable/Payable TDL export: each bill is a <BILLFIXED>
+  // header (party + ref + bill date) immediately followed by sibling tags
+  // <BILLCL> (signed closing balance — Cr/-ve for receivables), <BILLDUE>
+  // (due date), <BILLOVERDUE> (days past due), <BILLVCHAMOUNT> (voucher amt),
+  // etc.  The regex slurps from one BILLFIXED to the next so the chunk
+  // includes both the header and all siblings until the next bill starts.
   if (bills.length === 0) {
     const fmt5Re = /<BILLFIXED>([\s\S]*?)(?=<BILLFIXED>|<\/ENVELOPE>|$)/gi;
     while ((m = fmt5Re.exec(xml)) !== null) {
       const chunk = m[0];
       pushBill(
         tagVal(chunk, 'BILLPARTY'),
-        tagVal(chunk, 'BILLREF'),
-        tagVal(chunk, 'BILLFINAL'),
-        tagVal(chunk, 'BILLDUE'),
+        tagVal(chunk, 'BILLREF', 'BILLVCHNUMBER'),
+        // Prefer BILLCL (current outstanding) — accounts for partial settlements.
+        // Fall back to BILLVCHAMOUNT (original voucher amount) and the legacy
+        // BILLFINAL / BILLAMOUNT names some Tally versions still emit.
+        tagVal(chunk, 'BILLCL', 'BILLVCHAMOUNT', 'BILLFINAL', 'BILLAMOUNT'),
+        tagVal(chunk, 'BILLDUE', 'BILLDUEDATE', 'BILLDATE'),
         tagVal(chunk, 'BILLOVERDUE'),
       );
     }
@@ -145,6 +211,47 @@ function formatAmount(n: number): string {
   if (Math.abs(n) >= 1_00_00_000) return `₹${(n / 1_00_00_000).toFixed(2)}Cr`;
   if (Math.abs(n) >= 1_00_000) return `₹${(n / 1_00_000).toFixed(2)}L`;
   return `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`;
+}
+
+// ── Shared classification badge ──────────────────────────────────────────
+//
+// Reusable across TB / P&L / BS tabs.  Renders the Master Setup category
+// for a single ledger as a compact pill; same colour palette as
+// MasterSetupView so the user reads the same signal everywhere.
+//
+// Designed to be cheap — caller passes a pre-built `classMap` and we just
+// look up.  Returns null for groups (which don't have a classification of
+// their own) and for ledgers absent from the map.
+
+interface ClassMapEntry {
+  category: string;
+  confidence: ClassificationConfidence;
+  label: string;
+}
+type ClassMap = Map<string, ClassMapEntry>;
+
+const CATEGORY_PALETTE: Record<ClassificationConfidence, { bg: string; fg: string }> = {
+  overridden: { bg: 'rgba(45,212,191,0.15)', fg: 'var(--teal)' },
+  high:       { bg: 'rgba(34,197,94,0.12)',  fg: 'var(--green)' },
+  medium:     { bg: 'rgba(234,179,8,0.12)',  fg: 'var(--amber)' },
+  low:        { bg: 'rgba(234,179,8,0.18)',  fg: 'var(--amber)' },
+  none:       { bg: 'rgba(239,68,68,0.15)',  fg: 'var(--red)' },
+};
+
+function CategoryBadge({ ledgerName, classMap }: { ledgerName: string; classMap: ClassMap | undefined }) {
+  if (!classMap) return null;
+  const cls = classMap.get(ledgerName);
+  if (!cls) return null;
+  const palette = CATEGORY_PALETTE[cls.confidence];
+  return (
+    <span
+      className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0 whitespace-nowrap inline-block align-middle"
+      style={{ background: palette.bg, color: palette.fg }}
+      title={`Category: ${cls.label} (${cls.confidence})`}
+    >
+      {cls.label}
+    </span>
+  );
 }
 
 function formatDate(raw: string): string {
@@ -161,7 +268,7 @@ function formatDate(raw: string): string {
   return raw;
 }
 
-function StrictStatementRow({ node, depth = 0 }: { node: FinancialNode; depth?: number }) {
+function StrictStatementRow({ node, depth = 0, classMap }: { node: FinancialNode; depth?: number; classMap?: ClassMap }) {
   const [open, setOpen] = useState(depth === 0);
   const hasChildren = node.children.length > 0;
   const isMain = node.nodeType === 'main';
@@ -187,7 +294,10 @@ function StrictStatementRow({ node, depth = 0 }: { node: FinancialNode; depth?: 
         >
           {hasChildren && <span style={{ marginRight: 6, fontSize: 10, color: 'var(--text3)' }}>{open ? '▼' : '▶'}</span>}
           {!hasChildren && <span style={{ display: 'inline-block', width: depth > 0 ? 16 : 0 }} />}
-          {node.name}
+          <span className="align-middle">{node.name}</span>
+          {/* Master Setup category — only meaningful on leaves; group
+              headers are rollups and don't have a category of their own. */}
+          {!hasChildren && <CategoryBadge ledgerName={node.name} classMap={classMap} />}
         </td>
         <td className={isMain ? 'px-6 py-2.5 text-right font-mono font-bold' : 'px-6 py-1.5 text-right font-mono text-xs'} style={{ color: node.amount >= 0 ? 'var(--teal)' : 'var(--coral)' }}>
           <div>{formatAmount(Math.abs(node.amount))}</div>
@@ -199,7 +309,7 @@ function StrictStatementRow({ node, depth = 0 }: { node: FinancialNode; depth?: 
         </td>
       </tr>
       {open && node.children.map(child => (
-        <StrictStatementRow key={child.id} node={child} depth={depth + 1} />
+        <StrictStatementRow key={child.id} node={child} depth={depth + 1} classMap={classMap} />
       ))}
     </>
   );
@@ -208,9 +318,11 @@ function StrictStatementRow({ node, depth = 0 }: { node: FinancialNode; depth?: 
 function StrictStatementTable({
   statement,
   bsNetProfit,
+  classMap,
 }: {
   statement: ParsedStatement;
   bsNetProfit?: number | null;
+  classMap?: ClassMap;
 }) {
   // Net profit = algebraic sum of all top-level section amounts.
   // Income sections carry positive (Cr) amounts; expense sections carry negative (Dr) amounts.
@@ -265,7 +377,7 @@ function StrictStatementTable({
             </tr>
           </thead>
           <tbody>
-            {statement.nodes.map(node => <StrictStatementRow key={node.id} node={node} />)}
+            {statement.nodes.map(node => <StrictStatementRow key={node.id} node={node} classMap={classMap} />)}
             {statement.nodes.length === 0 && (
               <tr><td colSpan={2} className="px-3 py-8 text-center text-sm" style={{ color: 'var(--text3)' }}>No statement rows parsed</td></tr>
             )}
@@ -299,11 +411,12 @@ function StrictStatementTable({
 // ── BS two-column layout (Liabilities | Assets) ───────────────────────────
 
 function BSSectionTable({
-  title, nodes, totalLabel,
+  title, nodes, totalLabel, classMap,
 }: {
   title: string;
   nodes: FinancialNode[];
   totalLabel: string;
+  classMap?: ClassMap;
 }) {
   const total = nodes.reduce((s, n) => s + Math.abs(n.amount), 0);
   return (
@@ -326,7 +439,7 @@ function BSSectionTable({
             {nodes.length === 0 && (
               <tr><td colSpan={2} className="px-4 py-6 text-center text-xs" style={{ color: 'var(--text3)' }}>—</td></tr>
             )}
-            {nodes.map(node => <StrictStatementRow key={node.id} node={node} />)}
+            {nodes.map(node => <StrictStatementRow key={node.id} node={node} classMap={classMap} />)}
             <tr style={{ background: 'var(--bg3)', borderTop: '2px solid var(--border)' }}>
               <td className="px-4 py-2.5 text-xs font-bold" style={{ color: 'var(--text1)' }}>{totalLabel}</td>
               <td className="px-4 py-2.5 text-right font-mono font-bold text-sm" style={{ color: 'var(--teal)' }}>
@@ -343,9 +456,11 @@ function BSSectionTable({
 function BSStrictView({
   statement,
   masterMap = new Map(),
+  classMap,
 }: {
   statement: ParsedStatement;
   masterMap?: Map<string, MasterEntry>;
+  classMap?: ClassMap;
 }) {
   const hasMaster = masterMap.size > 0;
 
@@ -382,8 +497,8 @@ function BSStrictView({
 
       {/* Two-column layout */}
       <div className="grid grid-cols-2 gap-5">
-        <BSSectionTable title="Liabilities" nodes={liabilityNodes} totalLabel="Total Liabilities" />
-        <BSSectionTable title="Assets"       nodes={assetNodes}     totalLabel="Total Assets" />
+        <BSSectionTable title="Liabilities" nodes={liabilityNodes} totalLabel="Total Liabilities" classMap={classMap} />
+        <BSSectionTable title="Assets"       nodes={assetNodes}     totalLabel="Total Assets"      classMap={classMap} />
       </div>
     </div>
   );
@@ -457,32 +572,54 @@ function fmtTBAmt(v: number): string {
 }
 
 /**
- * Recursively compute the Dr / Cr split of closing balances under a node,
- * matching Tally's "Trial Balance — Closing Balance" report:
- *   - leaf ledgers contribute their |closing| to Dr (closing<0) or Cr (closing>0)
- *   - groups WITH children: sum each child's split recursively
- *   - groups WITHOUT children in the export (e.g. Sundry Creditors when its
- *     individual party ledgers were not in TrialBal.xml): treat as a leaf so
- *     totals don't vanish
+ * Aggregate opening / movement / closing totals for a TB node, matching
+ * Tally's "Trial Balance" report rollup logic:
+ *   - leaf ledgers contribute their own values directly (closing/opening
+ *     bucket into Dr or Cr by sign; movements are positive magnitudes)
+ *   - groups WITH children: sum recursively
+ *   - groups WITHOUT children (e.g. Sundry Creditors when no party ledgers
+ *     were in TrialBal.xml): treat as a leaf so totals don't vanish
  */
-function computeGroupDrCr(node: TBNode): { dr: number; cr: number } {
-  if (!node.isGroup || node.children.length === 0) {
-    return {
-      dr: node.closing < 0 ? Math.abs(node.closing) : 0,
-      cr: node.closing > 0 ? node.closing             : 0,
-    };
-  }
-  let dr = 0, cr = 0;
-  for (const child of node.children) {
-    const sub = computeGroupDrCr(child);
-    dr += sub.dr; cr += sub.cr;
-  }
-  return { dr, cr };
+interface TBAggregate {
+  openingDr: number; openingCr: number;
+  debit:     number; credit:    number;
+  closingDr: number; closingCr: number;
 }
 
-function TBTab({ tbRows, masterEntries }: {
+function computeGroupAggregate(node: TBNode): TBAggregate {
+  if (!node.isGroup || node.children.length === 0) {
+    return {
+      openingDr: node.opening < 0 ? Math.abs(node.opening) : 0,
+      openingCr: node.opening > 0 ? node.opening            : 0,
+      debit:     node.debitMov,
+      credit:    node.creditMov,
+      closingDr: node.closing < 0 ? Math.abs(node.closing) : 0,
+      closingCr: node.closing > 0 ? node.closing            : 0,
+    };
+  }
+  const acc: TBAggregate = { openingDr: 0, openingCr: 0, debit: 0, credit: 0, closingDr: 0, closingCr: 0 };
+  for (const child of node.children) {
+    const sub = computeGroupAggregate(child);
+    acc.openingDr += sub.openingDr;
+    acc.openingCr += sub.openingCr;
+    acc.debit     += sub.debit;
+    acc.credit    += sub.credit;
+    acc.closingDr += sub.closingDr;
+    acc.closingCr += sub.closingCr;
+  }
+  return acc;
+}
+
+/** Backwards-compat: closing-only split (some other places may import this). */
+function computeGroupDrCr(node: TBNode): { dr: number; cr: number } {
+  const a = computeGroupAggregate(node);
+  return { dr: a.closingDr, cr: a.closingCr };
+}
+
+function TBTab({ tbRows, masterEntries, classMap }: {
   tbRows: TBFullRow[];
   masterEntries: MasterEntry[];
+  classMap?: ClassMap;
 }) {
   const masterMap = useMemo(() => {
     const m = new Map<string, MasterEntry>();
@@ -493,6 +630,9 @@ function TBTab({ tbRows, masterEntries }: {
   const tree = useMemo(() => buildTBTree(tbRows, masterMap), [tbRows, masterMap]);
 
   const allGroupNames = useMemo(() => collectGroupNames(tree), [tree]);
+
+  // classMap is built once at the DataView level and passed down so all
+  // three tabs (TB / P&L / BS) read the same classifications.
 
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(allGroupNames));
   const [search, setSearch] = useState('');
@@ -521,12 +661,13 @@ function TBTab({ tbRows, masterEntries }: {
     });
   }
 
-  // Index Dr/Cr split per row name — used for both group-row rendering and the grand total.
-  // For groups we descend into children; for leaves we just bucket their closing.
-  const drCrByName = useMemo(() => {
-    const map = new Map<string, { dr: number; cr: number }>();
+  // Index full aggregate per row name — used for both group-row rendering and
+  // the grand total.  For groups we descend into children; for leaves we
+  // bucket their own values.
+  const aggByName = useMemo(() => {
+    const map = new Map<string, TBAggregate>();
     function visit(n: TBNode) {
-      map.set(n.name, computeGroupDrCr(n));
+      map.set(n.name, computeGroupAggregate(n));
       for (const c of n.children) visit(c);
     }
     for (const root of tree) visit(root);
@@ -534,14 +675,21 @@ function TBTab({ tbRows, masterEntries }: {
   }, [tree]);
 
   // Grand totals — sum from LEAF rows only, so groups can't double-count.
-  // (Mirrors how Tally's footer aggregates; matches the per-leaf rendering above.)
+  // (Mirrors how Tally's footer aggregates.)
   const ledgerRows = tbRows.filter(r => !r.isGroup);
-  const grandTotalDr = ledgerRows
-    .reduce((s, r) => s + (r.closing < 0 ? Math.abs(r.closing) : 0), 0);
-  const grandTotalCr = ledgerRows
-    .reduce((s, r) => s + (r.closing > 0 ? r.closing             : 0), 0);
-  const diff     = grandTotalDr - grandTotalCr;
-  const balanced = Math.abs(diff) < 1;
+  const grandOpeningDr = ledgerRows.reduce((s, r) => s + (r.opening < 0 ? Math.abs(r.opening) : 0), 0);
+  const grandOpeningCr = ledgerRows.reduce((s, r) => s + (r.opening > 0 ? r.opening           : 0), 0);
+  const grandDebit     = ledgerRows.reduce((s, r) => s + r.debitMov,  0);
+  const grandCredit    = ledgerRows.reduce((s, r) => s + r.creditMov, 0);
+  const grandTotalDr   = ledgerRows.reduce((s, r) => s + (r.closing < 0 ? Math.abs(r.closing) : 0), 0);
+  const grandTotalCr   = ledgerRows.reduce((s, r) => s + (r.closing > 0 ? r.closing           : 0), 0);
+
+  // Adaptive columns: only show Opening / Movements columns when Tally
+  // returned non-zero data for them.  Some Tally exports (and some Tally
+  // versions ignoring the F12 toggles in the TDL request) only ship the
+  // closing balance — in that case fall back to the classic 3-column layout.
+  const hasOpeningData   = grandOpeningDr > 0 || grandOpeningCr > 0;
+  const hasMovementsData = grandDebit > 0 || grandCredit > 0;
 
   const thStyle: React.CSSProperties = {
     color: 'var(--text3)', fontWeight: 600, fontSize: 11,
@@ -555,7 +703,6 @@ function TBTab({ tbRows, masterEntries }: {
         {[
           { label: 'Total Debit',  value: grandTotalDr, color: 'var(--coral)' },
           { label: 'Total Credit', value: grandTotalCr, color: 'var(--teal)' },
-          { label: 'Difference',   value: diff,         color: balanced ? 'var(--green)' : 'var(--red)' },
           { label: 'Groups',       value: allGroupNames.size, color: 'var(--blue)', raw: true },
           { label: 'Ledgers',      value: ledgerRows.length,  color: 'var(--text2)', raw: true },
         ].map(s => (
@@ -599,23 +746,55 @@ function TBTab({ tbRows, masterEntries }: {
         </span>
       </div>
 
-      {/* Table — Tally "Closing Balance" layout: Particulars | Debit | Credit */}
+      {/* Table — Tally TB layout. Columns adapt to what the export contains:
+            • Always: Particulars, Closing Dr, Closing Cr
+            • If Tally returned Opening Balance:   add Opening Dr / Cr
+            • If Tally returned Transactions:      add Debit / Credit (year)        */}
       <div className="overflow-auto rounded-lg" style={{ border: '1px solid var(--border)', maxHeight: 560 }}>
         <table className="w-full text-sm" style={{ borderCollapse: 'collapse', tableLayout: 'fixed' }}>
           <colgroup>
-            <col style={{ width: '50%' }} />
-            <col style={{ width: '25%' }} />
-            <col style={{ width: '25%' }} />
+            {/* Widen Particulars when there are fewer numeric columns */}
+            <col style={{ width: hasOpeningData && hasMovementsData ? '28%' : hasOpeningData || hasMovementsData ? '36%' : '50%' }} />
+            {hasOpeningData && (<>
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '12%' }} />
+            </>)}
+            {hasMovementsData && (<>
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '12%' }} />
+            </>)}
+            <col style={{ width: hasOpeningData && hasMovementsData ? '12%' : hasOpeningData || hasMovementsData ? '14%' : '25%' }} />
+            <col style={{ width: hasOpeningData && hasMovementsData ? '12%' : hasOpeningData || hasMovementsData ? '14%' : '25%' }} />
           </colgroup>
           <thead style={{ background: 'var(--bg3)', position: 'sticky', top: 0, zIndex: 1 }}>
             <tr>
               <th rowSpan={2} className="px-3 py-2 text-left align-middle" style={thStyle}>Particulars</th>
+              {hasOpeningData && (
+                <th colSpan={2} className="px-3 py-2 text-center"
+                  style={{ ...thStyle, borderBottom: '1px solid var(--border)' }}>
+                  Opening Balance
+                </th>
+              )}
+              {hasMovementsData && (
+                <th colSpan={2} className="px-3 py-2 text-center"
+                  style={{ ...thStyle, borderBottom: '1px solid var(--border)' }}>
+                  Transactions (Year)
+                </th>
+              )}
               <th colSpan={2} className="px-3 py-2 text-center"
                 style={{ ...thStyle, borderBottom: '1px solid var(--border)' }}>
                 Closing Balance
               </th>
             </tr>
             <tr>
+              {hasOpeningData && (<>
+                <th className="px-3 py-1.5 text-right" style={thStyle}>Debit</th>
+                <th className="px-3 py-1.5 text-right" style={thStyle}>Credit</th>
+              </>)}
+              {hasMovementsData && (<>
+                <th className="px-3 py-1.5 text-right" style={thStyle}>Debit</th>
+                <th className="px-3 py-1.5 text-right" style={thStyle}>Credit</th>
+              </>)}
               <th className="px-3 py-1.5 text-right" style={thStyle}>Debit</th>
               <th className="px-3 py-1.5 text-right" style={thStyle}>Credit</th>
             </tr>
@@ -630,17 +809,29 @@ function TBTab({ tbRows, masterEntries }: {
                   ? 'rgba(251,191,36,0.05)'
                   : i % 2 === 0 ? 'var(--bg)' : 'var(--bg2)';
 
-              // Determine Dr / Cr value to display in the two columns.
-              // Groups: use precomputed split (sum of leaves); leaves: bucket their closing.
-              let drVal = 0, crVal = 0;
+              // Resolve values for this row.  Groups: precomputed aggregate.
+              // Leaves: bucket their own opening/closing by sign; movements
+              // are positive magnitudes already.
+              let opDr = 0, opCr = 0, dbt = 0, crd = 0, clDr = 0, clCr = 0;
               if (row.isGroup) {
-                const split = drCrByName.get(row.name);
-                drVal = split?.dr ?? 0;
-                crVal = split?.cr ?? 0;
+                const a = aggByName.get(row.name);
+                if (a) {
+                  opDr = a.openingDr; opCr = a.openingCr;
+                  dbt  = a.debit;     crd  = a.credit;
+                  clDr = a.closingDr; clCr = a.closingCr;
+                }
               } else {
-                if (row.closing < 0) drVal = Math.abs(row.closing);
-                else if (row.closing > 0) crVal = row.closing;
+                if (row.opening < 0) opDr = Math.abs(row.opening);
+                else if (row.opening > 0) opCr = row.opening;
+                dbt = row.debitMov; crd = row.creditMov;
+                if (row.closing < 0) clDr = Math.abs(row.closing);
+                else if (row.closing > 0) clCr = row.closing;
               }
+
+              const numCellStyle = (color: string): React.CSSProperties => ({
+                color: color,
+                fontWeight: row.isGroup ? 600 : 400,
+              });
 
               return (
                 <tr key={row.name + row.depth}
@@ -673,41 +864,71 @@ function TBTab({ tbRows, masterEntries }: {
                         <span className="ml-1 px-1.5 rounded text-xs shrink-0"
                           style={{ background: 'rgba(251,191,36,0.15)', color: 'var(--amber)' }}>⚑</span>
                       )}
+                      {/* Master Setup classification badge — visible on every
+                          leaf ledger so the user's master work is reflected
+                          right here in Data & Fix. */}
+                      {!row.isGroup && <CategoryBadge ledgerName={row.name} classMap={classMap} />}
                     </div>
                   </td>
-                  {/* Debit — closing-balance Dr side */}
+                  {hasOpeningData && (<>
+                    <td className="px-3 py-1.5 text-right font-mono text-xs"
+                      style={numCellStyle(opDr > 0 ? 'var(--coral)' : 'var(--text3)')}>
+                      {opDr > 0 ? fmtTBAmt(opDr) : ''}
+                    </td>
+                    <td className="px-3 py-1.5 text-right font-mono text-xs"
+                      style={numCellStyle(opCr > 0 ? 'var(--teal)' : 'var(--text3)')}>
+                      {opCr > 0 ? fmtTBAmt(opCr) : ''}
+                    </td>
+                  </>)}
+                  {hasMovementsData && (<>
+                    <td className="px-3 py-1.5 text-right font-mono text-xs"
+                      style={numCellStyle(dbt > 0 ? 'var(--coral)' : 'var(--text3)')}>
+                      {dbt > 0 ? fmtTBAmt(dbt) : ''}
+                    </td>
+                    <td className="px-3 py-1.5 text-right font-mono text-xs"
+                      style={numCellStyle(crd > 0 ? 'var(--teal)' : 'var(--text3)')}>
+                      {crd > 0 ? fmtTBAmt(crd) : ''}
+                    </td>
+                  </>)}
                   <td className="px-3 py-1.5 text-right font-mono text-xs"
-                    style={{ color: drVal > 0 ? 'var(--coral)' : 'var(--text3)', fontWeight: row.isGroup ? 600 : 400 }}>
-                    {drVal > 0 ? fmtTBAmt(drVal) : ''}
+                    style={numCellStyle(clDr > 0 ? 'var(--coral)' : 'var(--text3)')}>
+                    {clDr > 0 ? fmtTBAmt(clDr) : ''}
                   </td>
-                  {/* Credit — closing-balance Cr side */}
                   <td className="px-3 py-1.5 text-right font-mono text-xs"
-                    style={{ color: crVal > 0 ? 'var(--teal)' : 'var(--text3)', fontWeight: row.isGroup ? 600 : 400 }}>
-                    {crVal > 0 ? fmtTBAmt(crVal) : ''}
+                    style={numCellStyle(clCr > 0 ? 'var(--teal)' : 'var(--text3)')}>
+                    {clCr > 0 ? fmtTBAmt(clCr) : ''}
                   </td>
                 </tr>
               );
             })}
             {visibleRows.length === 0 && (
-              <tr><td colSpan={3} className="px-3 py-8 text-center text-sm" style={{ color: 'var(--text3)' }}>
+              <tr><td colSpan={3 + (hasOpeningData ? 2 : 0) + (hasMovementsData ? 2 : 0)}
+                  className="px-3 py-8 text-center text-sm" style={{ color: 'var(--text3)' }}>
                 {tbRows.length === 0 ? 'No Trial Balance data loaded' : 'No accounts match'}
               </td></tr>
             )}
           </tbody>
           <tfoot style={{ position: 'sticky', bottom: 0 }}>
-            <tr style={{
-              background: balanced ? 'var(--bg3)' : 'rgba(239,170,30,0.10)',
-              borderTop: '2px solid var(--border)',
-            }}>
-              <td className="px-3 py-2.5 font-bold text-sm"
-                style={{ color: balanced ? 'var(--text1)' : 'var(--amber)' }}>
+            <tr style={{ background: 'var(--bg3)', borderTop: '2px solid var(--border)' }}>
+              <td className="px-3 py-2.5 font-bold text-sm" style={{ color: 'var(--text1)' }}>
                 Grand Total
-                {!balanced && (
-                  <span className="ml-2 text-xs font-normal">
-                    (mismatch: {fmtTBAmt(diff)})
-                  </span>
-                )}
               </td>
+              {hasOpeningData && (<>
+                <td className="px-3 py-2.5 text-right font-mono font-bold text-sm" style={{ color: 'var(--coral)' }}>
+                  {grandOpeningDr > 0 ? fmtTBAmt(grandOpeningDr) : ''}
+                </td>
+                <td className="px-3 py-2.5 text-right font-mono font-bold text-sm" style={{ color: 'var(--teal)' }}>
+                  {grandOpeningCr > 0 ? fmtTBAmt(grandOpeningCr) : ''}
+                </td>
+              </>)}
+              {hasMovementsData && (<>
+                <td className="px-3 py-2.5 text-right font-mono font-bold text-sm" style={{ color: 'var(--coral)' }}>
+                  {grandDebit > 0 ? fmtTBAmt(grandDebit) : ''}
+                </td>
+                <td className="px-3 py-2.5 text-right font-mono font-bold text-sm" style={{ color: 'var(--teal)' }}>
+                  {grandCredit > 0 ? fmtTBAmt(grandCredit) : ''}
+                </td>
+              </>)}
               <td className="px-3 py-2.5 text-right font-mono font-bold text-sm" style={{ color: 'var(--coral)' }}>
                 {fmtTBAmt(grandTotalDr)}
               </td>
@@ -725,9 +946,9 @@ function TBTab({ tbRows, masterEntries }: {
 // ── P&L tab ────────────────────────────────────────────────────────────────
 
 /** Expandable row for a P&L group that has children in the XML */
-function PLGroupRow({ label, total, children, color, note }: {
+function PLGroupRow({ label, total, children, color, note, classMap }: {
   label: string; total: number; children: Array<{name:string;amount:number}>;
-  color?: string; note?: string;
+  color?: string; note?: string; classMap?: ClassMap;
 }) {
   const [open, setOpen] = useState(false);
   const hasChildren = children.length > 0;
@@ -748,7 +969,10 @@ function PLGroupRow({ label, total, children, color, note }: {
       </tr>
       {open && children.map(ch => (
         <tr key={ch.name} style={{ borderBottom: '1px solid var(--border)', background: 'transparent' }}>
-          <td className="py-1.5 text-xs" style={{ color: 'var(--text2)', paddingLeft: '2.5rem' }}>{ch.name}</td>
+          <td className="py-1.5 text-xs" style={{ color: 'var(--text2)', paddingLeft: '2.5rem' }}>
+            <span className="align-middle">{ch.name}</span>
+            <CategoryBadge ledgerName={ch.name} classMap={classMap} />
+          </td>
           <td className="px-6 py-1.5 text-right font-mono text-xs" style={{ color: 'var(--text2)' }}>{formatAmount(ch.amount)}</td>
         </tr>
       ))}
@@ -756,11 +980,11 @@ function PLGroupRow({ label, total, children, color, note }: {
   );
 }
 
-function PLTab({ pd }: { pd: Record<string, unknown> }) {
+function PLTab({ pd, classMap }: { pd: Record<string, unknown>; classMap?: ClassMap }) {
   const strictStatement = pd.pandlStatement as ParsedStatement | undefined;
   if (strictStatement?.nodes?.length) {
     const bsNetProfit = pd.bsNetProfit as number | null | undefined;
-    return <StrictStatementTable statement={strictStatement} bsNetProfit={bsNetProfit} />;
+    return <StrictStatementTable statement={strictStatement} bsNetProfit={bsNetProfit} classMap={classMap} />;
   }
 
   const plSections = (pd.plSections as PLSection[] | undefined) ?? [];
@@ -802,7 +1026,7 @@ function PLTab({ pd }: { pd: Record<string, unknown> }) {
           <tbody>
             <Divider label="I  Revenue from operations" />
             {salesSections.length > 0 ? salesSections.map(s => (
-              <PLGroupRow key={s.name} label={s.name} total={Math.abs(s.total)} children={s.children.map(c => ({ name: c.name, amount: Math.abs(c.amount) }))} color="var(--teal)" />
+              <PLGroupRow key={s.name} label={s.name} total={Math.abs(s.total)} children={s.children.map(c => ({ name: c.name, amount: Math.abs(c.amount) }))} color="var(--teal)" classMap={classMap} />
             )) : (
               <tr style={{ borderBottom: '1px solid var(--border)' }}>
                 <td className="px-6 py-2.5" style={{ color: 'var(--text2)' }}>Sales Accounts</td>
@@ -816,7 +1040,7 @@ function PLTab({ pd }: { pd: Record<string, unknown> }) {
 
             <Divider label="II  Other Income" />
             {incomeSections.length > 0 ? incomeSections.map(s => (
-              <PLGroupRow key={s.name} label={s.name} total={Math.abs(s.total)} children={s.children.map(c => ({ name: c.name, amount: Math.abs(c.amount) }))} color="var(--green)" />
+              <PLGroupRow key={s.name} label={s.name} total={Math.abs(s.total)} children={s.children.map(c => ({ name: c.name, amount: Math.abs(c.amount) }))} color="var(--green)" classMap={classMap} />
             )) : (
               <tr style={{ borderBottom: '1px solid var(--border)' }}>
                 <td className="px-6 py-2.5" style={{ color: 'var(--text2)' }}>Other Income</td>
@@ -830,7 +1054,7 @@ function PLTab({ pd }: { pd: Record<string, unknown> }) {
 
             <Divider label="IV  Expenses" />
             {purchSections.length > 0 ? purchSections.map(s => (
-              <PLGroupRow key={s.name} label="Cost of materials consumed" total={Math.abs(s.total)} children={s.children.map(c => ({ name: c.name, amount: Math.abs(c.amount) }))} color="var(--coral)" note={`(${s.name})`} />
+              <PLGroupRow key={s.name} label="Cost of materials consumed" total={Math.abs(s.total)} children={s.children.map(c => ({ name: c.name, amount: Math.abs(c.amount) }))} color="var(--coral)" note={`(${s.name})`} classMap={classMap} />
             )) : (
               <tr style={{ borderBottom: '1px solid var(--border)' }}>
                 <td className="px-6 py-2.5" style={{ color: 'var(--text2)' }}>Cost of materials consumed</td>
@@ -838,7 +1062,7 @@ function PLTab({ pd }: { pd: Record<string, unknown> }) {
               </tr>
             )}
             {expSections.map(s => (
-              <PLGroupRow key={s.name} label={s.name} total={Math.abs(s.total)} children={s.children.map(c => ({ name: c.name, amount: Math.abs(c.amount) }))} color="var(--coral)" />
+              <PLGroupRow key={s.name} label={s.name} total={Math.abs(s.total)} children={s.children.map(c => ({ name: c.name, amount: Math.abs(c.amount) }))} color="var(--coral)" classMap={classMap} />
             ))}
             <tr style={{ borderBottom: '2px solid var(--border)', background: 'rgba(242,107,91,0.06)' }}>
               <td className="px-6 py-2.5 font-bold" style={{ color: 'var(--text1)' }}>Total Expenses (IV)</td>
@@ -893,7 +1117,7 @@ function BSGroupRow({ label, amount, children, color }: {
   );
 }
 
-function BSTab({ pd }: { pd: Record<string, unknown> }) {
+function BSTab({ pd, classMap }: { pd: Record<string, unknown>; classMap?: ClassMap }) {
   const strictStatement = pd.bsheetStatement as ParsedStatement | undefined;
   const masterEntries   = pd.masterEntries as MasterEntry[] | undefined;
 
@@ -905,7 +1129,7 @@ function BSTab({ pd }: { pd: Record<string, unknown> }) {
   }, [masterEntries]);
 
   if (strictStatement?.nodes?.length) {
-    return <BSStrictView statement={strictStatement} masterMap={masterMap} />;
+    return <BSStrictView statement={strictStatement} masterMap={masterMap} classMap={classMap} />;
   }
 
   // In Tally BS export convention:
@@ -1308,6 +1532,52 @@ export default function DataView() {
     return new Set(results.checks.filter(c => c.status === 'fail' || c.status === 'partial').map(c => c.id));
   }, [results]);
 
+  // ── Unified classification map (drives the badge across TB / P&L / BS) ─
+  // Build once per analysis run + override change, then thread the same map
+  // into all three tabs so the user sees a consistent category label
+  // everywhere.  We collect every ledger name from the parsed TB rows and
+  // every leaf from the parsed P&L / BS hierarchies, run them through the
+  // classifier (which already respects overrides → master walk → BS
+  // hierarchy → regex), and cache the result.
+  const dataClassMap = useMemo<ClassMap>(() => {
+    const m: ClassMap = new Map();
+    const labelByCategory = new Map(LEDGER_CATEGORY_OPTIONS.map(o => [o.value, o.label]));
+
+    const masterEntries = (parsedData.masterEntries as MasterEntry[] | undefined) ?? [];
+    const masterMap = new Map<string, MasterEntry>();
+    for (const e of masterEntries) masterMap.set(e.name.toLowerCase().trim(), e);
+
+    const bsHierarchy = buildBSHierarchyMap(parsedData.bsheetStatement ?? null);
+
+    function add(name: string) {
+      if (!name || m.has(name)) return;
+      const cls = classifyLedger(name, masterMap, state.ledgerOverrides, bsHierarchy);
+      m.set(name, {
+        category: cls.category,
+        confidence: cls.confidence,
+        label: labelByCategory.get(cls.category) ?? 'Unknown',
+      });
+    }
+
+    // TB: every leaf row.
+    const tbRows = (parsedData.tbRows as TBFullRow[] | undefined) ?? [];
+    for (const r of tbRows) if (!r.isGroup) add(r.name);
+
+    // Walk the financial-statement hierarchies — collect leaves only,
+    // since groups don't have a meaningful category (they're rollups).
+    function walk(nodes: FinancialNode[] | undefined) {
+      if (!nodes) return;
+      for (const n of nodes) {
+        if (!n.children || n.children.length === 0) add(n.name);
+        else walk(n.children);
+      }
+    }
+    walk(parsedData.bsheetStatement?.nodes);
+    walk(parsedData.pandlStatement?.nodes);
+
+    return m;
+  }, [parsedData, state.ledgerOverrides]);
+
   if (!analysed) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4 py-24">
@@ -1362,10 +1632,14 @@ export default function DataView() {
       {/* Tab content */}
       <div className="flex-1 overflow-y-auto px-6 py-4">
         {activeTab === 'tb' && (
-          <TBTab tbRows={tbRows} masterEntries={masterEntries} />
+          <TBTab
+            tbRows={tbRows}
+            masterEntries={masterEntries}
+            classMap={dataClassMap}
+          />
         )}
-        {activeTab === 'pl' && <PLTab pd={pdRaw} />}
-        {activeTab === 'bs' && <BSTab pd={pdRaw} />}
+        {activeTab === 'pl' && <PLTab pd={pdRaw} classMap={dataClassMap} />}
+        {activeTab === 'bs' && <BSTab pd={pdRaw} classMap={dataClassMap} />}
         {activeTab === 'bills' && (
           <BillsTab
             billsXml={files.bills.content}

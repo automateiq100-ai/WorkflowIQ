@@ -437,6 +437,11 @@ function UploadScreen({
         start: expected.start.toISOString().slice(0, 10),
         end:   expected.end.toISOString().slice(0, 10),
       };
+      // Capture user's INTENT — what range they asked Tally for.  Drives
+      // sparse-books detection downstream (e.g. H8 distinguishes "user
+      // asked for 12 months but only 2 had vouchers" from "user
+      // intentionally uploaded a 2-month slice").
+      dispatch({ type: 'REQUESTED_PERIOD_SET', period: { ...period, type: periodType } });
       const r = await fetch('/api/tally/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -477,6 +482,19 @@ function UploadScreen({
   }
 
   async function handleAnalyse() {
+    // Capture the user's intended period before analysis runs so the
+    // engine and detector see the requested range alongside actual data.
+    const expected = getExpectedRange();
+    if (expected) {
+      dispatch({
+        type: 'REQUESTED_PERIOD_SET',
+        period: {
+          start: expected.start.toISOString().slice(0, 10),
+          end:   expected.end.toISOString().slice(0, 10),
+          type:  periodType,
+        },
+      });
+    }
     const { results, parsedData, dbStats } = analyseFiles(state);
     dispatch({ type: 'ANALYSIS_DONE', results, parsedData, dbStats });
 

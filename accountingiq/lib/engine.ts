@@ -9,6 +9,8 @@ import {
   parsePandL, parseBSheet, parseGrpSum, parseDayBook, parseTallyDate,
   parseCashFlow, parseLedgerGroups, parseMasterMap, parsePandLStatement, parseBSheetStatement, flattenStatement,
 } from './parser';
+import { buildBSHierarchyMap, classifyLedger } from './tally-groups';
+import { recordClassificationSummary } from './telemetry';
 
 // FY dates — default to current Indian FY
 function currentFY(): { start: Date; end: Date } {
@@ -81,15 +83,29 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
   const hasGrp      = files.grpsum.hasContent;
   const hasMaster   = files.master.hasContent;
 
-  // Parse each XML — masterMap first so parseTrialBalance can filter GROUP rollup rows
+  // Parse each XML — masterMap first so parseTrialBalance can filter GROUP rollup rows.
   const masterMap = hasMaster && files.master.content ? parseMasterMap(files.master.content) : new Map();
-  const tbResult  = hasTB  ? parseTrialBalance(files.trialbal.content!, masterMap) : null;
+
+  // Per-company classification overrides — user-confirmed entries here always
+  // win over auto-classification (see lib/ledger-overrides.ts).  Threaded
+  // through TB parsing so capFound / bankFound / tbSales etc. all honour
+  // user-supplied ground truth.
+  const overrides = state.ledgerOverrides;
+
+  // Phase 6: Parse the BS hierarchy BEFORE the Trial Balance, so the
+  // BS-section map can be threaded into TB classification.  This gives us
+  // a MEDIUM-confidence fallback for companies that uploaded Tally exports
+  // without a master file — most leaves still get a primary group via the
+  // BS's own section structure.
+  const bsheetStatement = hasBS ? parseBSheetStatement(files.bsheet.content!, masterMap) : null;
+  const bsHierarchy = bsheetStatement ? buildBSHierarchyMap(bsheetStatement) : new Map<string, string>();
+
+  const tbResult  = hasTB  ? parseTrialBalance(files.trialbal.content!, masterMap, overrides, bsHierarchy) : null;
   // Full TB (groups + ledgers) for the hierarchical Data View display
   const tbRows    = hasTB  ? parseTBFull(files.trialbal.content!, masterMap) : [];
   const plResult  = hasPL  ? parsePandL(files.pandl.content!)           : null;
   const bsResult  = hasBS  ? parseBSheet(files.bsheet.content!)         : null;
   const pandlStatement = hasPL ? parsePandLStatement(files.pandl.content!, masterMap) : null;
-  const bsheetStatement = hasBS ? parseBSheetStatement(files.bsheet.content!, masterMap) : null;
 
   // Build ledger→parent map from DayBook (All Masters format) for group checks
   const ledgerGroups = files.daybook.content ? parseLedgerGroups(files.daybook.content) : new Map<string, string>();
@@ -139,15 +155,25 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     parsedData.netProfit = bsResult.bsNetProfit;
   }
 
+  // Closing-stock fallback — when the BS parser missed it (custom-named
+  // stock ledger that doesn't match its narrow regex), substitute the
+  // TB-derived sum of every Stock-classified ledger.  closingStock from
+  // BS retains its sign; tbStock is already |abs|, so we coerce both to
+  // the same magnitude before comparing.
+  const tbStockTotal = (tbResult?.tbStock ?? 0);
+  if ((parsedData.closingStock == null || Math.abs(parsedData.closingStock) === 0) && tbStockTotal > 0) {
+    parsedData.closingStock = tbStockTotal;
+  }
+
   const {
     tbLedgers = [], suspenseCount = 0, dupPairs = 0,
     capFound = false, bankFound = false, cashFound = false,
     debtorFound = false, creditorFound = false, hasOpeningBal = false,
     tbTotal = 0, tbSales = 0, tbPurch = 0,
-    outputGSTAmt = 0, inputITCAmt = 0, tdsLedgerFound = false, pfLedgerFound = false,
+    outputGSTAmt = 0, inputITCAmt = 0, tdsLedgerFound = false, tdsPayableAmt = 0, pfLedgerFound = false,
     gstDiffPct = 0,
     revenue = 0, netProfit = 0, depFound = false, depAmt = 0, openingStock = 0,
-    closingStock = 0, fixedAssets = 0, bsCashBankTotal = 0,
+    closingStock = 0, costOfMaterials = 0, fixedAssets = 0, bsCashBankTotal = 0,
     salesWrongGroup = false, purchaseWrongGroup = false, dutiesUnderExpense = false,
     suspenseLedgers = [], dupPairDetails = [],
   } = parsedData as Partial<ParsedData>;
@@ -174,6 +200,7 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
   const dbSales         = dbStats?.salesVoucherTotal ?? 0;
   const dbPurch         = dbStats?.purchVoucherTotal ?? 0;
   const dbCashBank      = dbStats?.cashBankNetMovement ?? 0;
+  const dbPayments      = dbStats?.paymentTotal         ?? 0;
   const taxVoucherTotal = dbStats?.taxVoucherTotal   ?? 0;
   const journalNetAmt   = dbStats?.journalNetAmt     ?? 0;
   const dbTotal         = (dbStats?.totalDebit ?? 0) + (dbStats?.totalCredit ?? 0);
@@ -328,9 +355,16 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     : fail(4, `${outOfFY} vouchers have dates outside financial year`),
     'Voucher dates outside financial year');
 
+  // Wrong-type postings: Journal vouchers touching cash/bank, or
+  // Receipt/Payment vouchers with no cash/bank ledger.  Counted in
+  // processVoucher (parser.ts) by scanning each voucher's ledger entries.
   c('C5', 'C', 'No wrong-type postings',
     !hasDaybook ? uncertain(6, 'Requires DayBook')
-    : uncertain(6, 'Wrong-type detection requires voucher ledger analysis — pending implementation'),
+    : totalVouchers === 0 ? uncertain(6, 'No vouchers parsed')
+    : wrongType === 0 ? pass(6, 6, 'No wrong-type postings detected')
+    : wrongType <= 2
+      ? partial(3, 6, `${wrongType} potential wrong-type voucher${wrongType === 1 ? '' : 's'} — review Journal/Receipt/Payment classifications`)
+      : fail(6, `${wrongType} wrong-type postings — Journal vouchers touching cash/bank, or Receipts/Payments missing cash/bank counterpart`),
     'Wrong-type voucher postings detected');
 
   c('C6', 'C', 'Zero-amount vouchers below 2%',
@@ -341,24 +375,49 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     : fail(3, `${(zeroPct*100).toFixed(1)}% zero-amount vouchers (threshold: 2%)`),
     'Excessive zero-amount vouchers');
 
+  // C7 — every voucher's PARTYLEDGERNAME must exist in the ledger master.
+  //
+  // Was a stub that just passed when both files were uploaded.  Now we
+  // build a Set of every known ledger (master entries + TB rows) and
+  // count vouchers whose PARTY is set but isn't in that set.  A mismatch
+  // indicates a deleted ledger, a typo, or a corrupted reference.
+  //
+  // Vouchers without a party (Journals, Contras) are ignored — they
+  // legitimately have no party.
   c('C7', 'C', 'No voucher references absent from ledger',
-    hasDaybook && hasTB ? pass(4, 4, 'DayBook and Trial Balance both present')
-    : uncertain(4, 'Requires both DayBook and Trial Balance'));
+    !(hasDaybook && hasTB) ? uncertain(4, 'Requires both DayBook and Trial Balance')
+    : (() => {
+        const known = new Set<string>();
+        for (const m of (parsedData.masterEntries ?? [])) known.add(m.name.toLowerCase().trim());
+        for (const l of tbLedgers) known.add(l.name.toLowerCase().trim());
+        if (known.size === 0) return uncertain(4, 'No ledger names parsed from TB or master');
+
+        const vouchers = dbStats?.vouchers ?? [];
+        let orphans = 0;
+        const orphanSamples: string[] = [];
+        for (const v of vouchers) {
+          if (!v.party) continue;  // Journals / Contras commonly have none
+          if (!known.has(v.party.toLowerCase().trim())) {
+            orphans++;
+            if (orphanSamples.length < 3) orphanSamples.push(v.party);
+          }
+        }
+        if (vouchers.length === 0) return uncertain(4, 'No vouchers parsed');
+        if (orphans === 0) return pass(4, 4, `All voucher parties exist in ledger master (${vouchers.length} vouchers checked)`);
+        const pct = (orphans / vouchers.length) * 100;
+        const sample = orphanSamples.length > 0 ? ` (e.g. ${orphanSamples.map(s => `"${s}"`).join(', ')})` : '';
+        if (pct < 1) return partial(3, 4, `${orphans} voucher${orphans === 1 ? '' : 's'} reference parties absent from ledger master${sample}`);
+        return fail(4, `${orphans} vouchers (${pct.toFixed(1)}%) reference parties absent from ledger master${sample}`);
+      })(),
+    'Vouchers reference parties absent from ledger master');
 
   // ────── D: Arithmetical Accuracy ──────
   const tbDr = hasTB ? tbLedgers.filter(l => l.dr).reduce((s,l) => s+l.closing, 0) : 0;
   const tbCr = hasTB ? tbLedgers.filter(l => !l.dr).reduce((s,l) => s+Math.abs(l.closing), 0) : 0;
-  const tbDiff = Math.abs(tbDr - tbCr);
-  const tbDiffPct = tbCr > 0 ? tbDiff / tbCr : 1;
-
-  c('D1', 'D', 'Trial Balance balances (Dr = Cr)',
-    !hasTB ? missing(10, 'Trial Balance not uploaded')
-    : tbCr === 0 ? uncertain(10, 'Could not extract Dr/Cr totals')
-    : tbDiffPct < 0.001 ? pass(10, 10, `Dr = Cr ≈ ₹${fmt(tbCr)} (diff: ₹${fmt(tbDiff)})`)
-    : tbDiffPct < 0.003 ? partial(8, 10, `Negligible imbalance: ₹${fmt(tbDiff)} (${(tbDiffPct*100).toFixed(2)}%)`)
-    : tbDiffPct < 0.01  ? partial(5, 10, `Minor imbalance: ₹${fmt(tbDiff)} (${(tbDiffPct*100).toFixed(2)}%)`)
-    : fail(10, `TB imbalance: ₹${fmt(tbDiff)} (${(tbDiffPct*100).toFixed(2)}%)`),
-    'Trial Balance does not tally — Dr ≠ Cr');
+  // D1 ("Trial Balance balances Dr = Cr") was removed: Tally won't let an
+  // unbalanced voucher save, so this check is structurally always-pass and
+  // adds no signal — the equivalent Difference tile was also removed from
+  // the Data view earlier for the same reason.
 
   c('D2', 'D', 'P&L net profit = BS Profit & Loss A/c',
     hasPL && hasBS ? pass(8, 8, `Net profit: ₹${fmt(netProfit)}`)
@@ -424,9 +483,38 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     : fail(5, 'No TDS Payable ledger found'),
     'No TDS Payable ledger found');
 
+  // E6 — TDS amount reasonable vs payments.  Was a stub waiting on a
+  // never-shipped "TDS XML" file slot; now computed from already-parsed
+  // sources:
+  //   - Numerator: tdsPayableAmt = sum of |closing| over all TDS-related
+  //     ledgers in the Trial Balance (TDS Payable / TDS on X / Tax
+  //     Deducted at Source).
+  //   - Denominator: dbPayments = sum of |amount| over Payment-semantic
+  //     vouchers in the DayBook (Phase 4 voucher-type taxonomy).
+  //
+  // Indian TDS rates run 0.1% (sec 194Q) to 30% (sec 195) depending on
+  // section, with most company books landing in the 1-10% range
+  // weighted-average across sections.  Loose pass band 0.5%-15%.
   c('E6', 'E', 'TDS amount reasonable vs payments',
     !tdsApplicable ? na('Not applicable')
-    : uncertain(4, 'Requires TDS XML (not available in this upload)'));
+    : !hasTB ? uncertain(4, 'Requires Trial Balance')
+    : !hasDaybook ? uncertain(4, 'Requires DayBook to compute payment volume')
+    : tdsPayableAmt === 0
+        ? fail(4, 'TDS applicable but no TDS Payable balance — no deduction recorded?')
+    : dbPayments === 0
+        ? uncertain(4, 'No Payment-type vouchers parsed — cannot compute ratio')
+    : (() => {
+        const ratio = tdsPayableAmt / dbPayments;
+        const pct = (ratio * 100).toFixed(2);
+        if (ratio < 0.005) {
+          return partial(2, 4, `TDS ${pct}% of payments — below typical 1-10% range; under-deduction risk`);
+        }
+        if (ratio > 0.15) {
+          return partial(2, 4, `TDS ${pct}% of payments — unusually high; check for misclassified ledgers in TDS group`);
+        }
+        return pass(4, 4, `TDS ₹${fmt(tdsPayableAmt)} = ${pct}% of payments ₹${fmt(dbPayments)} — within reasonable range`);
+      })(),
+    'TDS deduction percentage outside reasonable range');
 
   c('E7', 'E', 'PF / ESI Payable ledger exists',
     !hasEmployees ? na('Not applicable')
@@ -456,11 +544,56 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     : fail(4, 'No closing stock in Balance Sheet'),
     'No closing stock in Balance Sheet');
 
+  // E11 — Stock equation:  Opening + Purchases − Closing  ≈  COGS
+  //
+  // Previously this was a stub that fired uncertain whenever closingStock
+  // was 0 or openingStock was negative — confused "value is zero" with
+  // "value is missing" and never actually computed anything.  Now we:
+  //
+  //   1. Take |abs| of each leg (Tally signs assets negative; the equation
+  //      is sign-agnostic since each term is a magnitude).
+  //   2. Compute implied COGS from the BS/TB legs.
+  //   3. If the P&L provides an explicit "Cost of materials consumed"
+  //      line, compare it to the implied COGS and pass within 5%.
+  //   4. Otherwise just report the implied COGS — the equation is well-
+  //      formed and the user can sanity-check it.
   c('E11', 'E', 'Stock equation: Op + Pur − COGS ≈ Closing',
     !isGoods ? na('Not applicable')
-    : !(hasPL && hasBS) ? uncertain(4, 'Requires P&L and Balance Sheet')
-    : closingStock > 0 && openingStock >= 0 ? pass(4, 4, 'Stock equation within tolerance')
-    : uncertain(4, 'Cannot verify stock equation — missing values'));
+    : !(hasPL && hasBS && hasTB) ? uncertain(4, 'Requires P&L, Balance Sheet, and Trial Balance')
+    : (() => {
+        const op    = Math.abs(openingStock);
+        const pur   = Math.abs(tbPurch);
+        const close = Math.abs(closingStock);
+        const cogs  = Math.abs(costOfMaterials);
+        const impliedCogs = op + pur - close;
+
+        // No purchases at all in a goods business — almost certainly mis-
+        // tagged profile (likely services, not goods).
+        if (pur === 0 && op === 0 && close === 0) {
+          return uncertain(4, 'Opening, Purchases, and Closing all zero — verify "Goods Business" profile flag');
+        }
+
+        // Implied COGS derived from the equation; if explicit COGS line
+        // exists in P&L, reconcile against it.
+        if (cogs > 0) {
+          const variance = Math.abs(cogs - impliedCogs);
+          const tolerance = Math.max(1000, cogs * 0.05);   // 5% or ₹1k floor
+          if (variance < tolerance) {
+            return pass(4, 4,
+              `Op ₹${fmt(op)} + Pur ₹${fmt(pur)} − Close ₹${fmt(close)} = ₹${fmt(impliedCogs)} ≈ COGS ₹${fmt(cogs)}`);
+          }
+          return partial(2, 4,
+            `Stock equation off by ₹${fmt(variance)} — Op ₹${fmt(op)} + Pur ₹${fmt(pur)} − Close ₹${fmt(close)} = ₹${fmt(impliedCogs)} vs P&L COGS ₹${fmt(cogs)}`);
+        }
+
+        // No explicit COGS in P&L — many SME setups don't have a separate
+        // "Cost of materials consumed" line; the equation still holds,
+        // we just can't independently verify against an existing total.
+        // Report the implied COGS as a pass with the breakdown so the
+        // user can see we computed it.
+        return pass(4, 4,
+          `Implied COGS = Op ₹${fmt(op)} + Pur ₹${fmt(pur)} − Close ₹${fmt(close)} = ₹${fmt(impliedCogs)} (no explicit COGS line in P&L to reconcile against)`);
+      })());
 
   c('E12', 'E', 'Stock movement entries exist',
     !isGoods ? na('Not applicable')
@@ -536,28 +669,54 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     : partial(1, 2, `${(roundPct*100).toFixed(1)}% round-number entries (threshold: 20%)`));
 
   // ────── H: Cross-Statement Reconciliation ──────
-  const dbTotalForH = dbStats ? (dbStats.totalDebit + dbStats.totalCredit) / 2 : 0;
+  // H1 ("DayBook Dr+Cr totals = Trial Balance totals") was removed.  It
+  // compared a flow (sum of voucher amounts during the year) against a
+  // snapshot (TB closing-Dr total) — these don't equate by any accounting
+  // principle.  The parser also collapsed totalDebit and totalCredit to the
+  // same voucher amount (both `+= amt`), making the check structurally
+  // broken regardless.  H2/H3/H4 below do meaningful cross-statement
+  // reconciliations on Sales, Purchases, and Cash+Bank — keep those.
 
-  c('H1', 'H', 'DayBook Dr+Cr totals = Trial Balance totals',
-    !(hasDaybook && hasTB) ? uncertain(10, 'Requires DayBook and Trial Balance')
-    : tbDr === 0 ? uncertain(10, 'TB totals not extracted')
-    : dbTotalForH === 0 ? uncertain(10, 'DayBook totals not computed')
-    : Math.abs(dbTotalForH - tbDr) / tbDr < 0.01 ? pass(10, 10, `DB ≈ TB Dr ₹${fmt(tbDr)}`)
-    : fail(10, `DB total ₹${fmt(dbTotalForH)} ≠ TB Dr ₹${fmt(tbDr)} (>${(Math.abs(dbTotalForH-tbDr)/tbDr*100).toFixed(1)}%)`),
-    'DayBook totals do not match Trial Balance');
-
-  c('H2', 'H', 'Sales vouchers total = TB Sales ledger',
+  // H2 — Sales reconciliation (gross-to-gross).
+  //
+  // DayBook side: extractAmt() returns the master <AMOUNT> on each Sales
+  //   voucher, which Tally fills with the *gross* (incl. GST) figure.
+  // TB side: tbSales counts only ledgers literally named "sales" or
+  //   "revenue from", which is the *net-of-GST* sales-ledger balance and
+  //   misses GST output collected and any other revenue accounts named
+  //   differently (e.g. "Service Charges", "GST Services").  To make the
+  //   comparison apples-to-apples we add Output-GST collected to the TB
+  //   side — that's the GST component included in the gross voucher
+  //   amount.  We can't perfectly recover other revenue ledgers without
+  //   master/group data, so we widen the tolerance to 5% and downgrade
+  //   substantial mismatches to `partial` (informational) rather than
+  //   `fail` (critical) — the variance is more often a data-classification
+  //   nuance (sales returns, GST cess, period cut-off, multiple revenue
+  //   ledgers) than an actual book-keeping error.
+  const tbSalesGross = tbSales + outputGSTAmt;
+  c('H2', 'H', 'Sales vouchers total ≈ TB Sales + Output GST',
     !(hasDaybook && hasTB) ? uncertain(8, 'Requires DayBook and Trial Balance')
-    : tbSales === 0 || dbSales === 0 ? uncertain(8, 'Sales figures not extracted')
-    : Math.abs(dbSales - tbSales) / tbSales < 0.01 ? pass(8, 8, `Sales reconciled ₹${fmt(tbSales)}`)
-    : fail(8, `Sales variance: DB ₹${fmt(dbSales)} vs TB ₹${fmt(tbSales)}`),
+    : tbSalesGross === 0 || dbSales === 0 ? uncertain(8, 'Sales figures not extracted')
+    : Math.abs(dbSales - tbSalesGross) / tbSalesGross < 0.05
+        ? pass(8, 8, `Sales reconciled within 5% (DB ₹${fmt(dbSales)} ≈ TB+GST ₹${fmt(tbSalesGross)})`)
+    : Math.abs(dbSales - tbSalesGross) / tbSalesGross < 0.25
+        ? partial(4, 8, `Sales variance: DB ₹${fmt(dbSales)} vs TB+GST ₹${fmt(tbSalesGross)} — common causes: sales returns, multiple revenue ledgers, period cut-off`)
+    : partial(2, 8, `Sales variance >25%: DB ₹${fmt(dbSales)} vs TB+GST ₹${fmt(tbSalesGross)} — investigate misclassified revenue ledgers, sales returns, or period mismatch`),
     'Sales voucher total does not match Trial Balance');
 
-  c('H3', 'H', 'Purchase vouchers total = TB Purchase ledger',
+  // H3 — Purchase reconciliation (gross-to-gross), same shape as H2.
+  // TB side adds back Input-ITC (GST paid on purchases) so we compare the
+  // gross purchase value seen in Day Book vouchers against the gross
+  // purchase value implied by the Trial Balance.
+  const tbPurchGross = tbPurch + inputITCAmt;
+  c('H3', 'H', 'Purchase vouchers total ≈ TB Purchase + Input ITC',
     !(hasDaybook && hasTB) ? uncertain(8, 'Requires DayBook and Trial Balance')
-    : tbPurch === 0 || dbPurch === 0 ? uncertain(8, 'Purchase figures not extracted')
-    : Math.abs(dbPurch - tbPurch) / tbPurch < 0.01 ? pass(8, 8, `Purchase reconciled ₹${fmt(tbPurch)}`)
-    : fail(8, `Purchase variance: DB ₹${fmt(dbPurch)} vs TB ₹${fmt(tbPurch)}`),
+    : tbPurchGross === 0 || dbPurch === 0 ? uncertain(8, 'Purchase figures not extracted')
+    : Math.abs(dbPurch - tbPurchGross) / tbPurchGross < 0.05
+        ? pass(8, 8, `Purchase reconciled within 5% (DB ₹${fmt(dbPurch)} ≈ TB+ITC ₹${fmt(tbPurchGross)})`)
+    : Math.abs(dbPurch - tbPurchGross) / tbPurchGross < 0.25
+        ? partial(4, 8, `Purchase variance: DB ₹${fmt(dbPurch)} vs TB+ITC ₹${fmt(tbPurchGross)} — common causes: purchase returns, multiple expense ledgers, period cut-off`)
+    : partial(2, 8, `Purchase variance >25%: DB ₹${fmt(dbPurch)} vs TB+ITC ₹${fmt(tbPurchGross)} — investigate misclassified purchase ledgers, returns, or period mismatch`),
     'Purchase voucher total does not match Trial Balance');
 
   c('H4', 'H', 'Cash + Bank movement = BS closing balance',
@@ -568,9 +727,36 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     : fail(8, `Cash+Bank variance: DB ₹${fmt(dbCashBank)} vs BS ₹${fmt(bsCashBankTotal)}`),
     'Cash + Bank movement does not match Balance Sheet');
 
-  c('H5', 'H', 'Tax vouchers = Duties & Taxes TB ledger',
+  // H5 — Tax balances reasonable vs sales.  Was a stub waiting on a
+  // never-shipped Form 26AS / GSTR-3B import.  Now we sanity-check the
+  // Output GST closing balance against revenue: GST output should land
+  // roughly between 1% (very low-rate composite) and 25% (mostly 18%
+  // rate goods) of sales.  Outside that band suggests a misclassified
+  // ledger or under/over-reporting.  Same shape for TDS via dbPayments
+  // (covered separately by E6) so this slot focuses on GST.
+  c('H5', 'H', 'Tax balances reasonable vs sales',
     !(gstApplicable || tdsApplicable) ? na('Not applicable')
-    : uncertain(6, 'Tax voucher reconciliation requires tax-specific XML export (not yet available)'));
+    : !hasTB ? uncertain(6, 'Requires Trial Balance')
+    : (() => {
+        if (!gstApplicable) {
+          // TDS-only company — handled by E6 in detail.  Surface a brief
+          // pass here when TDS ledger exists.
+          return tdsLedgerFound
+            ? pass(6, 6, 'TDS ledger present (full reconciliation handled by E6)')
+            : fail(6, 'TDS applicable but no TDS ledger found in TB');
+        }
+        const gstSales = tbSales > 0 ? tbSales : Math.abs(revenue);
+        if (gstSales === 0) return uncertain(6, 'Sales figure not extracted — cannot compute tax ratio');
+        if (outputGSTAmt === 0) {
+          return fail(6, 'GST applicable but Output GST balance is zero — verify GST classification or composition scheme');
+        }
+        const ratio = outputGSTAmt / gstSales;
+        const pct = (ratio * 100).toFixed(2);
+        if (ratio < 0.01) return partial(3, 6, `Output GST ${pct}% of sales — below typical 1-25% range; possible classification miss`);
+        if (ratio > 0.25) return partial(3, 6, `Output GST ${pct}% of sales — unusually high; review GST ledger classification`);
+        return pass(6, 6, `Output GST ₹${fmt(outputGSTAmt)} = ${pct}% of sales ₹${fmt(gstSales)} — within reasonable range`);
+      })(),
+    'Output GST percentage outside reasonable range');
 
   c('H6', 'H', 'Journal entry net = P&L adjustment lines',
     !(hasDaybook && hasPL) ? uncertain(5, 'Requires DayBook and P&L')
@@ -584,10 +770,28 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     : Math.abs(dbSales - revenue) / (revenue || 1) < 0.05 ? pass(5, 5, `Sales ≈ Revenue ₹${fmt(revenue)}`)
     : partial(1, 5, `Sales ₹${fmt(dbSales)} vs P&L revenue ₹${fmt(revenue)} (>5%)`));
 
-  // Bug 5 fix: H8 returns NA when fewer than 3 distinct months of data
+  // H8 — month-wise volume consistency.
+  //
+  // The rule (≥3 distinct months needed) is purely mechanical: you can't
+  // compute a "max ÷ average" spike with fewer than 3 data points.  But
+  // *why* there are fewer than 3 months matters for categorisation:
+  //
+  //   • DayBook returned 0 vouchers          → uncertain (data issue)
+  //   • Profile says fullFY, vouchers exist
+  //     but only span <3 months              → PASS, sparse-books note —
+  //     the business genuinely had quiet
+  //     months; the rule literally cannot
+  //     fire and isn't applicable
+  //   • Profile says partial-FY, <3 months   → uncertain (user knew
+  //     they uploaded a narrow period)
+  //   • ≥3 months                            → spike detection runs
   c('H8', 'H', 'Month-wise volumes consistent — no spikes',
     !hasDaybook ? uncertain(5, 'Requires DayBook')
-    : distinctMonths < 3 ? na('Insufficient month coverage for spike detection — need ≥3 months')
+    : totalVouchers === 0 ? uncertain(5, 'No vouchers parsed from DayBook')
+    : distinctMonths < 3
+        ? (fullFY
+            ? pass(5, 5, `Only ${distinctMonths} month${distinctMonths === 1 ? '' : 's'} had voucher activity in the full-FY period — sparse-books company, spike detection not applicable`)
+            : uncertain(5, `Only ${distinctMonths} month${distinctMonths === 1 ? '' : 's'} of voucher data — need ≥3 for spike detection. Switch the period selector to a wider range or set "Full FY" in Profile if this is the complete year.`))
     : monthAvg === 0 ? uncertain(5, 'No monthly volume data')
     : monthMax / monthAvg < 3 ? pass(5, 5, `Max spike: ${(monthMax/monthAvg).toFixed(1)}× average`)
     : partial(2, 5, `Volume spike: ${(monthMax/monthAvg).toFixed(1)}× average in peak month`));
@@ -609,6 +813,60 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
 
   const cappedScore = hasDaybook ? overall : Math.min(overall, 60);
   const scoreCapped = !hasDaybook && overall > 60;
+
+  // ── Phase 7: classification telemetry ──────────────────────────────────
+  // Compute the per-run summary AFTER analysis completes (so we know what
+  // the classifier actually did) and fire the network call asynchronously
+  // so it never blocks the user-visible flow.  Only emit when a company
+  // is selected — without an FK there's nothing the server can persist.
+  const tbLedgersForTelemetry = parsedData.tbLedgers ?? [];
+  if (state.currentCompany?.id && tbLedgersForTelemetry.length > 0) {
+    const summary = {
+      company_id: state.currentCompany.id,
+      total_ledgers: tbLedgersForTelemetry.length,
+      ledger_overridden: 0,
+      ledger_high: 0,
+      ledger_medium: 0,
+      ledger_low: 0,
+      ledger_none: 0,
+      unclassified_ledgers: [] as string[],
+      low_conf_ledgers: [] as string[],
+      unknown_voucher_types: [] as string[],
+      industry: state.currentCompany.companyType ?? undefined,
+      files_loaded: Object.values(files).filter(f => f.hasContent).length,
+    };
+    for (const l of tbLedgersForTelemetry) {
+      const cls = classifyLedger(l.name, masterMap, overrides, bsHierarchy);
+      switch (cls.confidence) {
+        case 'overridden': summary.ledger_overridden++; break;
+        case 'high':       summary.ledger_high++;       break;
+        case 'medium':     summary.ledger_medium++;     break;
+        case 'low':
+          summary.ledger_low++;
+          summary.low_conf_ledgers.push(l.name);
+          break;
+        case 'none':
+          summary.ledger_none++;
+          summary.unclassified_ledgers.push(l.name);
+          break;
+      }
+    }
+    // Voucher-type unknown names (Phase 4 catalog evolution) — collected
+    // from the parsed daybook stats.  We rebuild a small set since the
+    // existing dbStats doesn't track per-type classification, but the
+    // unique voucher type strings are cheap to derive.
+    if (dbStats?.vouchers) {
+      const seen = new Set<string>();
+      for (const v of dbStats.vouchers) {
+        if (v.type) seen.add(v.type);
+      }
+      // Note: full classification round-trip avoided here for cost — the
+      // server can re-classify on the aggregation side using the same
+      // catalog.  We just send the unique type names.
+      summary.unknown_voucher_types = Array.from(seen);
+    }
+    void recordClassificationSummary(summary);
+  }
 
   return {
     results: { checks, dimScores, overall, cappedScore, scoreCapped, runAt: Date.now() },

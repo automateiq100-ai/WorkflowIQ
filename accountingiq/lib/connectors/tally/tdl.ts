@@ -25,9 +25,12 @@ interface ExportArgs {
   reportName: string;       // Tally REPORT id, e.g. "Trial Balance"
   company: string;          // Tally company name as Tally knows it
   period: ReportPeriod;
+  /** Per-report extra <STATICVARIABLES> entries.  Used to flip Tally's F12-style
+   *  toggles (e.g. Trial Balance: "Show Opening Balance" / "Show Transactions"). */
+  extraStaticVars?: string;
 }
 
-function exportEnvelope({ reportName, company, period }: ExportArgs): string {
+function exportEnvelope({ reportName, company, period, extraStaticVars = '' }: ExportArgs): string {
   const from = toTallyDate(period.start);
   const to = toTallyDate(period.end);
   return `<ENVELOPE>
@@ -44,12 +47,34 @@ function exportEnvelope({ reportName, company, period }: ExportArgs): string {
         <SVFROMDATE TYPE="Date">${from}</SVFROMDATE>
         <SVTODATE TYPE="Date">${to}</SVTODATE>
         <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-        <EXPLODEFLAG>Yes</EXPLODEFLAG>
+        <EXPLODEFLAG>Yes</EXPLODEFLAG>${extraStaticVars}
       </STATICVARIABLES>
     </DESC>
   </BODY>
 </ENVELOPE>`;
 }
+
+/** Per-kind extra static variables.  Trial Balance asks Tally to include the
+ *  Opening Balance and Transactions columns — Tally's F12 toggles are exposed
+ *  through SV variables, but the exact names vary across versions (Prime 2.x
+ *  vs 3.x vs 4.x and across release builds).  Setting all known candidates is
+ *  safe — Tally silently ignores names it doesn't recognise.  The parser
+ *  reads whichever tags actually come back, and the UI hides empty columns. */
+const EXTRA_STATIC_VARS: Partial<Record<ReportKind, string>> = {
+  trialbal: `
+        <ISITRRBOPNGBAL>Yes</ISITRRBOPNGBAL>
+        <ISITRRBTRANS>Yes</ISITRRBTRANS>
+        <ROPNGBAL>Yes</ROPNGBAL>
+        <RTRANS>Yes</RTRANS>
+        <SVROPNGBAL>Yes</SVROPNGBAL>
+        <SVRTRANS>Yes</SVRTRANS>
+        <DETAILED>Yes</DETAILED>
+        <ISDETAILED>Yes</ISDETAILED>
+        <SHOWOPENING>Yes</SHOWOPENING>
+        <SHOWTRANSACTIONS>Yes</SHOWTRANSACTIONS>
+        <TBONALLLEDGER>Yes</TBONALLLEDGER>
+        <SHOWFORACCOUNTS>Yes</SHOWFORACCOUNTS>`,
+};
 
 // Map our ReportKind → the Tally REPORT id that returns the same shape the
 // existing parser in lib/parser.ts already understands.
@@ -76,12 +101,80 @@ const REPORT_IDS: Record<ReportKind, string> = {
   bankrecon:  'Bank Reconciliation',
 };
 
+/**
+ * Custom TDL collection request that fetches every Voucher whose date falls
+ * within [SVFROMDATE, SVTODATE].
+ *
+ * Why this exists: Tally Prime's built-in "Day Book" report is single-day
+ * by design — even when SVFROMDATE/SVTODATE span a year, Tally returns only
+ * the SVTODATE day's vouchers.  A custom Voucher collection with a $Date
+ * filter sidesteps that completely and gives us full-period coverage in one
+ * round-trip.  The response shape is still <VOUCHER>…</VOUCHER> blocks with
+ * the standard child tags (DATE, VOUCHERNUMBER, VOUCHERTYPENAME, NARRATION,
+ * PARTYLEDGERNAME, AMOUNT, ALLLEDGERENTRIES.LIST), so the existing
+ * parseDayBook regex works unchanged.
+ */
+function buildDayBookCollectionRequest(company: string, period: ReportPeriod): string {
+  const from = toTallyDate(period.start);
+  const to = toTallyDate(period.end);
+  // Tally's Voucher collection is already scoped to [SVFROMDATE, SVTODATE]
+  // when those statics are set — no FILTER needed (and writing one needs
+  // $$Date:## coercion, which we got wrong on the first attempt and Tally
+  // silently returned zero vouchers).  BELONGSTO=Yes ensures we get every
+  // voucher in the company's books (no narrower view).
+  return `<ENVELOPE>
+  <HEADER>
+    <VERSION>1</VERSION>
+    <TALLYREQUEST>Export</TALLYREQUEST>
+    <TYPE>Collection</TYPE>
+    <ID>WIQDayBook</ID>
+  </HEADER>
+  <BODY>
+    <DESC>
+      <STATICVARIABLES>
+        <SVCURRENTCOMPANY>${escapeXml(company)}</SVCURRENTCOMPANY>
+        <SVFROMDATE TYPE="Date">${from}</SVFROMDATE>
+        <SVTODATE TYPE="Date">${to}</SVTODATE>
+        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+      </STATICVARIABLES>
+      <TDL>
+        <TDLMESSAGE>
+          <COLLECTION NAME="WIQDayBook" ISMODIFY="No">
+            <TYPE>Voucher</TYPE>
+            <BELONGSTO>Yes</BELONGSTO>
+            <FETCH>Date</FETCH>
+            <FETCH>VoucherNumber</FETCH>
+            <FETCH>VoucherTypeName</FETCH>
+            <FETCH>Narration</FETCH>
+            <FETCH>PartyLedgerName</FETCH>
+            <FETCH>Amount</FETCH>
+            <FETCH>AllLedgerEntries.LedgerName</FETCH>
+            <FETCH>AllLedgerEntries.Amount</FETCH>
+            <FETCH>AllLedgerEntries.IsDeemedPositive</FETCH>
+          </COLLECTION>
+        </TDLMESSAGE>
+      </TDL>
+    </DESC>
+  </BODY>
+</ENVELOPE>`;
+}
+
 export function buildReportRequest(
   kind: ReportKind,
   company: string,
   period: ReportPeriod,
 ): string {
-  return exportEnvelope({ reportName: REPORT_IDS[kind], company, period });
+  // Day Book in Tally is a single-day report; route it through a custom
+  // Voucher collection so the requested date range is actually honored.
+  if (kind === 'daybook') {
+    return buildDayBookCollectionRequest(company, period);
+  }
+  return exportEnvelope({
+    reportName: REPORT_IDS[kind],
+    company,
+    period,
+    extraStaticVars: EXTRA_STATIC_VARS[kind],
+  });
 }
 
 export function buildListCompaniesRequest(): string {

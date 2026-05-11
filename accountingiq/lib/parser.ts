@@ -6,6 +6,9 @@ import type {
   MasterEntry, MasterItemType, FinancialNode, FinancialNodeType,
   ParsedStatement, FlatFinancialRow,
 } from './types';
+import { classifyLedger, type BSHierarchyMap } from './tally-groups';
+import { classifyVoucherType, type SemanticVoucherType } from './tally-voucher-types';
+import type { OverrideMap } from './ledger-overrides';
 
 // ── XML helpers ──────────────────────────────────────────────────────────
 
@@ -32,6 +35,48 @@ export function parseAmt(s: string): number {
   if (!s) return 0;
   const clean = s.replace(/,/g, '').trim();
   return parseFloat(clean) || 0;
+}
+
+/** Read a closing balance from a TB DSPACCINFO block, supporting both shapes:
+ *
+ *   • Ledger/Account Display export (GUI File→Export from a single ledger):
+ *       <DSPCLAMTA>-100000.00</DSPCLAMTA>  ← single signed value
+ *
+ *   • Trial Balance report export (TDL gateway / Multi-Account Display):
+ *       <DSPCLDRAMT><DSPCLDRAMTA>-100000.00</DSPCLDRAMTA></DSPCLDRAMT>  ← Dr column
+ *       <DSPCLCRAMT><DSPCLCRAMTA>10000.00</DSPCLCRAMTA></DSPCLCRAMT>     ← Cr column
+ *
+ * Tally signs Dr-column values negative (internal Cr-positive convention) and
+ * Cr-column values positive, so summing yields the unified signed closing
+ * (positive=Cr, negative=Dr — matches TBFullRow.closing's documented sign).
+ * Empty tags parse to 0, so the sum still works for one-sided rows.
+ */
+export function readTBClosing(infoBlock: string): number {
+  const single = xmlText(infoBlock, 'DSPCLAMTA');
+  if (single) return parseAmt(single);
+  const dr = xmlText(infoBlock, 'DSPCLDRAMTA');
+  const cr = xmlText(infoBlock, 'DSPCLCRAMTA');
+  return parseAmt(dr) + parseAmt(cr);
+}
+
+/** Same dual-shape logic as readTBClosing for Opening Balance.  Returns 0
+ *  when neither column is present (older TB exports). */
+export function readTBOpening(infoBlock: string): number {
+  const single = xmlText(infoBlock, 'DSPOPAMTA');
+  if (single) return parseAmt(single);
+  const dr = xmlText(infoBlock, 'DSPOPDRAMTA');
+  const cr = xmlText(infoBlock, 'DSPOPCRAMTA');
+  return parseAmt(dr) + parseAmt(cr);
+}
+
+/** Period Dr / Cr movement totals.  Tally's TB-with-transactions report wraps
+ *  each side as <DSPDRAMT><DSPDRAMTA>...</DSPDRAMTA></DSPDRAMT>; the inner
+ *  tag's value is already a positive magnitude. */
+export function readTBMovements(infoBlock: string): { debit: number; credit: number } {
+  return {
+    debit:  Math.abs(parseAmt(xmlText(infoBlock, 'DSPDRAMTA'))),
+    credit: Math.abs(parseAmt(xmlText(infoBlock, 'DSPCRAMTA'))),
+  };
 }
 
 export function decodeEntities(s: string): string {
@@ -163,6 +208,8 @@ export function parseTallyDate(s: string): Date | null {
 export function parseTrialBalance(
   xml: string,
   masterMap: Map<string, MasterEntry> = new Map(),
+  overrides?: OverrideMap,
+  bsHierarchy?: BSHierarchyMap,
 ): {
   tbLedgers: TBLedger[];
   suspenseCount: number;
@@ -179,6 +226,15 @@ export function parseTrialBalance(
   outputGSTAmt: number;
   inputITCAmt: number;
   tdsLedgerFound: boolean;
+  /** Sum of |closing| over all TDS Payable / TDS-on-X / Tax-Deducted-at-Source
+   *  ledgers in the Trial Balance.  Drives E6 (TDS reasonableness) — we
+   *  compare this against total payment voucher volume from the DayBook. */
+  tdsPayableAmt: number;
+  /** Sum of |closing| over all ledgers classified as 'stock' in the TB.
+   *  Used as a fallback for BS-derived closingStock when the BS parser's
+   *  literal patterns ("closing stock", "stock-in-trade") miss the
+   *  user's specific naming (e.g. "Inventory", "Raw Material Stock"). */
+  tbStock: number;
   pfLedgerFound: boolean;
   salesLedgersNoRate: number;
   gstDiffPct: number;
@@ -198,8 +254,7 @@ export function parseTrialBalance(
     if (!name || name === 'undefined') continue;
     // Skip GROUP-type entries — they are rollup rows; including them double-counts children in D1/H2/H3
     if (masterMap.get(normalizeMasterKey(name))?.type === 'group') continue;
-    const closingStr = xmlText(infoBlock, 'DSPCLAMTA');
-    const closing = parseAmt(closingStr);
+    const closing = readTBClosing(infoBlock);
     // Bug 1 fix: preserve sign. Dr = positive, Cr = negative in Tally TB convention
     tbLedgers.push({ name, nl: name.toLowerCase(), closing, dr: closing >= 0 });
   }
@@ -214,6 +269,26 @@ export function parseTrialBalance(
       if (!name || name === 'undefined') continue;
       if (masterMap.get(normalizeMasterKey(name))?.type === 'group') continue;
       const closing = parseAmt(amounts[i]);
+      tbLedgers.push({ name, nl: name.toLowerCase(), closing, dr: closing >= 0 });
+    }
+  }
+
+  // Fallback for Tally TB-report shape with no DSPCLAMTA at all — flat zip on
+  // DSPDISPNAME + DSPCLDRAMTA + DSPCLCRAMTA columns.  When the block-pair
+  // regex above didn't match (e.g. DSPACCNAME and DSPACCINFO weren't adjacent
+  // because of unexpected whitespace), this rebuilds rows from the column
+  // arrays.  Each ledger has exactly one non-empty column, so per-index sum
+  // recovers the signed closing.
+  if (tbLedgers.length === 0) {
+    const names   = xmlAll(xml, 'DSPDISPNAME');
+    const drCol   = xmlAll(xml, 'DSPCLDRAMTA');
+    const crCol   = xmlAll(xml, 'DSPCLCRAMTA');
+    const minLen  = Math.min(names.length, drCol.length, crCol.length);
+    for (let i = 0; i < minLen; i++) {
+      const name = names[i];
+      if (!name || name === 'undefined') continue;
+      if (masterMap.get(normalizeMasterKey(name))?.type === 'group') continue;
+      const closing = parseAmt(drCol[i]) + parseAmt(crCol[i]);
       tbLedgers.push({ name, nl: name.toLowerCase(), closing, dr: closing >= 0 });
     }
   }
@@ -243,29 +318,69 @@ export function parseTrialBalance(
   let outputGSTAmt = 0;
   let inputITCAmt = 0;
   let tdsLedgerFound = false;
+  let tdsPayableAmt = 0;
+  let tbStock = 0;
   let pfLedgerFound = false;
   let tbSales = 0;
   let tbPurch = 0;
 
+  // Single classification pass over every TB ledger.  The catalog in
+  // tally-groups.ts walks the master parent chain (high confidence) and
+  // falls back to name-pattern matching (low confidence) — so this loop
+  // works the same whether the master file was loaded or not, and
+  // correctly classifies ledgers with non-obvious names (proprietor
+  // capital "Kunal Budhwar", numeric bank accounts "HDFC 0049", debtor
+  // business names "ABC Traders", custom-named revenue groups, etc.).
+  //
+  // Sub-detections inside Duties & Taxes (Output GST / Input ITC / TDS /
+  // PF & ESI) still rely on naming conventions because Tally groups them
+  // all under the same parent "Duties & Taxes"; the standard regulatory
+  // ledger names are stable enough across companies that regex remains
+  // the right tool there.
   for (const l of tbLedgers) {
     const n = l.nl;
-    if (n.includes('suspense') || n.includes('miscellaneous') || n.includes('misc')) {
+    const cls = classifyLedger(l.name, masterMap, overrides, bsHierarchy);
+
+    // Suspense / miscellaneous balances — surface every one for the
+    // critical-flag panel (engine reports them by name).
+    if (cls.category === 'suspense' || /\bsuspense\b|\bmiscellaneous\b|\bmisc\b/.test(n)) {
       suspenseCount++;
       suspenseLedgers.push({ name: l.name, amount: l.closing });
     }
-    if (n.includes('capital') || n.includes('owner') || n.includes('proprietor') || n.includes('partner')) capFound = true;
-    if (n.includes('bank') || /hdfc|icici|sbi|axis|kotak|yes bank/.test(n)) bankFound = true;
-    if (n === 'cash' || n.includes('cash in hand') || n.includes('petty cash') || n.includes('cash a/c') || n.includes('cash account')) cashFound = true;
-    // BUG 5 fix: broadened patterns — "Sundry Debtors" group row in TB may not appear; match any debtor-related name
-    if (n.includes('debtor') || n.includes('receivable')) debtorFound = true;
-    // BUG 5 fix: broadened patterns — match any creditor-related name
-    if (n.includes('creditor') || n.includes('payable')) creditorFound = true;
-    if (n.includes('output gst') || n.includes('output cgst') || n.includes('output sgst') || n.includes('output igst') || n.includes('gst payable') || n.includes('cgst payable') || n.includes('sgst payable') || n.includes('igst payable')) outputGSTAmt += Math.abs(l.closing);
-    if (n.includes('input gst') || n.includes('input cgst') || n.includes('input sgst') || n.includes('input igst') || n.includes('itc') || n.includes('gst receivable')) inputITCAmt += Math.abs(l.closing);
-    if (n.includes('tds payable') || n.includes('tds on') || (n.includes('tax deducted') && n.includes('source'))) tdsLedgerFound = true;
-    if (n.includes('pf payable') || n.includes('esi payable') || n.includes('provident fund') || n.includes('employees state')) pfLedgerFound = true;
-    if (n.includes('sales') || n.includes('revenue from')) tbSales += Math.abs(l.closing);
-    if (n.includes('purchase') || n.includes('cost of goods')) tbPurch += Math.abs(l.closing);
+
+    // Presence flags — driven entirely by the catalog's category.
+    // bank-od counts toward bankFound (an OD account is still a bank
+    // relationship, just on the liability side).
+    if (cls.category === 'capital')                              capFound = true;
+    if (cls.category === 'bank' || cls.category === 'bank-od')   bankFound = true;
+    if (cls.category === 'cash')                                 cashFound = true;
+    if (cls.category === 'debtor')                               debtorFound = true;
+    if (cls.category === 'creditor')                             creditorFound = true;
+
+    // Aggregations for cross-statement reconciliation.
+    if (cls.category === 'sales')    tbSales += Math.abs(l.closing);
+    if (cls.category === 'purchase') tbPurch += Math.abs(l.closing);
+    // Stock — used as fallback for BS-derived closingStock when the BS
+    // parser's narrow regex ("closing stock", "stock-in-trade") misses
+    // the user's custom stock-ledger names ("Inventory", "Stock-in-Hand").
+    if (cls.category === 'stock')    tbStock += Math.abs(l.closing);
+
+    // Sub-classifiers within Duties & Taxes (regex on regulatory naming
+    // conventions — these stay stable across Tally setups because GSTN /
+    // CBDT prescribe the ledger labels).
+    if (/output\s*[cs]?gst|gst\s*payable|[cs]gst\s*payable|igst\s*payable/.test(n)) {
+      outputGSTAmt += Math.abs(l.closing);
+    }
+    if (/input\s*[cs]?gst|input\s*igst|\bitc\b|gst\s*receivable/.test(n)) {
+      inputITCAmt += Math.abs(l.closing);
+    }
+    if (/tds\s*payable|tds\s+on\b|tax\s*deducted.*source/.test(n)) {
+      tdsLedgerFound = true;
+      tdsPayableAmt += Math.abs(l.closing);
+    }
+    if (/pf\s*payable|esi\s*payable|provident\s*fund|employees\s*state/.test(n)) {
+      pfLedgerFound = true;
+    }
   }
 
   // Duplicate detection — Bug 3 fix: three-stage algorithm per spec §4 B2
@@ -290,7 +405,7 @@ export function parseTrialBalance(
   return {
     tbLedgers, suspenseCount, dupPairs, capFound, bankFound, cashFound,
     debtorFound, creditorFound, hasOpeningBal, tbTotal, tbSales, tbPurch,
-    outputGSTAmt, inputITCAmt, tdsLedgerFound, pfLedgerFound,
+    outputGSTAmt, inputITCAmt, tdsLedgerFound, tdsPayableAmt, tbStock, pfLedgerFound,
     salesLedgersNoRate: 0,
     gstDiffPct: 0,
     suspenseLedgers,
@@ -311,6 +426,9 @@ export function parseTBFull(
   masterMap: Map<string, MasterEntry> = new Map(),
 ): TBFullRow[] {
   const rows: TBFullRow[] = [];
+
+  // Primary: rich Tally GUI export — paired DSPACCNAME + DSPACCINFO blocks
+  // contain opening / Dr / Cr / closing movement amounts.
   const blockRe = /<DSPACCNAME\b[^>]*>([\s\S]*?)<\/DSPACCNAME>\s*<DSPACCINFO\b[^>]*>([\s\S]*?)<\/DSPACCINFO>/gi;
   let m: RegExpExecArray | null;
   while ((m = blockRe.exec(xml)) !== null) {
@@ -319,15 +437,79 @@ export function parseTBFull(
     const name = xmlText(nameBlock, 'DSPDISPNAME');
     if (!name || name === 'undefined') continue;
     const masterEntry = masterMap.get(normalizeMasterKey(name));
+    const mov = readTBMovements(infoBlock);
     rows.push({
       name,
-      opening:   parseAmt(xmlText(infoBlock, 'DSPOPAMTA')),
-      debitMov:  Math.abs(parseAmt(xmlText(infoBlock, 'DSPDRAMTA'))),
-      creditMov: Math.abs(parseAmt(xmlText(infoBlock, 'DSPCRAMTA'))),
-      closing:   parseAmt(xmlText(infoBlock, 'DSPCLAMTA')),
+      opening:   readTBOpening(infoBlock),
+      debitMov:  mov.debit,
+      creditMov: mov.credit,
+      closing:   readTBClosing(infoBlock),
       isGroup:   masterEntry?.type === 'group',
     });
   }
+  if (rows.length > 0) return rows;
+
+  // Fallback 1: flat DSPDISPNAME + DSPCLAMTA arrays (some Tally TDL responses
+  // emit a lean shape without DSPACCINFO wrappers — keeps Data view populated
+  // for live-bridge syncs).  Movement totals aren't available here.
+  const names = xmlAll(xml, 'DSPDISPNAME');
+  const amounts = xmlAll(xml, 'DSPCLAMTA');
+  const minLen = Math.min(names.length, amounts.length);
+  for (let i = 0; i < minLen; i++) {
+    const name = names[i];
+    if (!name || name === 'undefined') continue;
+    const masterEntry = masterMap.get(normalizeMasterKey(name));
+    rows.push({
+      name,
+      opening:   0,
+      debitMov:  0,
+      creditMov: 0,
+      closing:   parseAmt(amounts[i]),
+      isGroup:   masterEntry?.type === 'group',
+    });
+  }
+  if (rows.length > 0) return rows;
+
+  // Fallback 1b: Tally TB-report column shape — DSPCLDRAMTA / DSPCLCRAMTA
+  // arrays.  Only fires when the primary block-pair regex didn't match.
+  const drCol  = xmlAll(xml, 'DSPCLDRAMTA');
+  const crCol  = xmlAll(xml, 'DSPCLCRAMTA');
+  const colLen = Math.min(names.length, drCol.length, crCol.length);
+  for (let i = 0; i < colLen; i++) {
+    const name = names[i];
+    if (!name || name === 'undefined') continue;
+    const masterEntry = masterMap.get(normalizeMasterKey(name));
+    rows.push({
+      name,
+      opening:   0,
+      debitMov:  0,
+      creditMov: 0,
+      closing:   parseAmt(drCol[i]) + parseAmt(crCol[i]),
+      isGroup:   masterEntry?.type === 'group',
+    });
+  }
+  if (rows.length > 0) return rows;
+
+  // Fallback 2: classic Tally import format — <LEDGER>…<NAME>…<CLOSINGBALANCE>
+  // (used by some bridge / programmatic Tally setups).
+  const ledgerRe = /<LEDGER\b[^>]*>([\s\S]*?)<\/LEDGER>/gi;
+  while ((m = ledgerRe.exec(xml)) !== null) {
+    const block = m[1];
+    const name = xmlText(block, 'NAME') || xmlText(block, 'LEDGERNAME');
+    if (!name || name === 'undefined') continue;
+    const masterEntry = masterMap.get(normalizeMasterKey(name));
+    const opening = parseAmt(xmlText(block, 'OPENINGBALANCE') || xmlText(block, 'OPENINGBAL'));
+    const closing = parseAmt(xmlText(block, 'CLOSINGBALANCE') || xmlText(block, 'CLOSINGBAL'));
+    rows.push({
+      name,
+      opening,
+      debitMov:  0,
+      creditMov: 0,
+      closing,
+      isGroup:   masterEntry?.type === 'group',
+    });
+  }
+
   return rows;
 }
 
@@ -642,8 +824,16 @@ export function parseBSheet(xml: string): {
       debtorBal += Math.abs(amt);
     } else if (name.includes('sundry creditor') || name.includes('trade payable') || name.includes('creditor')) {
       creditorBal += amt;
-    } else if (name.includes('closing stock') || name.includes('stock-in-trade') || name.includes('stock in trade')) {
-      closingStock = amt;
+    } else if (
+      name.includes('closing stock') ||
+      name.includes('stock-in-trade') || name.includes('stock in trade') ||
+      name.includes('stock-in-hand')  || name.includes('stock in hand') ||
+      name === 'stock' || name === 'inventory' || name.includes('inventories')
+    ) {
+      // Capture the largest non-zero match so a leaf-level "Stock" doesn't
+      // overwrite a group-level rollup like "Stock-in-Hand" with a more
+      // complete total.
+      if (Math.abs(amt) > Math.abs(closingStock)) closingStock = amt;
     } else if (name === 'cash' || name.includes('cash in hand') || name.includes('cash-in-hand')) {
       cashBal += amt;
     } else if (inCurrentAssets && subAmt && Math.abs(parseAmt(subAmt)) > 0) {
@@ -798,7 +988,7 @@ export function parseDayBook(xml: string, fyStart: Date, fyEnd: Date): ChunkedSt
     cashOver10k: 0, roundCount: 0, dupVnoMap: {},
     monthCounts: {}, dateSet: [], custMap: {}, vendMap: {},
     totalDebit: 0, totalCredit: 0, salesVoucherTotal: 0,
-    purchVoucherTotal: 0, cashBankNetMovement: 0,
+    purchVoucherTotal: 0, cashBankNetMovement: 0, paymentTotal: 0,
     taxVoucherTotal: 0, journalNetAmt: 0, outOfFY: 0,
     vouchers: [],
   };
@@ -821,15 +1011,32 @@ export function processVoucher(
   dateSet: Set<string>,
   fyStart: Date,
   fyEnd: Date,
+  voucherTypeOverrides?: Map<string, SemanticVoucherType>,
 ) {
   stats.totalVouchers++;
 
   const vno = xmlText(block, 'VOUCHERNUMBER');
   const narration = xmlText(block, 'NARRATION');
-  const vtype = (xmlText(block, 'VOUCHERTYPENAME') || '').toLowerCase();
+  const vtypeRaw = xmlText(block, 'VOUCHERTYPENAME') || '';
+  const vtype = vtypeRaw.toLowerCase();
   const party = xmlText(block, 'PARTYLEDGERNAME');
   const dateStr = xmlText(block, 'DATE');
   const amt = extractAmt(block);
+
+  // Phase 4: classify the voucher type to its semantic role.  This is the
+  // single source of truth for every downstream rule that asks "is this a
+  // sales / purchase / receipt / payment / journal / contra voucher" —
+  // user-defined types like "Bank Charges Entry" map to `payment`,
+  // "Customer Return" maps to `sales-return`, etc.
+  const semantic = classifyVoucherType(vtypeRaw, voucherTypeOverrides).semantic;
+  const isSales         = semantic === 'sales';
+  const isSalesReturn   = semantic === 'sales-return';
+  const isPurchase      = semantic === 'purchase';
+  const isPurchaseReturn = semantic === 'purchase-return';
+  const isReceipt       = semantic === 'receipt';
+  const isPayment       = semantic === 'payment';
+  const isJournal       = semantic === 'journal';
+  const isContra        = semantic === 'contra';
 
   if (!vno) stats.missingVno++;
   if (narration) stats.narrated++;
@@ -838,7 +1045,10 @@ export function processVoucher(
     stats.dupVnoMap[vno] = (stats.dupVnoMap[vno] || 0) + 1;
   }
 
-  if (!party && (vtype.includes('sales') || vtype.includes('purchase') || vtype.includes('receipt') || vtype.includes('payment'))) {
+  // A party (debtor/creditor/cash/bank) is expected for sales, purchase,
+  // receipt, payment, and their returns.  Memorandum / Stock / Order
+  // vouchers don't need one.
+  if (!party && (isSales || isSalesReturn || isPurchase || isPurchaseReturn || isReceipt || isPayment)) {
     stats.missingParty++;
   }
 
@@ -847,19 +1057,71 @@ export function processVoucher(
   if (amt > 100_000 && narration) stats.highValueNarrated++;
   if (amt > 100_000) stats.highValueCount++;
 
-  if (vtype.includes('journal')) {
+  if (isJournal) {
     stats.totalJournals++;
     stats.journalNetAmt += amt;
   }
 
+  // Cash >₹10k threshold (s.269ST compliance) — fires on any voucher whose
+  // type *name* contains "cash" (Tally's "Cash Payment", "Cash Receipt").
+  // Kept on raw substring because it's a heuristic about ledger choice,
+  // not voucher semantics.
   if (vtype.includes('cash') && amt > 10_000) stats.cashOver10k++;
+
+  // Wrong-type voucher detection (heuristic).  Gathers every ledger name in
+  // this voucher (party + ALLLEDGERENTRIES.LIST > LEDGERNAME) and applies
+  // two high-confidence rules:
+  //   1. Journal vouchers must not touch cash or bank ledgers — those
+  //      movements belong in Receipt/Payment vouchers (treating Journal as
+  //      a real cash entry is a common book-keeping anti-pattern that
+  //      breaks the bank-reconciliation trail).
+  //   2. Receipt and Payment vouchers must involve a cash or bank ledger
+  //      by definition; a Receipt with no cash/bank counterpart is a
+  //      misclassified entry (often a Journal labelled as Receipt).
+  // Substring matching ("cash" / "bank") catches the standard Tally
+  // ledger names ("HDFC Bank", "Petty Cash", "Bank Accounts", "Cash in
+  // Hand", "Cash-in-Hand") at the cost of rare false positives like a
+  // customer named "Cashew Traders".
+  const ledgerNames = [
+    party,
+    ...xmlAll(block, 'LEDGERNAME'),
+  ].map(s => s.toLowerCase()).filter(Boolean);
+  const touchesBankCash = ledgerNames.some(n => /(bank|cash)/.test(n));
+  // Phase 4: use semantic type, not raw substring — so "Bank Charges Entry"
+  // (semantic 'payment') correctly requires a bank/cash counterpart, and
+  // "Reversing Journal" (semantic 'journal') correctly flags cash/bank
+  // touches as wrong-type.  Previously these custom types slipped past
+  // the substring `vtype.includes('journal')` test.
+  if (isJournal && touchesBankCash) {
+    stats.wrongType++;
+  } else if ((isReceipt || isPayment) && !touchesBankCash && ledgerNames.length > 0) {
+    stats.wrongType++;
+  }
 
   if (amt > 0 && amt % 1000 === 0) stats.roundCount++;
 
-  if (vtype.includes('sales')) stats.salesVoucherTotal += amt;
-  if (vtype.includes('purchase')) stats.purchVoucherTotal += amt;
-  if (vtype.includes('journal')) stats.taxVoucherTotal += amt;
-  if (vtype.includes('cash') || vtype.includes('bank')) stats.cashBankNetMovement += amt;
+  // Phase 4: sign-aware revenue/expense aggregation.  Sales Returns and
+  // Purchase Returns reduce the net total instead of inflating it (the
+  // pre-Phase-4 code added them as positive sales because vtype string
+  // contained "sales").
+  if (isSales)          stats.salesVoucherTotal += amt;
+  if (isSalesReturn)    stats.salesVoucherTotal -= amt;
+  if (isPurchase)       stats.purchVoucherTotal += amt;
+  if (isPurchaseReturn) stats.purchVoucherTotal -= amt;
+  if (isJournal)        stats.taxVoucherTotal   += amt;
+
+  // Cash/Bank movement total — fired by Receipt, Payment, and Contra
+  // vouchers (Contra moves between cash and bank), plus the legacy
+  // substring fallback for vouchers whose type literally contains
+  // "cash"/"bank" (covers user-defined types that haven't been classified
+  // yet via the override store).
+  if (isReceipt || isPayment || isContra || vtype.includes('cash') || vtype.includes('bank')) {
+    stats.cashBankNetMovement += amt;
+  }
+  // Payment-only volume — used as the denominator in E6's TDS-as-%-of-
+  // payments check.  Excludes Receipts (money in) and Contras (internal
+  // bank↔cash) since neither attracts TDS.
+  if (isPayment) stats.paymentTotal += amt;
 
   stats.totalDebit += amt;
   stats.totalCredit += amt;
@@ -968,6 +1230,40 @@ export const TALLY_ASSET_PRIMARIES = new Set([
   'fixed assets', 'current assets', 'misc. expenses (asset)',
   'investments', 'loans & advances (asset)', 'suspense a/c',
 ]);
+
+/**
+ * Returns true if `ledgerName` lives anywhere in the parent chain of one of
+ * the target group names (case-insensitive, normalized).  Used to decide
+ * whether a ledger belongs under "Sales Accounts" / "Purchase Accounts" /
+ * "Duties & Taxes" / etc. without relying on the ledger's literal name.
+ *
+ * This is more robust than substring-matching the ledger name because real
+ * Tally setups have revenue ledgers like "GST Services", "Service Charges",
+ * or "Annual Maintenance" that all sit under the Sales Accounts group but
+ * don't contain the word "sales".
+ */
+export function isUnderTallyGroup(
+  ledgerName: string,
+  targetGroups: string[],
+  masterMap: Map<string, MasterEntry>,
+): boolean {
+  if (masterMap.size === 0) return false;
+  // Compare names with whitespace/punctuation collapsed so that "Cash-in-Hand",
+  // "Cash in Hand", and "cash in hand" all match against the same target.
+  const stripPunct = (s: string) => s.toLowerCase().replace(/[\s\-_/&.,]+/g, '');
+  const targets = new Set(targetGroups.map(stripPunct));
+  let current = ledgerName;
+  const seen = new Set<string>();
+  for (let hop = 0; hop < 20; hop++) {
+    if (seen.has(current)) break;
+    seen.add(current);
+    if (targets.has(stripPunct(current))) return true;
+    const entry = masterMap.get(normalizeMasterKey(current));
+    if (!entry || !entry.parent || entry.parent.toLowerCase() === 'primary') break;
+    current = entry.parent;
+  }
+  return false;
+}
 
 /**
  * Walk the master parent chain from `name` until a known Tally primary group.

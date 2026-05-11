@@ -113,7 +113,8 @@ export type ViewId =
   | 'mis-setup' | 'mis-report'
   | 'reconciliation' | 'aiAnalysis'
   | 'data-view' | 'agent-fix'
-  | 'tally-connection';
+  | 'tally-connection'
+  | 'master-setup';
 
 export type Theme = 'dark' | 'light';
 
@@ -156,6 +157,10 @@ export interface ChunkedStats {
   salesVoucherTotal: number;
   purchVoucherTotal: number;
   cashBankNetMovement: number;
+  /** Sum of |amt| over Payment-semantic vouchers only (excludes Receipts /
+   *  Contras / Journals).  Drives E6 (TDS reasonableness) — TDS is a
+   *  fraction of money paid out, not money received. */
+  paymentTotal: number;
   taxVoucherTotal: number;
   journalNetAmt: number;
   outOfFY: number;
@@ -211,6 +216,12 @@ export interface ParsedData {
   outputGSTAmt: number;
   inputITCAmt: number;
   tdsLedgerFound: boolean;
+  /** Sum of |closing| over all TDS Payable / TDS-on-X ledgers in the TB. */
+  tdsPayableAmt: number;
+  /** Sum of |closing| over all Stock-classified ledgers in the TB.  Used
+   *  as a fallback for closingStock when the BS parser's narrow patterns
+   *  miss user-named stock ledgers. */
+  tbStock: number;
   pfLedgerFound: boolean;
   salesLedgersNoRate: number;
   gstDiffPct: number;
@@ -390,6 +401,17 @@ export interface AppState {
   aiAnalysisLoading: boolean;
   /** last error from /api/ai, null when clean */
   aiAnalysisError: string | null;
+  /** Per-company ledger classification overrides — user-confirmed mappings
+   *  that always win over auto-classification.  Keyed by lowercased ledger
+   *  name.  Loaded from localStorage on company selection (and synced to
+   *  Supabase later when we move overrides server-side). */
+  ledgerOverrides?: Map<string, import('./ledger-overrides').LedgerOverride>;
+  /** Period the user actually asked for (folder selector or Tally
+   *  bridge sync).  Captured at analysis time so downstream rules can
+   *  compare actual data coverage to user intent — e.g. "user requested
+   *  12 months but only 2 had vouchers" is a sparse-books signal, not
+   *  a partial-period one.  ISO date strings (YYYY-MM-DD). */
+  requestedPeriod?: { start: string; end: string; type: 'monthly' | 'quarterly' | 'yearly' | 'custom' };
 }
 
 export interface Insight {

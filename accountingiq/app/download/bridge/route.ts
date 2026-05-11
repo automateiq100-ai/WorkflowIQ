@@ -11,7 +11,11 @@ function resolveExePath(): string | null {
   const candidates = [
     path.join(process.cwd(), 'bridge', 'dist', FILE_NAME),
     path.join(process.cwd(), '..', 'bridge', 'dist', FILE_NAME),
-  ];
+    // Fallback: out-of-tree build location (used when OneDrive/Defender blocks
+    // writing new .exe files inside the synced repo folder).
+    process.env.ACCOUNTINGIQ_BRIDGE_EXE || '',
+    'C:\\Temp\\accountingiq-bridge.exe',
+  ].filter(Boolean);
   for (const p of candidates) {
     if (fs.existsSync(p)) return p;
   }

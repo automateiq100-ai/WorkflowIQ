@@ -6,6 +6,7 @@ import type {
   ParsedData, ChunkedStats, ViewId, ModuleId, Theme, MISSetup, AIResponse, ActiveCompany, FixTask,
 } from './types';
 import { MODULE_VIEWS } from './constants';
+import { loadOverrides, saveOverrides, type OverrideMap } from './ledger-overrides';
 
 // ── default state ──────────────────────────────────────────────────────────
 function emptyFile(): FileEntry {
@@ -83,7 +84,9 @@ export type Action =
   | { type: 'FIX_TASK_STATUS'; id: string; status: FixTask['status'] }
   | { type: 'FIX_TASKS_CLEAR' }
   | { type: 'AI_ANALYSIS_LOADING' }
-  | { type: 'AI_ANALYSIS_ERROR'; error: string };
+  | { type: 'AI_ANALYSIS_ERROR'; error: string }
+  | { type: 'LEDGER_OVERRIDES_SET'; overrides: OverrideMap }
+  | { type: 'REQUESTED_PERIOD_SET'; period: { start: string; end: string; type: 'monthly' | 'quarterly' | 'yearly' | 'custom' } };
 
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
@@ -125,19 +128,41 @@ function reducer(state: AppState, action: Action): AppState {
     case 'UPLOAD_PROGRESS':
       return { ...state, uploadProgress: action.message };
 
-    case 'ANALYSIS_DONE':
+    case 'ANALYSIS_DONE': {
+      // Route the user post-analysis based on whether they've ever set up
+      // the classification master for this company:
+      //
+      //   • No overrides yet  → take them to Master Setup so they discover
+      //     the surface, can review the auto-classification, bulk-confirm
+      //     the high-confidence rows, and apply an industry template.
+      //   • Already-configured master  → take them straight to Dashboard
+      //     since they already know what Master Setup is and just want to
+      //     see the recomputed numbers.
+      //
+      // We only redirect when the user is currently on the Upload view
+      // (the natural "I just clicked Run Analysis" surface).  If they
+      // triggered a re-run from elsewhere (e.g. Master Setup itself, the
+      // background debounce), we don't yank them to a different tab.
+      const overrideCount = state.ledgerOverrides?.size ?? 0;
+      const nextView: ViewId =
+        state.currentView !== 'upload'
+          ? state.currentView
+          : overrideCount === 0
+            ? 'master-setup'
+            : 'dashboard';
       return {
         ...state,
         results: action.results,
         parsedData: action.parsedData,
         analysed: true,
         uploadProgress: null,
-        currentView: state.currentView === 'upload' ? 'dashboard' : state.currentView,
+        currentView: nextView,
         // Persist computed DayBook stats for small files (< 10 MB chunk threshold)
         files: action.dbStats && !state.files.daybook.chunkedStats
           ? { ...state.files, daybook: { ...state.files.daybook, chunkedStats: action.dbStats } }
           : state.files,
       };
+    }
 
     case 'FILTERS_UPDATED':
       return { ...state, filters: action.filters, results: null, analysed: false };
@@ -165,6 +190,10 @@ function reducer(state: AppState, action: Action): AppState {
         ...state,
         currentCompany: action.company,
         filters: action.filters,
+        // Hydrate per-company classification overrides from localStorage so the
+        // master config the user maintained for this company is honoured the
+        // next time analysis runs.
+        ledgerOverrides: loadOverrides(action.company.id),
         files: initialFiles(),
         results: null,
         parsedData: {},
@@ -177,6 +206,17 @@ function reducer(state: AppState, action: Action): AppState {
         aiAnalysisError: null,
         currentView: 'company-dashboard',
       };
+
+    case 'LEDGER_OVERRIDES_SET':
+      // Persist alongside state update so a refresh / re-pull never loses
+      // the user's master config.  Storage call is sync but failure-safe.
+      if (state.currentCompany?.id) {
+        saveOverrides(state.currentCompany.id, action.overrides);
+      }
+      return { ...state, ledgerOverrides: action.overrides };
+
+    case 'REQUESTED_PERIOD_SET':
+      return { ...state, requestedPeriod: action.period };
 
     case 'COMPANY_DESELECTED':
       return {

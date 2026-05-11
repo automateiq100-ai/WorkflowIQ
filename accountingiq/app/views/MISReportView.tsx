@@ -194,10 +194,8 @@ const BOOK_CLOSURE = [
     phase: 'Phase 6: AccountingIQ Validation Gates',
     deadline: 'Auto-checked on upload',
     items: [
-      { id: 'BC6_1', text: 'Trial Balance balances (Dr = Cr) → Check D1', critical: true, type: 'Auto-verify' },
       { id: 'BC6_2', text: 'No Suspense ledger balances outstanding → Check B1', critical: true, type: 'Auto-verify' },
       { id: 'BC6_3', text: 'P&L net profit = Balance Sheet retained earnings → Check D2', critical: true, type: 'Auto-verify' },
-      { id: 'BC6_4', text: 'DayBook ↔ Trial Balance totals reconcile → Check H1', critical: false, type: 'Auto-verify' },
       { id: 'BC6_5', text: 'AccountingIQ Step 1 score ≥ 50 (below 50 = books too unreliable for MIS)', critical: true, type: 'Auto-verify' },
     ]
   },
