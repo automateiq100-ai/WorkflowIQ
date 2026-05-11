@@ -2,13 +2,14 @@
 
 import { XMLParser } from 'fast-xml-parser';
 import type {
-  TBLedger, TBFullRow, ParsedData, ChunkedStats,
+  TBLedger, TBFullRow, ParsedData, ChunkedStats, VoucherFlag,
   MasterEntry, MasterItemType, FinancialNode, FinancialNodeType,
   ParsedStatement, FlatFinancialRow,
 } from './types';
 import { classifyLedger, type BSHierarchyMap } from './tally-groups';
 import { classifyVoucherType, type SemanticVoucherType } from './tally-voucher-types';
 import type { OverrideMap } from './ledger-overrides';
+import { makeDupKey } from './voucher-filters';
 
 // ── XML helpers ──────────────────────────────────────────────────────────
 
@@ -175,8 +176,76 @@ function collectOrderedElements(nodes: OrderedXmlNode[], tag: string, out: Order
   return out;
 }
 
-function normalizeMasterKey(name: string): string {
+export function normalizeMasterKey(name: string): string {
   return decodeEntities(name).trim().toLowerCase();
+}
+
+/** True for Tally TB rows that are computed P&L carry-forwards rather
+ *  than real ledgers — "Profit & Loss A/c" / "Net Profit" / etc.  Every
+ *  income/expense ledger that built this row is already present in the
+ *  TB, so including it would double-count in totals and surface as
+ *  "Unknown" in the categorisation view (the classifier has no group
+ *  to walk).  Centralised so every TB parser path applies the same
+ *  filter. */
+export function isPLDerivedRow(name: string): boolean {
+  const n = name.toLowerCase().trim();
+  return (
+    n === 'profit & loss a/c' || n === 'profit and loss a/c' ||
+    n === 'profit & loss account' || n === 'profit and loss account' ||
+    n === 'p&l a/c' || n === 'p & l a/c' ||
+    n === 'net profit' || n === 'net loss' ||
+    n === 'profit & loss' || n === 'profit and loss'
+  );
+}
+
+/** Lenient line-amount finder.  Walks every <DSPDISPNAME> in the XML and
+ *  pairs it with the nearest following <BSAMT>/<PLAMT> block (within ~600
+ *  chars), returning the signed amount for the first line whose name
+ *  matches one of the patterns.  Used as a fallback when the structured
+ *  P&L / BS parsers miss a line because Tally emitted extra metadata
+ *  between DSPACCNAME and BSAMT/PLAMT that the strict tokeniser rejects. */
+export function findAmountByLineName(xml: string, namePatterns: RegExp[]): number {
+  const re = /<DSPDISPNAME>\s*([^<]+?)\s*<\/DSPDISPNAME>[\s\S]{0,600}?<(?:BSAMT|PLAMT)\b[^>]*>([\s\S]*?)<\/(?:BSAMT|PLAMT)>/gi;
+  let m: RegExpExecArray | null;
+  let best = 0;
+  while ((m = re.exec(xml)) !== null) {
+    const name = decodeEntities(m[1].trim());
+    if (!namePatterns.some(p => p.test(name))) continue;
+    const block = m[2];
+    const amt = parseAmt(
+      xmlText(block, 'BSMAINAMT') ||
+      xmlText(block, 'BSSUBAMT')  ||
+      xmlText(block, 'PLSUBAMT'),
+    );
+    if (Math.abs(amt) > Math.abs(best)) best = amt;
+  }
+  return best;
+}
+
+/** Maximally-permissive fallback: search the raw XML for one of the given
+ *  textual labels (case-insensitive) and grab the nearest numeric value
+ *  inside a tag within ~500 chars after it.  Survives even unusual Tally
+ *  Prime export shapes where the structured parsers can't pair name and
+ *  amount via tag boundaries (e.g. derived rows like top-level "Closing
+ *  Stock" on the P&L Cr side, which doesn't appear in the Trial Balance
+ *  and may carry custom tag wrapping).
+ *
+ *  The "value pattern" looks for any tag whose content is a number, e.g.
+ *  `<BSMAINAMT>26111</BSMAINAMT>` or `<PLSUBAMT>-26111</PLSUBAMT>`.  We
+ *  scan the slice after the label and take the first non-zero hit. */
+export function findAmountNearText(xml: string, labels: RegExp[]): number {
+  for (const labelRe of labels) {
+    const labelMatch = labelRe.exec(xml);
+    if (!labelMatch) continue;
+    const slice = xml.slice(labelMatch.index, labelMatch.index + 500);
+    const valueRe = /<[A-Z][A-Z\d]*\b[^>]*>\s*(-?[\d,]+(?:\.\d+)?)\s*<\//g;
+    let vm: RegExpExecArray | null;
+    while ((vm = valueRe.exec(slice)) !== null) {
+      const n = parseAmt(vm[1]);
+      if (n !== 0) return n;
+    }
+  }
+  return 0;
 }
 
 /** Extract amount — tries multiple tags in fallback order.
@@ -235,6 +304,15 @@ export function parseTrialBalance(
    *  literal patterns ("closing stock", "stock-in-trade") miss the
    *  user's specific naming (e.g. "Inventory", "Raw Material Stock"). */
   tbStock: number;
+  /** Gross cash/bank period turnover from the TB.  0 when the TB lacks
+   *  period movement columns — H4 then falls back to net-movement
+   *  comparison or returns uncertain. */
+  tbCashBankMovement: number;
+  /** Signed net change in cash/bank balances over the period — sum of
+   *  (closing − opening) across every cash/bank/bank-od ledger.  The
+   *  bridge's custom TB collection always supplies opening + closing,
+   *  so this is populated even when the TB lacks gross Dr/Cr columns. */
+  tbCashBankNetMovement: number;
   pfLedgerFound: boolean;
   salesLedgersNoRate: number;
   gstDiffPct: number;
@@ -254,9 +332,17 @@ export function parseTrialBalance(
     if (!name || name === 'undefined') continue;
     // Skip GROUP-type entries — they are rollup rows; including them double-counts children in D1/H2/H3
     if (masterMap.get(normalizeMasterKey(name))?.type === 'group') continue;
+    if (isPLDerivedRow(name)) continue;
     const closing = readTBClosing(infoBlock);
     // Bug 1 fix: preserve sign. Dr = positive, Cr = negative in Tally TB convention
-    tbLedgers.push({ name, nl: name.toLowerCase(), closing, dr: closing >= 0 });
+    const movements = readTBMovements(infoBlock);
+    const hasMovements = movements.debit !== 0 || movements.credit !== 0;
+    const opening = readTBOpening(infoBlock);
+    tbLedgers.push({
+      name, nl: name.toLowerCase(), closing, dr: closing >= 0,
+      ...(hasMovements ? { movements } : {}),
+      ...(opening !== 0 ? { opening } : {}),
+    });
   }
 
   // Fallback: flat DSPDISPNAME + DSPCLAMTA zip (used when blocks aren't paired above)
@@ -268,6 +354,7 @@ export function parseTrialBalance(
       const name = names[i];
       if (!name || name === 'undefined') continue;
       if (masterMap.get(normalizeMasterKey(name))?.type === 'group') continue;
+      if (isPLDerivedRow(name)) continue;
       const closing = parseAmt(amounts[i]);
       tbLedgers.push({ name, nl: name.toLowerCase(), closing, dr: closing >= 0 });
     }
@@ -288,22 +375,32 @@ export function parseTrialBalance(
       const name = names[i];
       if (!name || name === 'undefined') continue;
       if (masterMap.get(normalizeMasterKey(name))?.type === 'group') continue;
+      if (isPLDerivedRow(name)) continue;
       const closing = parseAmt(drCol[i]) + parseAmt(crCol[i]);
       tbLedgers.push({ name, nl: name.toLowerCase(), closing, dr: closing >= 0 });
     }
   }
 
-  // Classic import-format fallback (LEDGER blocks)
+  // Classic import-format fallback (LEDGER blocks) — also the shape the
+  // bridge's custom TDL TB collection emits.  The Ledger name is in the
+  // opening tag's NAME attribute (Tally's collection convention),
+  // PARENT / OPENINGBALANCE / CLOSINGBALANCE come as child tags.
   if (tbLedgers.length === 0) {
-    const ledgerRe = /<LEDGER\b[^>]*>([\s\S]*?)<\/LEDGER>/gi;
+    const ledgerRe = /<LEDGER\b([^>]*)>([\s\S]*?)<\/LEDGER>/gi;
     while ((m = ledgerRe.exec(xml)) !== null) {
-      const block = m[1];
-      const name = xmlText(block, 'NAME') || xmlText(block, 'LEDGERNAME');
+      const attrs = m[1];
+      const block = m[2];
+      const attrName = /\bNAME="([^"]+)"/i.exec(attrs)?.[1] ?? '';
+      const name = decodeEntities(attrName) || xmlText(block, 'NAME') || xmlText(block, 'LEDGERNAME');
       if (!name || name === 'undefined') continue;
       if (masterMap.get(normalizeMasterKey(name))?.type === 'group') continue;
-      const closingStr = xmlText(block, 'CLOSINGBALANCE') || xmlText(block, 'CLOSINGBAL');
-      const closing = parseAmt(closingStr);
-      tbLedgers.push({ name, nl: name.toLowerCase(), closing, dr: closing >= 0 });
+      if (isPLDerivedRow(name)) continue;
+      const closing = parseAmt(xmlText(block, 'CLOSINGBALANCE') || xmlText(block, 'CLOSINGBAL'));
+      const opening = parseAmt(xmlText(block, 'OPENINGBALANCE') || xmlText(block, 'OPENINGBAL'));
+      tbLedgers.push({
+        name, nl: name.toLowerCase(), closing, dr: closing >= 0,
+        ...(opening !== 0 ? { opening } : {}),
+      });
     }
   }
 
@@ -323,6 +420,8 @@ export function parseTrialBalance(
   let pfLedgerFound = false;
   let tbSales = 0;
   let tbPurch = 0;
+  let tbCashBankMovement = 0;
+  let tbCashBankNetMovement = 0;
 
   // Single classification pass over every TB ledger.  The catalog in
   // tally-groups.ts walks the master parent chain (high confidence) and
@@ -341,9 +440,19 @@ export function parseTrialBalance(
     const n = l.nl;
     const cls = classifyLedger(l.name, masterMap, overrides, bsHierarchy);
 
-    // Suspense / miscellaneous balances — surface every one for the
-    // critical-flag panel (engine reports them by name).
-    if (cls.category === 'suspense' || /\bsuspense\b|\bmiscellaneous\b|\bmisc\b/.test(n)) {
+    // Suspense / miscellaneous balances with NON-ZERO closing — surface
+    // every one for the critical-flag panel (engine reports them by name).
+    //
+    // The regex deliberately matches only `\bsuspense\b` and
+    // `\bmiscellaneous\b` — the previous `\bmisc\b` token over-matched
+    // legitimate expense/income ledgers like "Misc Expense" / "Misc
+    // Income" that aren't suspense accounts at all.  Zero-balance
+    // ledgers are skipped because a Suspense A/c with no balance isn't
+    // a problem — only ones still holding unallocated amounts are.
+    if (
+      l.closing !== 0 &&
+      (cls.category === 'suspense' || /\bsuspense\b|\bmiscellaneous\b/.test(n))
+    ) {
       suspenseCount++;
       suspenseLedgers.push({ name: l.name, amount: l.closing });
     }
@@ -356,6 +465,23 @@ export function parseTrialBalance(
     if (cls.category === 'cash')                                 cashFound = true;
     if (cls.category === 'debtor')                               debtorFound = true;
     if (cls.category === 'creditor')                             creditorFound = true;
+
+    // H4 reconciliation: sum gross period turnover (Dr + Cr) for every
+    // cash / bank ledger.  l.movements is only present when the TB export
+    // is a "TB with transactions" report; closing-balance-only exports
+    // leave it undefined and H4 falls back to the net-movement check.
+    if (cls.category === 'cash' || cls.category === 'bank' || cls.category === 'bank-od') {
+      if (l.movements) {
+        tbCashBankMovement += l.movements.debit + l.movements.credit;
+      }
+      // Net period movement = closing − opening (signed; +ve = balance
+      // grew, −ve = balance shrank).  Always derivable when opening is
+      // present, which the bridge's custom TB collection always supplies.
+      if (l.opening !== undefined) {
+        tbCashBankNetMovement += l.closing - l.opening;
+      }
+    }
+
 
     // Aggregations for cross-statement reconciliation.
     if (cls.category === 'sales')    tbSales += Math.abs(l.closing);
@@ -405,7 +531,7 @@ export function parseTrialBalance(
   return {
     tbLedgers, suspenseCount, dupPairs, capFound, bankFound, cashFound,
     debtorFound, creditorFound, hasOpeningBal, tbTotal, tbSales, tbPurch,
-    outputGSTAmt, inputITCAmt, tdsLedgerFound, tdsPayableAmt, tbStock, pfLedgerFound,
+    outputGSTAmt, inputITCAmt, tdsLedgerFound, tdsPayableAmt, tbStock, tbCashBankMovement, tbCashBankNetMovement, pfLedgerFound,
     salesLedgersNoRate: 0,
     gstDiffPct: 0,
     suspenseLedgers,
@@ -436,6 +562,7 @@ export function parseTBFull(
     const infoBlock = m[2];
     const name = xmlText(nameBlock, 'DSPDISPNAME');
     if (!name || name === 'undefined') continue;
+    if (isPLDerivedRow(name)) continue;
     const masterEntry = masterMap.get(normalizeMasterKey(name));
     const mov = readTBMovements(infoBlock);
     rows.push({
@@ -458,6 +585,7 @@ export function parseTBFull(
   for (let i = 0; i < minLen; i++) {
     const name = names[i];
     if (!name || name === 'undefined') continue;
+    if (isPLDerivedRow(name)) continue;
     const masterEntry = masterMap.get(normalizeMasterKey(name));
     rows.push({
       name,
@@ -478,6 +606,7 @@ export function parseTBFull(
   for (let i = 0; i < colLen; i++) {
     const name = names[i];
     if (!name || name === 'undefined') continue;
+    if (isPLDerivedRow(name)) continue;
     const masterEntry = masterMap.get(normalizeMasterKey(name));
     rows.push({
       name,
@@ -497,6 +626,7 @@ export function parseTBFull(
     const block = m[1];
     const name = xmlText(block, 'NAME') || xmlText(block, 'LEDGERNAME');
     if (!name || name === 'undefined') continue;
+    if (isPLDerivedRow(name)) continue;
     const masterEntry = masterMap.get(normalizeMasterKey(name));
     const opening = parseAmt(xmlText(block, 'OPENINGBALANCE') || xmlText(block, 'OPENINGBAL'));
     const closing = parseAmt(xmlText(block, 'CLOSINGBALANCE') || xmlText(block, 'CLOSINGBAL'));
@@ -652,6 +782,7 @@ export function parsePandL(xml: string): {
   depFound: boolean;
   depAmt: number;
   openingStock: number;
+  plClosingStock: number;
   plSections: PLSection[];
 } {
   const xmlLower = xml.toLowerCase();
@@ -691,6 +822,13 @@ export function parsePandL(xml: string): {
   let expenses = 0;
   let depAmt = 0;
   let openingStock = 0;
+  // Tally usually emits "Less: Closing Stock" as a Dr-side child (its
+  // BSSUBAMT is positive in P&L XML even though it reduces Cost of
+  // Sales).  We capture the absolute value so the engine can compare
+  // against the BS-side stock balance — and detect the common error
+  // where the user wrote the P&L adjustment but never created the BS
+  // counterpart ledger.
+  let plClosingStock = 0;
 
   for (const sec of plSections) {
     const nl = sec.name.toLowerCase();
@@ -716,9 +854,22 @@ export function parsePandL(xml: string): {
         otherIncome += sec.total;
       }
     }
-    // Opening stock from children
+    // Opening + Closing stock from children — both appear on the P&L
+    // as adjustments to Cost of Sales / Purchases.
     for (const ch of sec.children) {
-      if (ch.name.toLowerCase().includes('opening stock')) openingStock += Math.abs(ch.amount);
+      const cn = ch.name.toLowerCase();
+      if (cn.includes('opening stock')) openingStock += Math.abs(ch.amount);
+      if (cn.includes('closing stock') || cn.includes('stock-in-trade') || cn.includes('stock in trade')) {
+        plClosingStock += Math.abs(ch.amount);
+      }
+    }
+    // Sometimes Tally emits "Closing Stock" as its own GROUP (not a
+    // child) under Cost of Sales / Manufacturing — pick that up too.
+    if (
+      nl.includes('closing stock') ||
+      nl.includes('stock-in-trade') || nl.includes('stock in trade')
+    ) {
+      plClosingStock += absTotal;
     }
   }
 
@@ -748,6 +899,39 @@ export function parsePandL(xml: string): {
     }
   }
 
+  // Last-resort closing-stock catch — if section/child walks above
+  // missed it (Tally emits extra metadata between DSPACCNAME and PLAMT
+  // on some configs, which the strict tokeniser skips), scan the whole
+  // P&L XML for any line whose name reads as closing stock.
+  if (plClosingStock === 0) {
+    const found = findAmountByLineName(xml, [
+      /\b(less[\s:]+)?closing\s+stock\b/i,
+      /\bstock[-\s]?in[-\s]?trade\b/i,
+    ]);
+    if (found !== 0) plClosingStock = Math.abs(found);
+  }
+  // Even more permissive fallback — Tally Prime EDU exports derived
+  // rows like "Closing Stock" on the P&L Cr side with non-standard tag
+  // wrapping that the DSPDISPNAME→PLAMT pairing can miss.  Scan the
+  // raw XML for the label and pick up the first numeric tag after it.
+  if (plClosingStock === 0) {
+    const direct = findAmountNearText(xml, [
+      /Closing\s+Stock/i,
+      /Stock[-\s]?in[-\s]?Trade/i,
+    ]);
+    if (direct !== 0) plClosingStock = Math.abs(direct);
+  }
+  // Final fallback: Tally-specific direct tags.
+  if (plClosingStock === 0) {
+    const direct = parseAmt(
+      xmlText(xml, 'CLOSINGSTOCK') ||
+      xmlText(xml, 'STOCKINTRADE') ||
+      xmlText(xml, 'CLSTOCKVALUE') ||
+      xmlText(xml, 'CLOSINGSTOCKVALUE'),
+    );
+    if (Math.abs(direct) > 0) plClosingStock = Math.abs(direct);
+  }
+
   const revenue = directRevenue + otherIncome;
   const totalExpenses = costOfMaterials + expenses;
   const netProfit = parseAmt(xmlText(xml, 'NETPROFIT') || xmlText(xml, 'PROFITLOSS') || xmlText(xml, 'NETLOSS')) || (revenue - totalExpenses);
@@ -759,11 +943,34 @@ export function parsePandL(xml: string): {
     depAmt = Math.abs(parseAmt(xmlText(slice, 'BSSUBAMT') || xmlText(slice, 'AMOUNT')));
   }
 
-  return { revenue, directRevenue, otherIncome, costOfMaterials, expenses: totalExpenses, netProfit, depFound, depAmt, openingStock, plSections };
+  return { revenue, directRevenue, otherIncome, costOfMaterials, expenses: totalExpenses, netProfit, depFound, depAmt, openingStock, plClosingStock, plSections };
 }
 
 
 // ── Balance Sheet parser ──────────────────────────────────────────────────
+
+/** Substring/exact match for BS-line names that almost certainly represent
+ *  closing stock.  Covers Tally's canonical groups ("Stock-in-Hand",
+ *  "Stock-in-Trade", "Closing Stock") plus the common custom names
+ *  ("Goods", "Finished Goods", "Raw Material", "Merchandise", "Inventory",
+ *  "Work-in-Progress").  Used both at the section-header level and when
+ *  scanning sub-items under Current Assets — anyone who named their stock
+ *  ledger something unusual would otherwise slip past D5. */
+function isStockLikeName(name: string): boolean {
+  const n = name.toLowerCase();
+  return (
+    n.includes('closing stock') ||
+    n.includes('stock-in-trade') || n.includes('stock in trade') ||
+    n.includes('stock-in-hand')  || n.includes('stock in hand') ||
+    n === 'stock' || n.endsWith(' stock') || n.startsWith('stock ') ||
+    n === 'inventory' || n.includes('inventories') || n.includes('inventory') ||
+    n === 'goods' || n.endsWith(' goods') ||
+    n.includes('finished goods') || n.includes('raw material') ||
+    n.includes('semi-finished') || n.includes('semi finished') ||
+    n.includes('work-in-progress') || n.includes('work in progress') || n === 'wip' ||
+    n.includes('merchandise')
+  );
+}
 
 /**
  * Bug 1 fix: Preserve signs on all BS amounts.
@@ -784,11 +991,17 @@ export function parseBSheet(xml: string): {
   bsCashBankTotal: number;
   bsNetProfit: number | null;
   otherCurrentAssets: Array<{ name: string; amount: number }>;
+  /** Suspense / miscellaneous rows seen on the BS — group rollups
+   *  like "Suspense A/c" that parseTrialBalance skips (because the
+   *  master classifies them as TYPE=group) still surface here so the
+   *  engine can flag them.  Zero balances are excluded. */
+  bsSuspenseLedgers: Array<{ name: string; amount: number }>;
 } {
   let ca = 0, cl = 0, bankBal = 0, debtorBal = 0, creditorBal = 0;
   let closingStock = 0, fixedAssets = 0, cashBal = 0;
   let bsNetProfit: number | null = null;
   const otherCurrentAssets: Array<{ name: string; amount: number }> = [];
+  const bsSuspenseLedgers: Array<{ name: string; amount: number }> = [];
   let inCurrentAssets = false;
 
   // Tally display-report format: BSNAME blocks with DSPDISPNAME + BSAMT(BSSUBAMT/BSMAINAMT)
@@ -824,21 +1037,33 @@ export function parseBSheet(xml: string): {
       debtorBal += Math.abs(amt);
     } else if (name.includes('sundry creditor') || name.includes('trade payable') || name.includes('creditor')) {
       creditorBal += amt;
-    } else if (
-      name.includes('closing stock') ||
-      name.includes('stock-in-trade') || name.includes('stock in trade') ||
-      name.includes('stock-in-hand')  || name.includes('stock in hand') ||
-      name === 'stock' || name === 'inventory' || name.includes('inventories')
-    ) {
+    } else if (isStockLikeName(name)) {
       // Capture the largest non-zero match so a leaf-level "Stock" doesn't
       // overwrite a group-level rollup like "Stock-in-Hand" with a more
       // complete total.
       if (Math.abs(amt) > Math.abs(closingStock)) closingStock = amt;
     } else if (name === 'cash' || name.includes('cash in hand') || name.includes('cash-in-hand')) {
       cashBal += amt;
+    } else if (/\bsuspense\b|\bmiscellaneous\b/.test(name) && amt !== 0) {
+      // BS-side suspense detection.  Catches the "Suspense A/c" group
+      // rollup (and similar) which parseTrialBalance skips because the
+      // master file classifies them as TYPE=group.  We exclude zero
+      // balances — a Suspense A/c with no balance isn't a problem.
+      bsSuspenseLedgers.push({ name: rawName, amount: amt });
     } else if (inCurrentAssets && subAmt && Math.abs(parseAmt(subAmt)) > 0) {
-      // Uncategorized sub-item under Current Assets (e.g. Input GST, Advance Tax, Prepaid)
-      otherCurrentAssets.push({ name: rawName, amount: Math.abs(parseAmt(subAmt)) });
+      const subAmtVal = parseAmt(subAmt);
+      // A Current-Assets sub-item whose name *looks* like stock — covers
+      // companies that named their stock ledger "Goods", "Finished Goods",
+      // "Raw Material", "Inventory Items" etc. and grouped it directly
+      // under Current Assets without using a Stock-in-Hand parent.  These
+      // would otherwise slip through as "otherCurrentAssets" and the D5
+      // check would falsely report no closing stock.
+      if (isStockLikeName(name)) {
+        if (Math.abs(subAmtVal) > Math.abs(closingStock)) closingStock = subAmtVal;
+      } else {
+        // Uncategorized sub-item under Current Assets (e.g. Input GST, Advance Tax, Prepaid)
+        otherCurrentAssets.push({ name: rawName, amount: Math.abs(subAmtVal) });
+      }
     }
   }
 
@@ -854,8 +1079,37 @@ export function parseBSheet(xml: string): {
     cashBal     = parseAmt(xmlText(xml, 'CASHINHAND') || xmlText(xml, 'CASH'));
   }
 
+  // Last-resort closing-stock catch — Tally's BS XML sometimes lists
+  // "Closing Stock" / "Stock-in-Hand" as a sub-item whose <BSAMT> block
+  // sits more than the strict tokeniser allows away from the
+  // <DSPACCNAME>.  Scan with a more forgiving regex over the whole BS
+  // XML before giving up.
+  if (closingStock === 0) {
+    const found = findAmountByLineName(xml, [
+      /\bclosing\s+stock\b/i,
+      /\bstock[-\s]?in[-\s]?hand\b/i,
+      /\bstock[-\s]?in[-\s]?trade\b/i,
+      /^\s*(finished\s+)?goods\b/i,
+      /\bmerchandise\b/i,
+      /\binventor(?:y|ies)\b/i,
+      /\bwork[-\s]?in[-\s]?progress\b/i,
+    ]);
+    if (found !== 0) closingStock = found;
+  }
+  // Most permissive fallback — search the raw BS XML for the label
+  // and pick the next numeric value (handles Tally Prime exports with
+  // non-standard tag wrapping around the stock line).
+  if (closingStock === 0) {
+    const direct = findAmountNearText(xml, [
+      /Closing\s+Stock/i,
+      /Stock[-\s]?in[-\s]?Hand/i,
+      /Stock[-\s]?in[-\s]?Trade/i,
+    ]);
+    if (direct !== 0) closingStock = direct;
+  }
+
   const bsCashBankTotal = bankBal + cashBal;
-  return { ca, cl, bankBal, debtorBal, creditorBal, closingStock, fixedAssets, bsCashBankTotal, bsNetProfit, otherCurrentAssets };
+  return { ca, cl, bankBal, debtorBal, creditorBal, closingStock, fixedAssets, bsCashBankTotal, bsNetProfit, otherCurrentAssets, bsSuspenseLedgers };
 }
 
 // ── Cash Flow Statement parser ────────────────────────────────────────────
@@ -988,7 +1242,7 @@ export function parseDayBook(xml: string, fyStart: Date, fyEnd: Date): ChunkedSt
     cashOver10k: 0, roundCount: 0, dupVnoMap: {},
     monthCounts: {}, dateSet: [], custMap: {}, vendMap: {},
     totalDebit: 0, totalCredit: 0, salesVoucherTotal: 0,
-    purchVoucherTotal: 0, cashBankNetMovement: 0, paymentTotal: 0,
+    purchVoucherTotal: 0, cashBankNetMovement: 0, receiptTotal: 0, paymentTotal: 0, contraTotal: 0,
     taxVoucherTotal: 0, journalNetAmt: 0, outOfFY: 0,
     vouchers: [],
   };
@@ -1019,7 +1273,29 @@ export function processVoucher(
   const narration = xmlText(block, 'NARRATION');
   const vtypeRaw = xmlText(block, 'VOUCHERTYPENAME') || '';
   const vtype = vtypeRaw.toLowerCase();
-  const party = xmlText(block, 'PARTYLEDGERNAME');
+  // Party detection — Tally records the party in three different shapes
+  // depending on Tally version, voucher source (manual / import / GST-aware),
+  // and how the voucher was entered:
+  //   1. <PARTYLEDGERNAME> at voucher level  — the standard, most common
+  //   2. <PARTYNAME> at voucher level        — legacy / non-accounting voucher types
+  //   3. <ISPARTYLEDGER>Yes</ISPARTYLEDGER>  — inside one ALLLEDGERENTRIES.LIST
+  //      entry, with that entry's <LEDGERNAME> being the actual party.
+  //      Imported vouchers and some custom voucher classes leave the top-
+  //      level field empty but always mark the per-entry flag.
+  // Checking only #1 produced false-positive "missing party" flags on
+  // perfectly valid trade vouchers where #3 carries the party.
+  let party = xmlText(block, 'PARTYLEDGERNAME') || xmlText(block, 'PARTYNAME');
+  if (!party) {
+    const entryRe = /<ALLLEDGERENTRIES\.LIST\b[^>]*>([\s\S]*?)<\/ALLLEDGERENTRIES\.LIST>/gi;
+    let em: RegExpExecArray | null;
+    while ((em = entryRe.exec(block)) !== null) {
+      const entry = em[1];
+      if (/<ISPARTYLEDGER>\s*Yes\s*<\/ISPARTYLEDGER>/i.test(entry)) {
+        const candidate = xmlText(entry, 'LEDGERNAME');
+        if (candidate) { party = candidate; break; }
+      }
+    }
+  }
   const dateStr = xmlText(block, 'DATE');
   const amt = extractAmt(block);
 
@@ -1038,11 +1314,20 @@ export function processVoucher(
   const isJournal       = semantic === 'journal';
   const isContra        = semantic === 'contra';
 
-  if (!vno) stats.missingVno++;
+  // Per-voucher flags — kept in lockstep with the counter increments
+  // below so the UI can drill from "10 of 198 missing numbers" back to
+  // the actual 10 rows without re-running detection client-side.
+  const voucherFlags: VoucherFlag[] = [];
+
+  if (!vno) { stats.missingVno++; voucherFlags.push('missingVno'); }
   if (narration) stats.narrated++;
 
   if (vno) {
-    stats.dupVnoMap[vno] = (stats.dupVnoMap[vno] || 0) + 1;
+    // Key on type+vno: Tally allows the same number across different
+    // voucher types (Sales/001 and Receipt/001 are independent series).
+    // Keying on vno alone wrongly flagged those legitimate collisions.
+    const dupKey = makeDupKey(vtype, vno);
+    stats.dupVnoMap[dupKey] = (stats.dupVnoMap[dupKey] || 0) + 1;
   }
 
   // A party (debtor/creditor/cash/bank) is expected for sales, purchase,
@@ -1050,9 +1335,10 @@ export function processVoucher(
   // vouchers don't need one.
   if (!party && (isSales || isSalesReturn || isPurchase || isPurchaseReturn || isReceipt || isPayment)) {
     stats.missingParty++;
+    voucherFlags.push('missingParty');
   }
 
-  if (amt === 0) stats.zeroAmt++;
+  if (amt === 0) { stats.zeroAmt++; voucherFlags.push('zeroAmt'); }
 
   if (amt > 100_000 && narration) stats.highValueNarrated++;
   if (amt > 100_000) stats.highValueCount++;
@@ -1066,7 +1352,7 @@ export function processVoucher(
   // type *name* contains "cash" (Tally's "Cash Payment", "Cash Receipt").
   // Kept on raw substring because it's a heuristic about ledger choice,
   // not voucher semantics.
-  if (vtype.includes('cash') && amt > 10_000) stats.cashOver10k++;
+  if (vtype.includes('cash') && amt > 10_000) { stats.cashOver10k++; voucherFlags.push('cashOver10k'); }
 
   // Wrong-type voucher detection (heuristic).  Gathers every ledger name in
   // this voucher (party + ALLLEDGERENTRIES.LIST > LEDGERNAME) and applies
@@ -1094,8 +1380,10 @@ export function processVoucher(
   // the substring `vtype.includes('journal')` test.
   if (isJournal && touchesBankCash) {
     stats.wrongType++;
+    voucherFlags.push('wrongType');
   } else if ((isReceipt || isPayment) && !touchesBankCash && ledgerNames.length > 0) {
     stats.wrongType++;
+    voucherFlags.push('wrongType');
   }
 
   if (amt > 0 && amt % 1000 === 0) stats.roundCount++;
@@ -1118,10 +1406,20 @@ export function processVoucher(
   if (isReceipt || isPayment || isContra || vtype.includes('cash') || vtype.includes('bank')) {
     stats.cashBankNetMovement += amt;
   }
+  // Receipt-only volume — paired with paymentTotal below.  H4 uses
+  // (receipts − payments) as the net change in cash/bank from the
+  // DayBook to compare against the TB's net period movement.
+  if (isReceipt) stats.receiptTotal += amt;
   // Payment-only volume — used as the denominator in E6's TDS-as-%-of-
   // payments check.  Excludes Receipts (money in) and Contras (internal
   // bank↔cash) since neither attracts TDS.
   if (isPayment) stats.paymentTotal += amt;
+
+  // Contra-only volume — every contra touches TWO cash/bank ledgers,
+  // so it lands twice in the TB's cash/bank Dr+Cr turnover but only
+  // once in cashBankNetMovement above.  H4 adds this back to the DB
+  // side to keep both totals comparable.
+  if (isContra) stats.contraTotal += amt;
 
   stats.totalDebit += amt;
   stats.totalCredit += amt;
@@ -1129,7 +1427,7 @@ export function processVoucher(
   if (dateStr) {
     const dt = parseTallyDate(dateStr);
     if (dt) {
-      if (dt < fyStart || dt > fyEnd) stats.outOfFY++;
+      if (dt < fyStart || dt > fyEnd) { stats.outOfFY++; voucherFlags.push('outOfFY'); }
       const monthKey = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`;
       stats.monthCounts[monthKey] = (stats.monthCounts[monthKey] || 0) + 1;
       dateSet.add(dateStr);
@@ -1139,6 +1437,38 @@ export function processVoucher(
   // Push the actual transaction detail (limit to 50000 to prevent crashing on massive DBs)
   if (!stats.vouchers) stats.vouchers = [];
   if (stats.vouchers.length < 50000) {
+    // Per-leg snapshot of ALLLEDGERENTRIES.LIST.  Captures both ledger
+    // name (lowercased) and Dr/Cr direction (ISDEEMEDPOSITIVE=Yes → Dr,
+    // anything else → Cr).  Powers two engine post-passes:
+    //   • missingParty rescue scans names looking for a debtor/creditor leg
+    //   • wrong-type classification uses both category and direction to
+    //     detect e.g. a Payment voucher with the bank leg actually Dr
+    //     (money flowed INTO the bank) — that's structurally a Receipt.
+    // Falls back to AMOUNT sign (negative = Cr) when ISDEEMEDPOSITIVE is
+    // absent in the entry — older Tally exports sometimes skip the flag.
+    const legs: Array<{ name: string; dr: boolean }> = [];
+    const seenLegs = new Set<string>();
+    const entryBlockRe = /<ALLLEDGERENTRIES\.LIST\b[^>]*>([\s\S]*?)<\/ALLLEDGERENTRIES\.LIST>/gi;
+    let lm: RegExpExecArray | null;
+    while ((lm = entryBlockRe.exec(block)) !== null) {
+      const entry = lm[1];
+      const rawName = xmlText(entry, 'LEDGERNAME');
+      if (!rawName) continue;
+      const name = rawName.toLowerCase();
+      let dr: boolean;
+      const flag = xmlText(entry, 'ISDEEMEDPOSITIVE');
+      if (flag) {
+        dr = /yes/i.test(flag);
+      } else {
+        const amtTxt = xmlText(entry, 'AMOUNT');
+        const amtN = parseFloat(amtTxt);
+        dr = !isNaN(amtN) && amtN >= 0;
+      }
+      const key = `${name}${dr ? 'd' : 'c'}`;
+      if (seenLegs.has(key)) continue;
+      seenLegs.add(key);
+      legs.push({ name, dr });
+    }
     stats.vouchers.push({
       date: dateStr || '',
       vno: vno || '',
@@ -1146,6 +1476,8 @@ export function processVoucher(
       party: party || '',
       amount: amt,
       narration: narration || '',
+      ...(voucherFlags.length ? { flags: voucherFlags } : {}),
+      ...(legs.length ? { legs } : {}),
     });
   }
 }

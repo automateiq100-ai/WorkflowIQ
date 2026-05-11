@@ -159,6 +159,59 @@ function buildDayBookCollectionRequest(company: string, period: ReportPeriod): s
 </ENVELOPE>`;
 }
 
+/**
+ * Custom TDL collection for the Trial Balance — bypasses Tally's built-in
+ * "Trial Balance" REPORT entirely.
+ *
+ * Why: the built-in TB only emits period Dr/Cr movement columns when the
+ * F12 toggle "Show Transactions" is on, and the static-variable name that
+ * triggers that toggle differs across Tally Prime releases (we set every
+ * known candidate but no single set works on every install).  A custom
+ * Ledger collection sidesteps the toggle — Tally always emits NAME,
+ * PARENT, OPENINGBALANCE and CLOSINGBALANCE on a Ledger collection when
+ * SVFROMDATE / SVTODATE are set, regardless of any UI configuration.
+ *
+ * From OpeningBalance and ClosingBalance the engine derives net period
+ * movement per ledger (closing − opening), which is enough for H4's
+ * "DayBook cash/bank flow ≈ TB cash/bank movement" cross-check.  The
+ * parser's existing <LEDGER>-block fallback reads this shape natively.
+ */
+function buildTrialBalanceCollectionRequest(company: string, period: ReportPeriod): string {
+  const from = toTallyDate(period.start);
+  const to = toTallyDate(period.end);
+  return `<ENVELOPE>
+  <HEADER>
+    <VERSION>1</VERSION>
+    <TALLYREQUEST>Export</TALLYREQUEST>
+    <TYPE>Collection</TYPE>
+    <ID>WIQTrialBalance</ID>
+  </HEADER>
+  <BODY>
+    <DESC>
+      <STATICVARIABLES>
+        <SVCURRENTCOMPANY>${escapeXml(company)}</SVCURRENTCOMPANY>
+        <SVFROMDATE TYPE="Date">${from}</SVFROMDATE>
+        <SVTODATE TYPE="Date">${to}</SVTODATE>
+        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+      </STATICVARIABLES>
+      <TDL>
+        <TDLMESSAGE>
+          <COLLECTION NAME="WIQTrialBalance" ISMODIFY="No">
+            <TYPE>Ledger</TYPE>
+            <BELONGSTO>Yes</BELONGSTO>
+            <FETCH>NAME</FETCH>
+            <FETCH>PARENT</FETCH>
+            <FETCH>OPENINGBALANCE</FETCH>
+            <FETCH>CLOSINGBALANCE</FETCH>
+          </COLLECTION>
+        </TDLMESSAGE>
+      </TDL>
+    </DESC>
+  </BODY>
+</ENVELOPE>`;
+}
+
+
 export function buildReportRequest(
   kind: ReportKind,
   company: string,
@@ -168,6 +221,11 @@ export function buildReportRequest(
   // Voucher collection so the requested date range is actually honored.
   if (kind === 'daybook') {
     return buildDayBookCollectionRequest(company, period);
+  }
+  // Trial Balance: bypass the built-in report so we always get the
+  // period movement data H4 needs, without depending on F12 toggles.
+  if (kind === 'trialbal') {
+    return buildTrialBalanceCollectionRequest(company, period);
   }
   return exportEnvelope({
     reportName: REPORT_IDS[kind],

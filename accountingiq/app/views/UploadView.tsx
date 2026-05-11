@@ -165,10 +165,40 @@ function UploadScreen({
   const requiredLoaded = FILE_TIERS.required.every(k => files[k].hasContent);
 
   useEffect(() => {
-    try {
-      const raw = sessionStorage.getItem(TALLY_SESSION_KEY);
-      if (raw) setTallySession(JSON.parse(raw) as ConnectorSession);
-    } catch { /* ignore */ }
+    let cancelled = false;
+
+    function readLocal(): ConnectorSession | null {
+      try {
+        const raw = sessionStorage.getItem(TALLY_SESSION_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw) as Partial<ConnectorSession>;
+        if (!parsed || typeof parsed.bridgeId !== 'string' || !parsed.bridgeId) return null;
+        return parsed as ConnectorSession;
+      } catch { return null; }
+    }
+
+    async function refresh() {
+      const local = readLocal();
+      if (local) { if (!cancelled) setTallySession(local); return; }
+      try {
+        const r = await fetch('/api/tally/active-session');
+        if (cancelled || !r.ok) return;
+        const data = (await r.json()) as { session: ConnectorSession | null };
+        if (cancelled || !data.session) return;
+        sessionStorage.setItem(TALLY_SESSION_KEY, JSON.stringify(data.session));
+        setTallySession(data.session);
+      } catch { /* ignore — banner just stays in unpaired state */ }
+    }
+
+    refresh();
+    const onFocus = () => { refresh(); };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
   }, []);
 
   // Period selection

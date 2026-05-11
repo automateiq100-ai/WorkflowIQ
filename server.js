@@ -16,8 +16,15 @@ const next    = require('next');
 const express = require('express');
 const cors    = require('cors');
 
-const dev  = process.env.NODE_ENV !== 'production';
+// Default to production mode. Dev mode (Turbopack) is opt-in via NEXT_DEV=1
+// because this repo's host filesystem is too slow for Turbopack — it produces
+// truncated routes.d.ts artifacts that break compilation. Production mode uses
+// the prebuilt .next/ output and is stable + fast.
+const dev  = process.env.NEXT_DEV === '1';
 const port = parseInt(process.env.PORT) || 3000;
+// Keep NODE_ENV consistent with the mode we picked, so Next + downstream libs
+// behave predictably regardless of how the script was invoked.
+process.env.NODE_ENV = dev ? 'development' : 'production';
 
 // ResearchIQ Express sub-app (all routes exported from researchiq/server.js)
 const researchiqApp = require('./researchiq/server');
@@ -29,9 +36,6 @@ const accountingHandle = accountingiqApp.getRequestHandler();
 // Next.js app — PracticeIQ (basePath: /practiceiq)
 const practiceiqApp = next({ dev, dir: path.join(__dirname, 'practiceiq') });
 const practiceHandle = practiceiqApp.getRequestHandler();
-
-// Backwards-compat alias used in the rest of this file
-const handle = accountingHandle;
 
 Promise.all([
   accountingiqApp.prepare(),
@@ -53,7 +57,7 @@ Promise.all([
   server.all('/practiceiq/*splat', (req, res) => practiceHandle(req, res));
 
   // Everything else → AccountingIQ Next.js (portal, login, Tally XML tool)
-  server.all(/(.*)/, (req, res) => handle(req, res));
+  server.all(/(.*)/, (req, res) => accountingHandle(req, res));
 
   server.listen(port, () => {
     console.log(`\n🚀 WorkFlowIQ running on http://localhost:${port}`);

@@ -1,12 +1,13 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { getFirmContext } from '@/lib/practiceiq/auth';
 
 const DOCUMENTS_BACKEND_URL = process.env.DOCUMENTS_BACKEND_URL || 'http://localhost:8000';
 
 export async function POST(req: Request) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const ctx = await getFirmContext(supabase);
+  if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const body = await req.json().catch(() => ({}));
   const messages = body.messages;
@@ -22,7 +23,7 @@ export async function POST(req: Request) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Owner-User-Id': user.id,
+        'X-Firm-Id': ctx.firmId,
       },
       body: JSON.stringify({ client_id: clientId, messages }),
     });

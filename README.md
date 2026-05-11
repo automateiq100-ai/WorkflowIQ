@@ -9,6 +9,7 @@ This project is organized as an npm monorepo using workspaces:
 - `root`: Main Express server and shared dependencies.
 - `accountingiq/`: Next.js 16 frontend and accounting engine.
 - `researchiq/`: Express-based legal research API and engine.
+- `practiceiq/`: Next.js CA practice management tool, mounted at `/practiceiq`.
 
 ## Getting Started
 

@@ -1,13 +1,14 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { getFirmContext } from '@/lib/practiceiq/auth';
 
 const ALLOWED_STATUS = new Set(['received', 'verified', 'rejected', 'archived']);
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const ctx = await getFirmContext(supabase);
+  if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const body = await req.json().catch(() => ({}));
   const status = body.status as string | undefined;
@@ -19,7 +20,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
   const update: Record<string, unknown> = { status };
   if (status === 'verified') {
-    update.verified_by = user.id;
+    update.verified_by = ctx.userId;
     update.verified_at = new Date().toISOString();
     update.rejection_reason = null;
   } else if (status === 'rejected') {
@@ -32,7 +33,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     .from('practiceiq_documents')
     .update(update)
     .eq('id', id)
-    .eq('owner_user_id', user.id)
+    .eq('firm_id', ctx.firmId)
     .select()
     .single();
 
@@ -44,15 +45,15 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const ctx = await getFirmContext(supabase);
+  if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   // Soft delete only — file stays in storage; row stays in DB with deleted_at set.
   const { error } = await supabase
     .from('practiceiq_documents')
     .update({ deleted_at: new Date().toISOString() })
     .eq('id', id)
-    .eq('owner_user_id', user.id);
+    .eq('firm_id', ctx.firmId);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ ok: true });

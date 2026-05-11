@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { getFirmContext } from '@/lib/practiceiq/auth';
 
 type ChecklistRow = {
   id: string;
@@ -15,8 +16,8 @@ type FollowupRow = { client_id: string; doc_type: string; sent_at: string };
 
 export async function GET(req: Request) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const ctx = await getFirmContext(supabase);
+  if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const url = new URL(req.url);
   const statusFilter = url.searchParams.get('status') ?? 'pending';
@@ -25,7 +26,7 @@ export async function GET(req: Request) {
   const { data: clients, error: cErr } = await supabase
     .from('practiceiq_clients')
     .select('id, name, telegram_first_name')
-    .eq('owner_user_id', user.id);
+    .eq('firm_id', ctx.firmId);
   if (cErr) return NextResponse.json({ error: cErr.message }, { status: 500 });
 
   const clientIds = (clients as ClientRow[] | null ?? []).map(c => c.id);

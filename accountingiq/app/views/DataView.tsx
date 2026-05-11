@@ -5,6 +5,9 @@ import { useApp } from '@/lib/state';
 import type { TBLedger, TBFullRow, ParsedData, ChunkedStats, PLSection, Voucher, FinancialNode, ParsedStatement, MasterEntry } from '@/lib/types';
 import { classifyBSSide, parseMasterMap } from '@/lib/parser';
 import { classifyLedger, buildBSHierarchyMap, LEDGER_CATEGORY_OPTIONS, type ClassificationConfidence } from '@/lib/tally-groups';
+import { splitDupKey } from '@/lib/voucher-filters';
+import { classifyVoucherType } from '@/lib/tally-voucher-types';
+import VoucherDrillDown from '@/app/components/VoucherDrillDown';
 import AgentFixView from '@/app/views/AgentFixView';
 
 // ── Bill parser ────────────────────────────────────────────────────────────
@@ -1307,6 +1310,7 @@ function DayBookTab({ stats }: { stats: ChunkedStats | null }) {
   const [page, setPage] = useState(1);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterType, setFilterType] = useState('All');
+  const [drill, setDrill] = useState<{ title: string; vouchers: Voucher[] } | null>(null);
   const limit = 100;
 
   if (!stats) {
@@ -1323,38 +1327,153 @@ function DayBookTab({ stats }: { stats: ChunkedStats | null }) {
 
   const narrationPct = stats.totalVouchers > 0 ? (stats.narrated / stats.totalVouchers * 100) : 0;
   const hvNarPct = stats.highValueCount > 0 ? (stats.highValueNarrated / stats.highValueCount * 100) : 0;
+  const allVouchers = stats.vouchers ?? [];
 
-  const metrics: [string, string | number, string?][] = [
-    ['Total Vouchers', stats.totalVouchers.toLocaleString('en-IN'), 'var(--text1)'],
-    ['Narration Coverage', `${narrationPct.toFixed(1)}%`, narrationPct >= 80 ? 'var(--green)' : narrationPct >= 50 ? 'var(--amber)' : 'var(--red)'],
-    ['High Value Entries (>₹1L)', stats.highValueCount.toLocaleString('en-IN'), 'var(--text2)'],
-    ['High Value with Narration', `${hvNarPct.toFixed(1)}%`, hvNarPct >= 80 ? 'var(--green)' : 'var(--amber)'],
-    ['Missing Voucher Nos', stats.missingVno.toLocaleString('en-IN'), stats.missingVno > 0 ? 'var(--red)' : 'var(--green)'],
-    ['Zero Amount Vouchers', stats.zeroAmt.toLocaleString('en-IN'), stats.zeroAmt > 0 ? 'var(--amber)' : 'var(--green)'],
-    ['Journal Vouchers', stats.totalJournals.toLocaleString('en-IN'), 'var(--text2)'],
-    ['Cash Transactions >₹10k', stats.cashOver10k.toLocaleString('en-IN'), stats.cashOver10k > 0 ? 'var(--amber)' : 'var(--green)'],
-    ['Round Amount Vouchers', stats.roundCount.toLocaleString('en-IN'), 'var(--text2)'],
-    ['Entries Outside FY', stats.outOfFY.toLocaleString('en-IN'), stats.outOfFY > 0 ? 'var(--red)' : 'var(--green)'],
+  // Tile definitions — each tile carries the predicate used to filter
+  // dbStats.vouchers for its drill-down.  Percentage tiles click through
+  // to the *gap* (the vouchers NOT meeting the bar) because that's the
+  // user-actionable subset.  Filtering needs to be done with the actual
+  // voucher data so the predicate runs on each click; for tiles that
+  // have a corresponding parser-set flag (missingVno / zeroAmt / etc.)
+  // we use the flag for a single source of truth with the engine checks.
+  interface MetricTile {
+    label: string;
+    value: string;
+    color?: string;
+    /** Title shown at the top of the drill-down modal. */
+    drillTitle?: string;
+    /** Predicate over the full voucher list — undefined disables click. */
+    predicate?: (v: Voucher) => boolean;
+  }
+  const metrics: MetricTile[] = [
+    {
+      label: 'Total Vouchers',
+      value: stats.totalVouchers.toLocaleString('en-IN'),
+      color: 'var(--text1)',
+      drillTitle: 'All vouchers in DayBook',
+      predicate: () => true,
+    },
+    {
+      label: 'Narration Coverage',
+      value: `${narrationPct.toFixed(1)}%`,
+      color: narrationPct >= 80 ? 'var(--green)' : narrationPct >= 50 ? 'var(--amber)' : 'var(--red)',
+      // Click → the gap: vouchers without any narration.
+      drillTitle: 'Vouchers without narration',
+      predicate: v => !v.narration?.trim(),
+    },
+    {
+      label: 'High Value Entries (>₹1L)',
+      value: stats.highValueCount.toLocaleString('en-IN'),
+      color: 'var(--text2)',
+      drillTitle: 'High-value vouchers (>₹1,00,000)',
+      predicate: v => v.amount > 100_000,
+    },
+    {
+      label: 'High Value with Narration',
+      value: `${hvNarPct.toFixed(1)}%`,
+      color: hvNarPct >= 80 ? 'var(--green)' : 'var(--amber)',
+      // Click → the gap: high-value vouchers WITHOUT narration.
+      drillTitle: 'High-value vouchers missing narration',
+      predicate: v => v.amount > 100_000 && !v.narration?.trim(),
+    },
+    {
+      label: 'Missing Voucher Nos',
+      value: stats.missingVno.toLocaleString('en-IN'),
+      color: stats.missingVno > 0 ? 'var(--red)' : 'var(--green)',
+      drillTitle: 'Vouchers with missing voucher numbers',
+      predicate: v => v.flags?.includes('missingVno') ?? !v.vno,
+    },
+    {
+      label: 'Zero Amount Vouchers',
+      value: stats.zeroAmt.toLocaleString('en-IN'),
+      color: stats.zeroAmt > 0 ? 'var(--amber)' : 'var(--green)',
+      drillTitle: 'Zero-amount vouchers',
+      predicate: v => v.flags?.includes('zeroAmt') ?? v.amount === 0,
+    },
+    {
+      label: 'Journal Vouchers',
+      value: stats.totalJournals.toLocaleString('en-IN'),
+      color: 'var(--text2)',
+      drillTitle: 'Journal vouchers',
+      predicate: v => classifyVoucherType(v.type).semantic === 'journal',
+    },
+    {
+      label: 'Cash Transactions >₹10k',
+      value: stats.cashOver10k.toLocaleString('en-IN'),
+      color: stats.cashOver10k > 0 ? 'var(--amber)' : 'var(--green)',
+      drillTitle: 'Cash transactions over ₹10,000',
+      predicate: v => v.flags?.includes('cashOver10k') ?? false,
+    },
+    {
+      label: 'Round Amount Vouchers',
+      value: stats.roundCount.toLocaleString('en-IN'),
+      color: 'var(--text2)',
+      drillTitle: 'Round-amount vouchers (multiples of ₹1,000)',
+      predicate: v => v.amount > 0 && v.amount % 1000 === 0,
+    },
+    {
+      label: 'Entries Outside FY',
+      value: stats.outOfFY.toLocaleString('en-IN'),
+      color: stats.outOfFY > 0 ? 'var(--red)' : 'var(--green)',
+      drillTitle: 'Vouchers dated outside the financial year',
+      predicate: v => v.flags?.includes('outOfFY') ?? false,
+    },
   ];
+
+  function openDrill(tile: MetricTile) {
+    if (!tile.predicate || !tile.drillTitle) return;
+    const vouchers = allVouchers.filter(tile.predicate);
+    if (vouchers.length === 0) return;
+    setDrill({ title: tile.drillTitle, vouchers });
+  }
 
   // Monthly breakdown
   const months = Object.entries(stats.monthCounts ?? {}).sort(([a], [b]) => a.localeCompare(b));
   const maxMonthCount = Math.max(...months.map(([, c]) => c), 1);
 
-  // Duplicate vouchers
-  const dupVnos = Object.entries(stats.dupVnoMap ?? {}).filter(([, c]) => c > 1).sort((a, b) => b[1] - a[1]);
+  // Duplicate vouchers — dupVnoMap is keyed on `${type}${vno}` so
+  // legitimate cross-series collisions (Sales/001 vs Receipt/001) don't
+  // get flagged.  Split for display.
+  const dupVnos = Object.entries(stats.dupVnoMap ?? {})
+    .filter(([, c]) => c > 1)
+    .sort((a, b) => b[1] - a[1])
+    .map(([key, count]) => ({ ...splitDupKey(key), count }));
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Metrics grid */}
+      {/* Metrics grid — every tile is clickable when its predicate
+          matches at least one voucher, opening the drill-down modal.
+          Percentage tiles drill into the *gap* (e.g. Narration Coverage
+          shows vouchers WITHOUT narration). */}
       <div className="grid grid-cols-2 gap-2" style={{ maxWidth: 600 }}>
-        {metrics.map(([label, val, color]) => (
-          <div key={label} className="px-3 py-2 rounded-lg" style={{ background: 'var(--bg3)', border: '1px solid var(--border)' }}>
-            <div className="text-xs" style={{ color: 'var(--text3)' }}>{label}</div>
-            <div className="text-sm font-semibold" style={{ color }}>{val}</div>
-          </div>
-        ))}
+        {metrics.map(tile => {
+          const matchCount = tile.predicate ? allVouchers.filter(tile.predicate).length : 0;
+          const drillable = matchCount > 0;
+          const Tag: 'button' | 'div' = drillable ? 'button' : 'div';
+          return (
+            <Tag
+              key={tile.label}
+              {...(drillable ? { onClick: () => openDrill(tile) } : {})}
+              className={`px-3 py-2 rounded-lg text-left w-full ${drillable ? 'transition-colors hover:bg-[var(--bg4)] cursor-pointer' : ''}`}
+              style={{ background: 'var(--bg3)', border: '1px solid var(--border)' }}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs" style={{ color: 'var(--text3)' }}>{tile.label}</div>
+                {drillable && <span className="text-xs" style={{ color: 'var(--teal)' }}>→</span>}
+              </div>
+              <div className="text-sm font-semibold" style={{ color: tile.color }}>{tile.value}</div>
+            </Tag>
+          );
+        })}
       </div>
+
+      {drill && (
+        <VoucherDrillDown
+          title={drill.title}
+          vouchers={drill.vouchers}
+          onClose={() => setDrill(null)}
+        />
+      )}
 
       {/* Monthly bar chart */}
       {months.length > 0 && (
@@ -1382,16 +1501,18 @@ function DayBookTab({ stats }: { stats: ChunkedStats | null }) {
         <div>
           <div className="text-xs font-semibold mb-2" style={{ color: 'var(--red)' }}>⚑ DUPLICATE VOUCHER NUMBERS ({dupVnos.length})</div>
           <div className="overflow-auto rounded-lg" style={{ border: '1px solid var(--border)', maxHeight: 220 }}>
-            <table className="text-sm" style={{ borderCollapse: 'collapse', width: '100%', maxWidth: 400 }}>
+            <table className="text-sm" style={{ borderCollapse: 'collapse', width: '100%', maxWidth: 520 }}>
               <thead style={{ background: 'var(--bg3)' }}>
                 <tr>
+                  <th className="px-3 py-2 text-left text-xs" style={{ color: 'var(--text3)', borderBottom: '1px solid var(--border)' }}>Voucher Type</th>
                   <th className="px-3 py-2 text-left text-xs" style={{ color: 'var(--text3)', borderBottom: '1px solid var(--border)' }}>Voucher No</th>
                   <th className="px-3 py-2 text-right text-xs" style={{ color: 'var(--text3)', borderBottom: '1px solid var(--border)' }}>Count</th>
                 </tr>
               </thead>
               <tbody>
-                {dupVnos.slice(0, 50).map(([vno, count], i) => (
-                  <tr key={vno} style={{ background: i % 2 === 0 ? 'var(--bg)' : 'var(--bg2)', borderBottom: '1px solid var(--border)' }}>
+                {dupVnos.slice(0, 50).map(({ type, vno, count }, i) => (
+                  <tr key={`${type}|${vno}`} style={{ background: i % 2 === 0 ? 'var(--bg)' : 'var(--bg2)', borderBottom: '1px solid var(--border)' }}>
+                    <td className="px-3 py-1.5 text-xs" style={{ color: 'var(--text2)' }}>{type || '(no type)'}</td>
                     <td className="px-3 py-1.5 font-mono text-xs" style={{ color: 'var(--text2)' }}>{vno}</td>
                     <td className="px-3 py-1.5 text-right font-mono text-xs" style={{ color: 'var(--amber)' }}>{count}</td>
                   </tr>

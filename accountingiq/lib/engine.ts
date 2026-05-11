@@ -8,8 +8,10 @@ import {
   parseTrialBalance, parseTBFull,
   parsePandL, parseBSheet, parseGrpSum, parseDayBook, parseTallyDate,
   parseCashFlow, parseLedgerGroups, parseMasterMap, parsePandLStatement, parseBSheetStatement, flattenStatement,
+  normalizeMasterKey,
 } from './parser';
 import { buildBSHierarchyMap, classifyLedger } from './tally-groups';
+import { classifyVoucherType } from './tally-voucher-types';
 import { recordClassificationSummary } from './telemetry';
 
 // FY dates — default to current Indian FY
@@ -137,6 +139,216 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     }, 0);
   }
 
+  // Missing-party rescue pass — Tally Prime in double-entry mode often
+  // leaves both <PARTYLEDGERNAME> and <ISPARTYLEDGER> empty even when the
+  // party clearly appears as one leg of ALLLEDGERENTRIES.LIST (e.g. a
+  // Payment voucher with "Sales Account" + "ABC Traders" entries — the
+  // user sees the party in Tally, but the XML never names it as such).
+  // The parser captures every voucher's ledger entries on Voucher.ledgers
+  // so we can classify them here using the same master + overrides that
+  // drive TB classification.  Anything that resolves to a Sundry Debtor
+  // or Sundry Creditor becomes the party; the missingParty flag and
+  // counter are cleared in lockstep so downstream checks (C3) and the
+  // drill-down (flag-missing-party) both see the corrected state.
+  if (dbStats?.vouchers?.length && masterMap.size > 0) {
+    let rescued = 0;
+    for (const v of dbStats.vouchers) {
+      if (v.party || !v.flags?.includes('missingParty') || !v.legs?.length) continue;
+      for (const leg of v.legs) {
+        const cls = classifyLedger(leg.name, masterMap, overrides, bsHierarchy);
+        if (cls.category === 'debtor' || cls.category === 'creditor') {
+          // Use the master's original-case name where available so the
+          // drill-down shows "ABC Traders" not "abc traders".
+          const m = masterMap.get(normalizeMasterKey(leg.name));
+          v.party = m?.name ?? leg.name;
+          v.flags = v.flags.filter(f => f !== 'missingParty');
+          if (v.flags.length === 0) delete v.flags;
+          rescued++;
+          break;
+        }
+      }
+    }
+    if (rescued > 0) dbStats.missingParty = Math.max(0, dbStats.missingParty - rescued);
+  }
+
+  // Wrong-type rescan — master-aware replacement for the parse-time
+  // substring approximation.  The parser flags wrongType based on
+  // whether ledger names contain "cash"/"bank" substrings; that misses
+  // structurally-wrong vouchers like a Payment with Sales + Debtor
+  // (clearly a Sales voucher mis-typed) and over-counts customers
+  // literally named "Cashew Traders".  Here we classify each ledger via
+  // the master and apply richer rules:
+  //   • Journal touching cash/bank        → wrong; suggest receipt/payment/contra
+  //   • Receipt/Payment without cash/bank → wrong; suggest sales/purchase/journal
+  //   • Sales / Sales Return without any sales ledger
+  //   • Purchase / Purchase Return without any purchase ledger
+  //   • Contra touching anything other than cash/bank
+  // The suggestedType is shown in the wrong-type drill-down so the user
+  // knows what to reclassify each voucher to.
+  if (dbStats?.vouchers?.length && masterMap.size > 0) {
+    // Clear the parse-time wrongType flag on every voucher first — the
+    // rescan re-adds it based on master-aware rules.  Skipping this
+    // would leave false-positive substring matches stuck.
+    for (const v of dbStats.vouchers) {
+      if (v.flags?.includes('wrongType')) {
+        v.flags = v.flags.filter(f => f !== 'wrongType');
+        if (v.flags.length === 0) delete v.flags;
+      }
+      delete v.suggestedType;
+    }
+
+    // Natural Dr/Cr direction of the non-cash legs lets us pick between
+    // Receipt and Payment even when neither a debtor nor a creditor is
+    // present.  E.g. "Dr Swiggy Expense / Cr Axis Bank" has no creditor
+    // but the expense is Dr-natural — money clearly went OUT, so the
+    // voucher should be a Payment (not a Journal).
+    const CASH_BANK_CATS = new Set(['cash', 'bank', 'bank-od']);
+    const INFLOW_CATS = new Set([
+      'debtor', 'sales', 'direct-income', 'indirect-income', 'capital',
+    ]);
+    const OUTFLOW_CATS = new Set([
+      'creditor', 'purchase', 'direct-expense', 'indirect-expense',
+      'fixed-asset', 'investment', 'deposit', 'loan-given',
+      'duties-output', 'duties-input',
+    ]);
+    // Categories that legitimately appear in a Contra (only cash-like).
+    // Anything else means it isn't really a contra.
+    function inferDirection(otherCats: string[]): 'in' | 'out' | 'either' {
+      let inCount = 0, outCount = 0;
+      for (const c of otherCats) {
+        if (INFLOW_CATS.has(c)) inCount++;
+        if (OUTFLOW_CATS.has(c)) outCount++;
+      }
+      if (inCount > 0 && outCount === 0) return 'in';
+      if (outCount > 0 && inCount === 0) return 'out';
+      return 'either';
+    }
+
+    let newWrongType = 0;
+    for (const v of dbStats.vouchers) {
+      if (!v.legs?.length || !v.type) continue;
+      const semantic = classifyVoucherType(v.type).semantic;
+      const legCats = v.legs.map(l => ({
+        ...l,
+        category: classifyLedger(l.name, masterMap, overrides, bsHierarchy).category,
+      }));
+      const cats = legCats.map(l => l.category);
+      const has = (c: typeof cats[number]) => cats.includes(c);
+      const hasCashOrBank = cats.some(c => CASH_BANK_CATS.has(c));
+      const hasSales     = has('sales');
+      const hasPurchase  = has('purchase');
+      const nonCashCats  = cats.filter(c => !CASH_BANK_CATS.has(c));
+      const direction    = inferDirection(nonCashCats);
+
+      // Direction the cash/bank leg actually moves money in this voucher:
+      //   Dr cash/bank = money came IN  (the bank is gaining)
+      //   Cr cash/bank = money went OUT (the bank is losing)
+      // Used to catch Payment-with-bank-Dr (really a Receipt) and the
+      // mirror case Receipt-with-bank-Cr (really a Payment) — these slip
+      // past every category-only rule because they HAVE a cash/bank leg.
+      const cashLeg = legCats.find(l => CASH_BANK_CATS.has(l.category));
+      const bankDir: 'in' | 'out' | undefined = cashLeg
+        ? (cashLeg.dr ? 'in' : 'out')
+        : undefined;
+
+      let isWrong = false;
+      let suggested = '';
+
+      if (semantic === 'payment' && bankDir === 'in') {
+        // Payment voucher but the bank is Dr → money flowed IN.  This is
+        // really a Receipt regardless of what other ledgers are present.
+        isWrong = true;
+        suggested = 'Receipt';
+      } else if (semantic === 'receipt' && bankDir === 'out') {
+        // Mirror of the above — Receipt with bank Cr → money flowed OUT.
+        isWrong = true;
+        suggested = 'Payment';
+      } else if (semantic === 'journal' && hasCashOrBank) {
+        // Journal touching cash/bank — almost always should be Receipt,
+        // Payment, or Contra.  Direction tells us which.
+        isWrong = true;
+        if (nonCashCats.length === 0) suggested = 'Contra';
+        else if (direction === 'in')  suggested = 'Receipt';
+        else if (direction === 'out') suggested = 'Payment';
+        else suggested = 'Receipt or Payment';
+      } else if ((semantic === 'receipt' || semantic === 'payment') && !hasCashOrBank) {
+        // No cash/bank — it isn't really a Receipt or Payment.
+        isWrong = true;
+        if (hasSales)         suggested = 'Sales';
+        else if (hasPurchase) suggested = 'Purchase';
+        else                  suggested = 'Journal';
+      } else if ((semantic === 'sales' || semantic === 'sales-return') && !hasSales) {
+        // Sales voucher with no sales ledger isn't really a sale.
+        isWrong = true;
+        if (hasPurchase)              suggested = semantic === 'sales' ? 'Purchase' : 'Purchase Return';
+        else if (hasCashOrBank && direction === 'in')  suggested = 'Receipt';
+        else if (hasCashOrBank && direction === 'out') suggested = 'Payment';
+        else if (hasCashOrBank)       suggested = 'Receipt';   // Sales-typed → user expected money in
+        else                          suggested = 'Journal';
+      } else if ((semantic === 'purchase' || semantic === 'purchase-return') && !hasPurchase) {
+        // Purchase voucher with no purchase ledger isn't really a purchase.
+        // This covers the Swiggy case: "Dr Swiggy Expense / Cr Axis Bank"
+        // — typed Purchase, but really a Payment for an expense.
+        isWrong = true;
+        if (hasSales)                 suggested = semantic === 'purchase' ? 'Sales' : 'Sales Return';
+        else if (hasCashOrBank && direction === 'out') suggested = 'Payment';
+        else if (hasCashOrBank && direction === 'in')  suggested = 'Receipt';
+        else if (hasCashOrBank)       suggested = 'Payment';   // Purchase-typed → user expected money out
+        else                          suggested = 'Journal';
+      } else if (semantic === 'contra') {
+        // Contra is internal cash/bank movement only.  Any non-cash/bank
+        // leg means it's not really a contra.  inferDirection handles the
+        // P&L / party / tax categories properly.
+        if (nonCashCats.length > 0 && direction !== 'either') {
+          isWrong = true;
+          suggested = direction === 'in' ? 'Receipt' : 'Payment';
+        } else if (nonCashCats.length > 0) {
+          isWrong = true;
+          if (hasSales)         suggested = 'Sales';
+          else if (hasPurchase) suggested = 'Purchase';
+          else                  suggested = 'Journal';
+        }
+      }
+
+      if (isWrong) {
+        if (!v.flags) v.flags = [];
+        v.flags.push('wrongType');
+        if (suggested) v.suggestedType = suggested;
+        newWrongType++;
+      }
+    }
+    dbStats.wrongType = newWrongType;
+  }
+
+  // Cash-transactions-over-₹10k rescan — master-aware replacement for
+  // the parse-time substring approximation.  The parser flags vouchers
+  // whose TYPE NAME contains "cash" (matches "Cash Payment", "Cash
+  // Receipt" voucher types but misses any standard Payment/Receipt
+  // voucher that happens to touch a cash ledger via its entries).
+  // We classify each leg via the master and look for the 'cash'
+  // category instead, so a Payment voucher with a "Cash-in-Hand" leg
+  // correctly counts toward s.40A(3) compliance.
+  if (dbStats?.vouchers?.length && masterMap.size > 0) {
+    for (const v of dbStats.vouchers) {
+      if (v.flags?.includes('cashOver10k')) {
+        v.flags = v.flags.filter(f => f !== 'cashOver10k');
+        if (v.flags.length === 0) delete v.flags;
+      }
+    }
+    let newCashOver10k = 0;
+    for (const v of dbStats.vouchers) {
+      if (v.amount <= 10000 || !v.legs?.length) continue;
+      const touchesCash = v.legs.some(leg => {
+        return classifyLedger(leg.name, masterMap, overrides, bsHierarchy).category === 'cash';
+      });
+      if (!touchesCash) continue;
+      if (!v.flags) v.flags = [];
+      v.flags.push('cashOver10k');
+      newCashOver10k++;
+    }
+    dbStats.cashOver10k = newCashOver10k;
+  }
+
   // Assemble parsedData
   const parsedData: Partial<ParsedData> = {
     ...(tbResult  ?? {}),
@@ -166,17 +378,65 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
   }
 
   const {
-    tbLedgers = [], suspenseCount = 0, dupPairs = 0,
-    capFound = false, bankFound = false, cashFound = false,
-    debtorFound = false, creditorFound = false, hasOpeningBal = false,
+    tbLedgers = [], dupPairs = 0,
+    capFound = false, bankFound: bankFoundTB = false, cashFound: cashFoundTB = false,
+    debtorFound: debtorFoundTB = false, creditorFound: creditorFoundTB = false, hasOpeningBal = false,
     tbTotal = 0, tbSales = 0, tbPurch = 0,
     outputGSTAmt = 0, inputITCAmt = 0, tdsLedgerFound = false, tdsPayableAmt = 0, pfLedgerFound = false,
     gstDiffPct = 0,
-    revenue = 0, netProfit = 0, depFound = false, depAmt = 0, openingStock = 0,
-    closingStock = 0, costOfMaterials = 0, fixedAssets = 0, bsCashBankTotal = 0,
+    revenue = 0, netProfit = 0, depFound = false, depAmt = 0, openingStock = 0, plClosingStock = 0,
+    closingStock = 0, costOfMaterials = 0, fixedAssets = 0, bsCashBankTotal = 0, tbCashBankMovement = 0, tbCashBankNetMovement = 0,
+    bankBal = 0, debtorBal = 0, creditorBal = 0,
     salesWrongGroup = false, purchaseWrongGroup = false, dutiesUnderExpense = false,
-    suspenseLedgers = [], dupPairDetails = [],
+    suspenseLedgers: tbSuspenseLedgers = [], dupPairDetails = [],
+    bsSuspenseLedgers = [],
   } = parsedData as Partial<ParsedData>;
+
+  // Merge the TB-side and BS-side suspense lists.  Each side catches
+  // what the other misses: parseTrialBalance skips GROUP-type rows
+  // (so "Suspense A/c" group rollups fall through), while parseBSheet
+  // only sees top-level rows and a few sub-items, missing leaf-level
+  // suspense ledgers buried under other groups.  Dedupe by lowercased
+  // name so the same ledger seen by both sources counts once.
+  const seenSusp = new Set<string>();
+  const suspenseLedgers: Array<{ name: string; amount: number }> = [];
+  for (const s of [...tbSuspenseLedgers, ...bsSuspenseLedgers]) {
+    if (s.amount === 0) continue;
+    const key = s.name.toLowerCase().trim();
+    if (seenSusp.has(key)) continue;
+    seenSusp.add(key);
+    suspenseLedgers.push(s);
+  }
+  const suspenseCount = suspenseLedgers.length;
+  // Mirror the merged list into parsedData so flags.ts, remediation.ts
+  // and PushToTallyButton — which still read parsedData.* — see the
+  // same combined view the engine checks operate on.
+  parsedData.suspenseLedgers = suspenseLedgers;
+  parsedData.suspenseCount = suspenseCount;
+
+  // Existence flags for trade / banking ledgers — the TB-only signal
+  // misses companies whose Trial Balance was exported with bank/cash/
+  // debtor/creditor rolled up to their parent GROUP (Tally's default
+  // collapsed view).  parseTrialBalance skips GROUP-type rows so those
+  // never reach classifyLedger and the *FoundTB flags stay false.  Fall
+  // back to BS-derived balances: a non-zero closing balance on the BS
+  // is conclusive proof the ledger exists, regardless of whether the
+  // TB happened to list it as a leaf.  Also peek at the master file
+  // for ledgers explicitly classified into the relevant primary group.
+  const masterHasCategory = (cat: 'bank' | 'cash' | 'debtor' | 'creditor'): boolean => {
+    if (masterMap.size === 0) return false;
+    for (const entry of masterMap.values()) {
+      if (entry.type !== 'ledger') continue;
+      const cls = classifyLedger(entry.name, masterMap, overrides, bsHierarchy);
+      if (cls.category === cat) return true;
+      if (cat === 'bank' && cls.category === 'bank-od') return true;
+    }
+    return false;
+  };
+  const bankFound     = bankFoundTB     || bankBal     !== 0 || masterHasCategory('bank');
+  const cashFound     = cashFoundTB     || bsCashBankTotal - bankBal !== 0 || masterHasCategory('cash');
+  const debtorFound   = debtorFoundTB   || debtorBal   !== 0 || masterHasCategory('debtor');
+  const creditorFound = creditorFoundTB || creditorBal !== 0 || masterHasCategory('creditor');
 
   const {
     gstApplicable, gstRegular, tdsApplicable, hasEmployees, hasFAfilter, isGoods, fullFY,
@@ -200,6 +460,8 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
   const dbSales         = dbStats?.salesVoucherTotal ?? 0;
   const dbPurch         = dbStats?.purchVoucherTotal ?? 0;
   const dbCashBank      = dbStats?.cashBankNetMovement ?? 0;
+  const dbContraTotal   = dbStats?.contraTotal          ?? 0;
+  const dbReceipts      = dbStats?.receiptTotal         ?? 0;
   const dbPayments      = dbStats?.paymentTotal         ?? 0;
   const taxVoucherTotal = dbStats?.taxVoucherTotal   ?? 0;
   const journalNetAmt   = dbStats?.journalNetAmt     ?? 0;
@@ -336,10 +598,17 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     : fail(6, `${missingVno} of ${totalVouchers} vouchers missing numbers`),
     'Vouchers with missing voucher numbers');
 
+  // C2 — keying on `${type}${vno}` so cross-series collisions don't
+  // inflate the count.  We report TWO metrics together so the user
+  // doesn't have to flip between them: distinct duplicated numbers and
+  // total occurrences (sum of group sizes for groups whose size > 1).
+  const dupOccurrences = Object.values(dupVnoMap)
+    .filter(c => c > 1)
+    .reduce((s, v) => s + v, 0);
   c('C2', 'C', 'No duplicate voucher numbers',
     !hasDaybook ? uncertain(6, 'Requires DayBook')
     : dupVouchers === 0 ? pass(6, 6, 'No duplicate voucher numbers')
-    : fail(6, `${dupVouchers} duplicate voucher number${dupVouchers > 1 ? 's' : ''} found`),
+    : fail(6, `${dupVouchers} duplicate voucher number${dupVouchers > 1 ? 's' : ''} found (${dupOccurrences} total occurrences)`),
     'Duplicate voucher numbers in DayBook');
 
   c('C3', 'C', 'All trade vouchers have party name',
@@ -434,10 +703,30 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     : uncertain(4, 'Requires Trial Balance and Balance Sheet'),
     'Trial Balance total does not match Balance Sheet total');
 
+  // D5 — closing stock should appear on BOTH P&L (as a deduction inside
+  // Cost of Sales) and BS (as a current-asset balance), and the two
+  // amounts should match.  A common error: the user enters "Less:
+  // Closing Stock" on the P&L as a year-end adjustment but never creates
+  // a corresponding ledger under Stock-in-Hand on the BS — books then
+  // overstate profit by the stock value.  We now distinguish those
+  // failure modes in the message so the user knows where to look.
+  //
+  // Tally encodes Dr balances as NEGATIVE on the BS XML (Closing Stock,
+  // being an asset, comes through as e.g. -26,111), so we compare on
+  // absolute values — the sign carries no business meaning here.
+  const bsStock = Math.abs(closingStock);
+  const plStock = Math.abs(plClosingStock);
   c('D5', 'D', 'Closing stock: P&L = BS figure',
     !isGoods ? na('Not applicable (goods not selected in profile)')
-    : closingStock > 0 ? pass(5, 5, `Closing stock: ₹${fmt(closingStock)}`)
-    : fail(5, 'No closing stock found in Balance Sheet'),
+    : bsStock > 0 && plStock > 0 && Math.abs(bsStock - plStock) / Math.max(bsStock, plStock) < 0.02
+        ? pass(5, 5, `Closing stock ₹${fmt(bsStock)} reconciles between P&L and BS`)
+    : bsStock > 0 && plStock > 0
+        ? fail(5, `Closing stock mismatch: P&L ₹${fmt(plStock)} vs BS ₹${fmt(bsStock)} — adjust whichever is wrong so both balance`)
+    : bsStock > 0 && plStock === 0
+        ? partial(3, 5, `Closing stock on BS (₹${fmt(bsStock)}) but no "Less: Closing Stock" entry on P&L — Cost of Sales likely overstated`)
+    : plStock > 0 && bsStock === 0
+        ? fail(5, `P&L shows "Less: Closing Stock" ₹${fmt(plStock)} but no matching stock balance on BS — create a Stock-in-Hand ledger or correct the P&L entry`)
+    : fail(5, 'No closing stock found in either P&L or Balance Sheet'),
     'Closing stock mismatch between P&L and Balance Sheet');
 
   // ────── E: Statutory Accuracy ──────
@@ -530,18 +819,31 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     : fail(4, 'No depreciation entry in P&L'),
     'No depreciation entry in P&L');
 
+  // E9 — depreciation reasonableness.  Only fires when a depreciation
+  // charge actually exists; the *absence* of depreciation is E8's job,
+  // so when depAmt is zero we mark E9 as Not Applicable rather than
+  // duplicating E8's finding.
+  // Tally encodes asset balances as NEGATIVE on the BS XML (Dr
+  // balances), so we compare on absolute values — the sign is an
+  // encoding convention, not a business signal.
+  const absDep = Math.abs(depAmt);
+  const absFA  = Math.abs(fixedAssets);
   c('E9', 'E', 'Depreciation amount reasonable',
     !hasFAfilter ? na('Not applicable')
     : !(hasPL && hasBS) ? uncertain(3, 'Requires P&L and Balance Sheet')
-    : depAmt > 0 && fixedAssets > 0 && depAmt < fixedAssets ? pass(3, 3, `Dep ₹${fmt(depAmt)} < FA ₹${fmt(fixedAssets)}`)
-    : fail(3, depAmt >= fixedAssets ? 'Depreciation exceeds Fixed Assets value' : 'Depreciation amount is zero'),
+    : absDep === 0 ? na('No depreciation booked — see E8')
+    : absFA === 0 ? uncertain(3, 'Fixed Assets value not extracted from Balance Sheet')
+    : absDep < absFA ? pass(3, 3, `Dep ₹${fmt(absDep)} < FA ₹${fmt(absFA)} (${((absDep / absFA) * 100).toFixed(1)}%)`)
+    : fail(3, `Depreciation ₹${fmt(absDep)} exceeds Fixed Assets ₹${fmt(absFA)} — verify both figures`),
     'Depreciation amount unreasonable');
 
   c('E10', 'E', 'Closing stock in Balance Sheet',
     !isGoods ? na('Not applicable')
     : !hasBS ? uncertain(4, 'Requires Balance Sheet')
-    : closingStock > 0 ? pass(4, 4, `Closing stock: ₹${fmt(closingStock)}`)
-    : fail(4, 'No closing stock in Balance Sheet'),
+    : bsStock > 0 ? pass(4, 4, `Closing stock: ₹${fmt(bsStock)}`)
+    : plStock > 0
+        ? fail(4, `P&L shows closing stock ₹${fmt(plStock)} but no matching ledger on BS — create a Stock-in-Hand ledger to record it as an asset`)
+        : fail(4, 'No closing stock in Balance Sheet'),
     'No closing stock in Balance Sheet');
 
   // E11 — Stock equation:  Opening + Purchases − Closing  ≈  COGS
@@ -719,13 +1021,49 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     : partial(2, 8, `Purchase variance >25%: DB ₹${fmt(dbPurch)} vs TB+ITC ₹${fmt(tbPurchGross)} — investigate misclassified purchase ledgers, returns, or period mismatch`),
     'Purchase voucher total does not match Trial Balance');
 
-  c('H4', 'H', 'Cash + Bank movement = BS closing balance',
-    !(hasDaybook && hasBS) ? uncertain(8, 'Requires DayBook and Balance Sheet')
-    : bsCashBankTotal === 0 ? uncertain(8, 'BS cash+bank total not extracted')
-    : dbCashBank === 0 ? uncertain(8, 'DayBook cash+bank movement not computed')
-    : Math.abs(dbCashBank - bsCashBankTotal) / Math.abs(bsCashBankTotal) < 0.02 ? pass(8, 8, `Cash+Bank reconciled ₹${fmt(bsCashBankTotal)}`)
-    : fail(8, `Cash+Bank variance: DB ₹${fmt(dbCashBank)} vs BS ₹${fmt(bsCashBankTotal)}`),
-    'Cash + Bank movement does not match Balance Sheet');
+  // H4 — DayBook cash/bank voucher turnover ≈ TB cash/bank period turnover.
+  //
+  // Both sides are GROSS Dr+Cr volume during the period (not closing
+  // balances — the previous version compared DB turnover against BS
+  // closing balance, which are mathematically unrelated quantities and
+  // produced false-positive criticals on every clean dataset).
+  //
+  //   DB side: |amt| over Receipt + Payment + Contra vouchers.  Each
+  //            Contra hits two cash/bank ledgers in the TB but only
+  //            counts once in dbCashBank, so we add contraTotal again
+  //            to match the TB's double-count.
+  //   TB side: sum of Dr + Cr period movement over every ledger
+  //            classified as cash / bank / bank-od.  Only available
+  //            when the TB export is a "TB with transactions" report.
+  //
+  // Tolerance is 2% — anything wider points at vouchers touching
+  // cash/bank ledgers without a Receipt/Payment/Contra type (or vice
+  // versa), which is the original audit signal H4 was meant to surface.
+  const dbCashBankWithContra = dbCashBank + dbContraTotal;
+  // Net change in cash/bank from the DayBook = receipts − payments.
+  // Contras net to zero at the cash/bank aggregate level (one leg in,
+  // one out), so they're correctly excluded.
+  const dbCashBankNet = dbReceipts - dbPayments;
+  c('H4', 'H', 'Cash + Bank turnover reconciles between DayBook and TB',
+    !(hasDaybook && hasTB) ? uncertain(8, 'Requires DayBook and Trial Balance')
+    : dbCashBank === 0 ? uncertain(8, 'DayBook cash+bank turnover not computed')
+    : tbCashBankMovement > 0
+        // Preferred path: gross Dr + Cr cross-check (only when the TB
+        // happens to have period movement columns enabled).
+        ? Math.abs(dbCashBankWithContra - tbCashBankMovement) / tbCashBankMovement < 0.02
+            ? pass(8, 8, `Cash+Bank turnover reconciled ₹${fmt(tbCashBankMovement)}`)
+            : fail(8, `Cash+Bank turnover variance: DB ₹${fmt(dbCashBankWithContra)} vs TB ₹${fmt(tbCashBankMovement)} — investigate cash/bank ledgers hit by non-Receipt/Payment/Contra vouchers`)
+    : tbCashBankNetMovement !== 0 || dbCashBankNet !== 0
+        // Net-movement fallback: opening + closing are always available
+        // when the bridge pulls the TB via the custom collection.
+        // Compare DayBook net (receipts − payments) against TB net
+        // (closing − opening) on cash/bank ledgers — they should match
+        // to within ₹100 (small rounding tolerance, no percentage).
+        ? Math.abs(dbCashBankNet - tbCashBankNetMovement) < 100
+            ? pass(8, 8, `Cash+Bank net flow reconciled ₹${fmt(Math.abs(dbCashBankNet))} (DB receipts−payments matches TB closing−opening)`)
+            : fail(8, `Cash+Bank net flow variance: DB ₹${fmt(dbCashBankNet)} (receipts−payments) vs TB ₹${fmt(tbCashBankNetMovement)} (closing−opening) — voucher activity doesn't match TB balances`)
+    : uncertain(8, 'TB has no opening balance or period movement data — re-pull via the Tally bridge to get this check'),
+    'Cash + Bank turnover does not match between DayBook and TB');
 
   // H5 — Tax balances reasonable vs sales.  Was a stub waiting on a
   // never-shipped Form 26AS / GSTR-3B import.  Now we sanity-check the

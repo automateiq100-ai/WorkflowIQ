@@ -5,8 +5,10 @@ import { getGrade, DIM_LABELS, DIM_WEIGHTS, DIM_COLORS, TOTAL_FILE_COUNT } from 
 import { generateFlags } from '@/lib/flags';
 import { generateInsights } from '@/lib/insights';
 import { generateHealthSignals } from '@/lib/health';
+import { getDrillDown, hasDrillDown } from '@/lib/voucher-filters';
 import ScoreRing from '@/app/components/ScoreRing';
-import type { DimKey, Check, ParsedData, ChunkedStats } from '@/lib/types';
+import VoucherDrillDown from '@/app/components/VoucherDrillDown';
+import type { DimKey, Check, ParsedData, ChunkedStats, AnomalyFlag } from '@/lib/types';
 import { useEffect, useState } from 'react';
 
 interface FirstRun {
@@ -111,6 +113,7 @@ export default function DashboardView() {
   // users can see *which* checks were skipped and *why* without leaving the
   // dashboard.
   const [openTile, setOpenTile] = useState<null | 'na' | 'uncertain'>(null);
+  const [drillFlag, setDrillFlag] = useState<AnomalyFlag | null>(null);
   const toggleTile = (which: 'na' | 'uncertain') =>
     setOpenTile(prev => (prev === which ? null : which));
 
@@ -447,26 +450,53 @@ export default function DashboardView() {
             </button>
           </div>
           <div className="rounded-xl border overflow-hidden divide-y" style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}>
-            {topFlags.map(flag => (
-              <div key={flag.id} className="flex items-start gap-3 px-4 py-3" style={{ borderColor: 'var(--border)' }}>
-                <span
-                  className="text-xs px-1.5 py-0.5 rounded font-semibold shrink-0 mt-0.5"
-                  style={{ background: SEV_BG[flag.severity] ?? 'var(--bg4)', color: SEV_COLORS[flag.severity] ?? 'var(--text2)' }}
+            {topFlags.map(flag => {
+              const drillable = hasDrillDown(flag.id, dbStatsRef, parsedData);
+              const RowTag: 'button' | 'div' = drillable ? 'button' : 'div';
+              return (
+                <RowTag
+                  key={flag.id}
+                  className={`w-full text-left flex items-start gap-3 px-4 py-3 ${drillable ? 'transition-colors hover:bg-[var(--bg3)] cursor-pointer' : ''}`}
+                  style={{ borderColor: 'var(--border)' }}
+                  {...(drillable ? { onClick: () => setDrillFlag(flag) } : {})}
                 >
-                  {flag.severity.toUpperCase()}
-                </span>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium" style={{ color: 'var(--text1)' }}>{flag.title}</div>
-                  <div className="text-xs mt-0.5" style={{ color: 'var(--text2)' }}>{flag.detail}</div>
-                </div>
-                {flag.count !== undefined && (
-                  <div className="text-xs font-mono shrink-0" style={{ color: 'var(--text3)' }}>×{flag.count}</div>
-                )}
-              </div>
-            ))}
+                  <span
+                    className="text-xs px-1.5 py-0.5 rounded font-semibold shrink-0 mt-0.5"
+                    style={{ background: SEV_BG[flag.severity] ?? 'var(--bg4)', color: SEV_COLORS[flag.severity] ?? 'var(--text2)' }}
+                  >
+                    {flag.severity.toUpperCase()}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium" style={{ color: 'var(--text1)' }}>{flag.title}</div>
+                    <div className="text-xs mt-0.5" style={{ color: 'var(--text2)' }}>{flag.detail}</div>
+                    {drillable && (
+                      <div className="text-xs mt-1" style={{ color: 'var(--teal)' }}>
+                        View affected vouchers →
+                      </div>
+                    )}
+                  </div>
+                  {flag.count !== undefined && (
+                    <div className="text-xs font-mono shrink-0" style={{ color: 'var(--text3)' }}>×{flag.count}</div>
+                  )}
+                </RowTag>
+              );
+            })}
           </div>
         </div>
       )}
+
+      {drillFlag && (() => {
+        const drill = getDrillDown(drillFlag.id, drillFlag.title, dbStatsRef, parsedData);
+        if (!drill) return null;
+        return (
+          <VoucherDrillDown
+            title={drill.title}
+            vouchers={drill.vouchers}
+            extraColumns={drill.extraColumns}
+            onClose={() => setDrillFlag(null)}
+          />
+        );
+      })()}
 
       {/* Top Insights panel */}
       {topInsights.length > 0 && (
