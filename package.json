@@ -5,7 +5,7 @@
   "scripts": {
     "build": "npm install --prefix accountingiq && npm run build --prefix accountingiq && npm install --prefix practiceiq && npm run build --prefix practiceiq",
     "start": "node server.js",
-    "dev": "set NODE_ENV=development && node server.js"
+    "dev": "set NODE_ENV=development && node --use-system-ca server.js"
   },
   "workspaces": [
     "accountingiq",

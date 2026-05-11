@@ -30,6 +30,7 @@ const CompanyDashboardView = dynamic(() => import('@/app/views/CompanyDashboardV
 const DataView             = dynamic(() => import('@/app/views/DataView'));
 const AgentFixView         = dynamic(() => import('@/app/views/AgentFixView'));
 const TallyConnectionView  = dynamic(() => import('@/app/views/TallyConnectionView'));
+const MasterSetupView      = dynamic(() => import('@/app/views/MasterSetupView'));
 
 const VIEW_COMPONENTS: Record<ViewId, React.ComponentType> = {
   'company-select':    CompanySelectorView,
@@ -50,12 +51,13 @@ const VIEW_COMPONENTS: Record<ViewId, React.ComponentType> = {
   'data-view':     DataView,
   'agent-fix':     AgentFixView as React.ComponentType,
   'tally-connection': TallyConnectionView,
+  'master-setup':     MasterSetupView,
 };
 
 // Accounting module: always visible
 const ACCOUNTING_ALWAYS: ViewId[] = ['company-select'];
 // Accounting module: visible only when a company is selected
-const ACCOUNTING_COMPANY: ViewId[] = ['company-dashboard', 'upload', 'tally-connection', 'profile', 'rules'];
+const ACCOUNTING_COMPANY: ViewId[] = ['company-dashboard', 'upload', 'tally-connection', 'profile', 'rules', 'master-setup'];
 // Accounting module: visible only after analysis
 // Flags lives inside Checklist, Health inside Dashboard, Insights inside Analysis, Fix Planner inside Data & Fix
 const ACCOUNTING_POST: ViewId[] = ['dashboard', 'checklist', 'aiAnalysis', 'data-view', 'reports'];

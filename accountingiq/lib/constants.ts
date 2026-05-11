@@ -32,6 +32,13 @@ export const FILE_TIERS = {
   optional:    ['faregister', 'stock', 'bankrecon'] as FileKey[],
 };
 
+/** Total number of file slots the app supports.  Derived from FILE_TIERS so
+ *  it stays in sync when slots are added/removed (used in 'X of N' counters
+ *  in DashboardView and ReportsView — previously hardcoded to 13, which
+ *  fell out of date when the 'master' slot was introduced). */
+export const TOTAL_FILE_COUNT =
+  FILE_TIERS.required.length + FILE_TIERS.conditional.length + FILE_TIERS.optional.length;
+
 export const FILE_LABELS: Record<FileKey, string> = {
   daybook: 'DayBook',
   trialbal: 'Trial Balance',
@@ -82,6 +89,7 @@ export const VIEWS: { id: ViewId; label: string; icon: string; }[] = [
   { id: 'data-view',     label: 'Data & Fix',       icon: '⊟' },
   { id: 'agent-fix',     label: 'Fix Planner',      icon: '⚑' },
   { id: 'tally-connection', label: 'Tally Connection', icon: '⇌' },
+  { id: 'master-setup',  label: 'Master Setup',     icon: '⚙' },
   { id: 'mis-setup',     label: 'MIS Setup',        icon: '⊞' },
   { id: 'mis-report',    label: 'MIS Report',       icon: '▦' },
   { id: 'reconciliation',label: 'Reconciliation',   icon: '⇌' },
@@ -89,7 +97,7 @@ export const VIEWS: { id: ViewId; label: string; icon: string; }[] = [
 
 
 export const MODULE_VIEWS: Record<ModuleId, ViewId[]> = {
-  accounting: ['company-select', 'company-dashboard', 'upload', 'profile', 'dashboard', 'checklist', 'insights', 'aiAnalysis', 'health', 'flags', 'data-view', 'agent-fix', 'reports', 'rules', 'tally-connection'],
+  accounting: ['company-select', 'company-dashboard', 'upload', 'profile', 'dashboard', 'checklist', 'insights', 'aiAnalysis', 'health', 'flags', 'data-view', 'agent-fix', 'reports', 'rules', 'tally-connection', 'master-setup'],
   mis: ['mis-setup', 'mis-report'],
   reconciliation: ['reconciliation'],
 };
