@@ -1,12 +1,14 @@
 'use client';
 
 import { useApp } from '@/lib/state';
-import { getGrade, DIM_LABELS, DIM_WEIGHTS, DIM_COLORS } from '@/lib/constants';
+import { getGrade, DIM_LABELS, DIM_WEIGHTS, DIM_COLORS, TOTAL_FILE_COUNT } from '@/lib/constants';
 import { generateFlags } from '@/lib/flags';
 import { generateInsights } from '@/lib/insights';
 import { generateHealthSignals } from '@/lib/health';
+import { getDrillDown, hasDrillDown } from '@/lib/voucher-filters';
 import ScoreRing from '@/app/components/ScoreRing';
-import type { DimKey, Check, ParsedData, ChunkedStats } from '@/lib/types';
+import VoucherDrillDown from '@/app/components/VoucherDrillDown';
+import type { DimKey, Check, ParsedData, ChunkedStats, AnomalyFlag } from '@/lib/types';
 import { useEffect, useState } from 'react';
 
 interface FirstRun {
@@ -106,6 +108,15 @@ export default function DashboardView() {
   const grade = getGrade(cappedScore);
   const filesLoaded = Object.values(files).filter(f => f.hasContent).length;
 
+  // Inline disclosure for the "Not Applicable" / "Needs Data" tiles — clicking
+  // a tile opens a list of the underlying checks with their reason note, so
+  // users can see *which* checks were skipped and *why* without leaving the
+  // dashboard.
+  const [openTile, setOpenTile] = useState<null | 'na' | 'uncertain'>(null);
+  const [drillFlag, setDrillFlag] = useState<AnomalyFlag | null>(null);
+  const toggleTile = (which: 'na' | 'uncertain') =>
+    setOpenTile(prev => (prev === which ? null : which));
+
   // Bug 6 fix: count all status categories including NA
   const passed    = checks.filter(c => c.status === 'pass').length;
   const failed    = checks.filter(c => c.status === 'fail').length;
@@ -126,9 +137,11 @@ export default function DashboardView() {
   const debtorBal  = (pd.debtorBal  as number) ?? 0;
   const creditorBal= (pd.creditorBal as number) ?? 0;
 
-  // Bug 1: Current Ratio — N/A when CA < 0
-  const currentRatio = ca > 0 && cl !== 0 ? ca / Math.abs(cl) : null;
-  const caIsNegative = ca < 0;
+  // Current Ratio — Tally stores assets with a negative sign in TB convention
+  // (Cr-positive internally), so |CA| / |CL| recovers the standard accounting
+  // ratio regardless of which side the parser captured. We only refuse to
+  // compute when one of the two is exactly zero (no data).
+  const currentRatio = ca !== 0 && cl !== 0 ? Math.abs(ca) / Math.abs(cl) : null;
 
   // Determine DayBook stats for flags
   const dbStatsRef = files.daybook?.chunkedStats ?? null;
@@ -136,7 +149,13 @@ export default function DashboardView() {
   // Generate flags and insights
   const allFlags   = generateFlags(results, parsedData, dbStatsRef);
   const allInsights = generateInsights(results, parsedData, filters);
-  const topFlags   = allFlags.slice(0, 4);
+  // Sort flags by severity (critical → high → medium → low) so the
+  // top-4 panel always surfaces the most important issues first instead
+  // of whichever check happened to be added to the array earliest.
+  const SEV_RANK: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+  const topFlags   = [...allFlags]
+    .sort((a, b) => (SEV_RANK[a.severity] ?? 99) - (SEV_RANK[b.severity] ?? 99))
+    .slice(0, 4);
   const topInsights = allInsights.filter(i => i.urgency !== 'positive').slice(0, 3);
 
   // Build KPI tiles — Bug 1: signed values, ANOMALY pills
@@ -145,19 +164,17 @@ export default function DashboardView() {
   }> = [
     { label: 'Revenue',       value: revenue > 0    ? fmtINR(revenue)    : '—', sub: 'From P&L',           color: 'var(--teal)' },
     { label: 'Net Profit',    value: netProfit !== 0 ? fmtINR(netProfit)  : '—', sub: netProfit < 0 ? 'Loss year' : 'Bottom line', color: netProfit >= 0 ? 'var(--green)' : 'var(--red)' },
-    // Bug 1: Current Ratio — show N/A with CRITICAL when CA < 0
     {
       label: 'Current Ratio',
-      value: caIsNegative ? 'N/A' : currentRatio !== null ? currentRatio.toFixed(2) : '—',
-      sub: caIsNegative ? 'Current Assets negative' : currentRatio !== null ? (currentRatio >= 1.5 ? 'Good liquidity' : currentRatio >= 1 ? 'Adequate' : 'Risk') : 'Needs BS',
-      color: caIsNegative ? 'var(--red)' : currentRatio !== null ? (currentRatio >= 1.5 ? 'var(--green)' : currentRatio >= 1 ? 'var(--amber)' : 'var(--red)') : 'var(--text3)',
-      critical: caIsNegative,
+      value: currentRatio !== null ? currentRatio.toFixed(2) : '—',
+      sub: currentRatio !== null ? (currentRatio >= 1.5 ? 'Good liquidity' : currentRatio >= 1 ? 'Adequate' : 'Risk') : 'Needs BS',
+      color: currentRatio !== null ? (currentRatio >= 1.5 ? 'var(--green)' : currentRatio >= 1 ? 'var(--amber)' : 'var(--red)') : 'var(--text3)',
     },
     // Bug 1: Show signed Debtors with ANOMALY pill if negative
     { label: 'Debtors',       value: debtorBal !== 0 ? fmtINR(debtorBal) : '—', sub: 'Trade receivables',  color: debtorBal < 0 ? 'var(--red)' : 'var(--blue)', anomaly: debtorBal < 0 },
     // Bug 1: Show signed Creditors with ANOMALY pill if positive (Dr balance)
     { label: 'Creditors',     value: creditorBal !== 0 ? fmtINR(creditorBal): '—', sub: 'Trade payables',    color: creditorBal > 0 ? 'var(--red)' : 'var(--purple)', anomaly: creditorBal > 0 },
-    { label: 'Files',         value: `${filesLoaded}`, sub: 'of 13 uploaded',   color: 'var(--text1)' },
+    { label: 'Files',         value: `${filesLoaded}`, sub: `of ${TOTAL_FILE_COUNT} uploaded`, color: 'var(--text1)' },
   ];
 
   return (
@@ -281,12 +298,107 @@ export default function DashboardView() {
           <div className="cursor-pointer" onClick={() => dispatch({ type: 'SET_VIEW', view: 'checklist' })}>
             <StatCard label="Partial" value={partialCt} unit="" color="var(--amber)" />
           </div>
-          <StatCard label="Not Applicable" value={naCt} unit="" color="var(--text3)" />
+          {naCt > 0 ? (
+            <div
+              role="button"
+              tabIndex={0}
+              className="cursor-pointer"
+              onClick={() => toggleTile('na')}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleTile('na'); } }}
+              title="Click to see which checks are not applicable"
+            >
+              <StatCard
+                label={openTile === 'na' ? 'Not Applicable ▾' : 'Not Applicable ▸'}
+                value={naCt}
+                unit=""
+                color="var(--text3)"
+              />
+            </div>
+          ) : (
+            <StatCard label="Not Applicable" value={naCt} unit="" color="var(--text3)" />
+          )}
           {uncertainCt > 0 && (
-            <StatCard label="Needs Data" value={uncertainCt} unit="" color="var(--text2)" />
+            <div
+              role="button"
+              tabIndex={0}
+              className="cursor-pointer"
+              onClick={() => toggleTile('uncertain')}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleTile('uncertain'); } }}
+              title="Click to see which checks need more data"
+            >
+              <StatCard
+                label={openTile === 'uncertain' ? 'Needs Data ▾' : 'Needs Data ▸'}
+                value={uncertainCt}
+                unit=""
+                color="var(--text2)"
+              />
+            </div>
           )}
         </div>
       </div>
+
+      {/* Inline disclosure: which checks are NA / uncertain, and why */}
+      {openTile && (() => {
+        const list = checks.filter(c => c.status === (openTile === 'na' ? 'na' : 'uncertain'));
+        const heading = openTile === 'na' ? 'Not Applicable' : 'Needs Data';
+        const intro =
+          openTile === 'na'
+            ? 'These checks were skipped because they do not apply to your company profile (e.g. GST disabled, no TDS module).'
+            : 'These checks could not run because a required input file or value was missing or unparseable.';
+        return (
+          <div
+            className="mb-6 rounded-xl border overflow-hidden"
+            style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}
+          >
+            <div
+              className="flex items-center justify-between px-4 py-2.5"
+              style={{ background: 'var(--bg3)', borderBottom: '1px solid var(--border)' }}
+            >
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text2)' }}>
+                  {heading} — {list.length} checks
+                </div>
+                <div className="text-xs mt-0.5" style={{ color: 'var(--text3)' }}>{intro}</div>
+              </div>
+              <button
+                onClick={() => setOpenTile(null)}
+                className="text-xs px-2 py-1 rounded"
+                style={{ color: 'var(--text3)', background: 'transparent', border: '1px solid var(--border)' }}
+                aria-label="Close"
+              >
+                Close
+              </button>
+            </div>
+            <div className="divide-y max-h-80 overflow-auto" style={{ borderColor: 'var(--border)' }}>
+              {list.map(c => (
+                <div key={c.id} className="px-4 py-2.5 flex gap-3 items-start" style={{ borderColor: 'var(--border)' }}>
+                  <span
+                    className="text-[10px] font-mono px-1.5 py-0.5 rounded shrink-0 mt-0.5"
+                    style={{ background: 'var(--bg3)', color: 'var(--text3)' }}
+                    title={DIM_LABELS[c.dim]}
+                  >
+                    {c.id}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm" style={{ color: 'var(--text1)' }}>{c.name}</div>
+                    {c.note && (
+                      <div className="text-xs mt-0.5" style={{ color: 'var(--text3)' }}>{c.note}</div>
+                    )}
+                    <div className="text-[11px] mt-0.5" style={{ color: 'var(--text3)' }}>
+                      {DIM_LABELS[c.dim]}
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {list.length === 0 && (
+                <div className="px-4 py-6 text-center text-sm" style={{ color: 'var(--text3)' }}>
+                  No checks in this category.
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* KPI Tiles */}
       <div className="mb-6">
@@ -338,26 +450,53 @@ export default function DashboardView() {
             </button>
           </div>
           <div className="rounded-xl border overflow-hidden divide-y" style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}>
-            {topFlags.map(flag => (
-              <div key={flag.id} className="flex items-start gap-3 px-4 py-3" style={{ borderColor: 'var(--border)' }}>
-                <span
-                  className="text-xs px-1.5 py-0.5 rounded font-semibold shrink-0 mt-0.5"
-                  style={{ background: SEV_BG[flag.severity] ?? 'var(--bg4)', color: SEV_COLORS[flag.severity] ?? 'var(--text2)' }}
+            {topFlags.map(flag => {
+              const drillable = hasDrillDown(flag.id, dbStatsRef, parsedData);
+              const RowTag: 'button' | 'div' = drillable ? 'button' : 'div';
+              return (
+                <RowTag
+                  key={flag.id}
+                  className={`w-full text-left flex items-start gap-3 px-4 py-3 ${drillable ? 'transition-colors hover:bg-[var(--bg3)] cursor-pointer' : ''}`}
+                  style={{ borderColor: 'var(--border)' }}
+                  {...(drillable ? { onClick: () => setDrillFlag(flag) } : {})}
                 >
-                  {flag.severity.toUpperCase()}
-                </span>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium" style={{ color: 'var(--text1)' }}>{flag.title}</div>
-                  <div className="text-xs mt-0.5" style={{ color: 'var(--text2)' }}>{flag.detail}</div>
-                </div>
-                {flag.count !== undefined && (
-                  <div className="text-xs font-mono shrink-0" style={{ color: 'var(--text3)' }}>×{flag.count}</div>
-                )}
-              </div>
-            ))}
+                  <span
+                    className="text-xs px-1.5 py-0.5 rounded font-semibold shrink-0 mt-0.5"
+                    style={{ background: SEV_BG[flag.severity] ?? 'var(--bg4)', color: SEV_COLORS[flag.severity] ?? 'var(--text2)' }}
+                  >
+                    {flag.severity.toUpperCase()}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium" style={{ color: 'var(--text1)' }}>{flag.title}</div>
+                    <div className="text-xs mt-0.5" style={{ color: 'var(--text2)' }}>{flag.detail}</div>
+                    {drillable && (
+                      <div className="text-xs mt-1" style={{ color: 'var(--teal)' }}>
+                        View affected vouchers →
+                      </div>
+                    )}
+                  </div>
+                  {flag.count !== undefined && (
+                    <div className="text-xs font-mono shrink-0" style={{ color: 'var(--text3)' }}>×{flag.count}</div>
+                  )}
+                </RowTag>
+              );
+            })}
           </div>
         </div>
       )}
+
+      {drillFlag && (() => {
+        const drill = getDrillDown(drillFlag.id, drillFlag.title, dbStatsRef, parsedData);
+        if (!drill) return null;
+        return (
+          <VoucherDrillDown
+            title={drill.title}
+            vouchers={drill.vouchers}
+            extraColumns={drill.extraColumns}
+            onClose={() => setDrillFlag(null)}
+          />
+        );
+      })()}
 
       {/* Top Insights panel */}
       {topInsights.length > 0 && (

@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client';
 
 const ALL_TOOLS = [
   { id: 'accountingiq', label: 'AccountingIQ', tagline: 'Tally XML Analyser', tagColor: 'var(--teal)' },
+  { id: 'practiceiq',   label: 'PracticeIQ',   tagline: 'CA Practice Management', tagColor: 'var(--purple)' },
   { id: 'researchiq',   label: 'ResearchIQ',   tagline: 'AI-Powered Legal Research', tagColor: 'var(--blue)' },
 ];
 

@@ -31,9 +31,9 @@ export async function GET(request: NextRequest) {
   const companyId = new URL(request.url).searchParams.get('company_id');
 
   let query = admin
-    .from('analysis_runs')
+    .from('accountingiq_analysis_runs')
     .select('id, run_at, overall_score, capped_score, score_capped, dim_scores, checks')
-    .eq('user_id', user.id)
+    .eq('owner_user_id', user.id)
     .order('run_at', { ascending: true })
     .limit(2);
 

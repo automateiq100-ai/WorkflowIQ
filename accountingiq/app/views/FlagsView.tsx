@@ -1,7 +1,10 @@
 'use client';
 
+import { useState } from 'react';
 import { useApp } from '@/lib/state';
 import { generateFlags } from '@/lib/flags';
+import { getDrillDown, hasDrillDown } from '@/lib/voucher-filters';
+import VoucherDrillDown from '@/app/components/VoucherDrillDown';
 import type { AnomalyFlag } from '@/lib/types';
 
 type Severity = AnomalyFlag['severity'];
@@ -25,6 +28,7 @@ const SEVERITY_BADGE: Record<Severity, string> = {
 export default function FlagsView() {
   const { state, dispatch } = useApp();
   const { results, parsedData, files } = state;
+  const [drillFlag, setDrillFlag] = useState<AnomalyFlag | null>(null);
 
   if (!results) {
     return (
@@ -97,7 +101,12 @@ export default function FlagsView() {
                   style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}
                 >
                   {group.map(flag => (
-                    <FlagRow key={flag.id} flag={flag} />
+                    <FlagRow
+                      key={flag.id}
+                      flag={flag}
+                      drillable={hasDrillDown(flag.id, dbStats, parsedData)}
+                      onDrill={() => setDrillFlag(flag)}
+                    />
                   ))}
                 </div>
               </section>
@@ -105,13 +114,37 @@ export default function FlagsView() {
           })}
         </div>
       )}
+
+      {drillFlag && (() => {
+        const drill = getDrillDown(drillFlag.id, drillFlag.title, dbStats, parsedData);
+        if (!drill) return null;
+        return (
+          <VoucherDrillDown
+            title={drill.title}
+            vouchers={drill.vouchers}
+            extraColumns={drill.extraColumns}
+            onClose={() => setDrillFlag(null)}
+          />
+        );
+      })()}
     </div>
   );
 }
 
-function FlagRow({ flag }: { flag: AnomalyFlag }) {
+function FlagRow({
+  flag, drillable, onDrill,
+}: {
+  flag: AnomalyFlag;
+  drillable: boolean;
+  onDrill: () => void;
+}) {
+  const Wrapper: 'button' | 'div' = drillable ? 'button' : 'div';
   return (
-    <div className="flex items-start gap-4 px-5 py-3" style={{ borderColor: 'var(--border)' }}>
+    <Wrapper
+      className={`w-full flex items-start gap-4 px-5 py-3 text-left ${drillable ? 'transition-colors hover:bg-[var(--bg3)] cursor-pointer' : ''}`}
+      style={{ borderColor: 'var(--border)' }}
+      {...(drillable ? { onClick: onDrill } : {})}
+    >
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium mb-0.5" style={{ color: 'var(--text1)' }}>
           {flag.title}
@@ -119,6 +152,11 @@ function FlagRow({ flag }: { flag: AnomalyFlag }) {
         <div className="text-xs leading-relaxed" style={{ color: 'var(--text2)' }}>
           {flag.detail}
         </div>
+        {drillable && (
+          <div className="text-xs mt-1" style={{ color: 'var(--teal)' }}>
+            View affected vouchers →
+          </div>
+        )}
       </div>
       {flag.count !== undefined && (
         <div
@@ -128,6 +166,6 @@ function FlagRow({ flag }: { flag: AnomalyFlag }) {
           ×{flag.count}
         </div>
       )}
-    </div>
+    </Wrapper>
   );
 }

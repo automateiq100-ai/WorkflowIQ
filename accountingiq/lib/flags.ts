@@ -41,16 +41,10 @@ export function generateFlags(
 
   // Data-driven flags from dbStats
   if (dbStats) {
-    const dupCount = Object.values(dbStats.dupVnoMap).reduce((s, v) => s + v, 0);
-    if (dupCount > 0) {
-      flags.push({
-        id: 'flag-dup-vno',
-        severity: 'high',
-        title: 'Duplicate Voucher Numbers',
-        detail: `${dupCount} duplicate voucher number occurrence(s) found in DayBook.`,
-        count: dupCount,
-      });
-    }
+    // Note: duplicate-voucher-number reporting is handled by the C2 engine
+    // check (engine.ts), which surfaces both the count of distinct
+    // duplicated (type+vno) pairs and the total occurrences in one
+    // message — no separate flag-dup-vno needed.
 
     if (dbStats.zeroAmt > 0) {
       flags.push({

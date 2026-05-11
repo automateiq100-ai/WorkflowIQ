@@ -16,6 +16,7 @@
   --green: #4caf79;
   --purple: #9b7fe8;
   --coral: #f26b5b;
+  --pink: #e879c3;
 }
 
 html.light {
@@ -34,6 +35,7 @@ html.light {
   --green: #2e8f5a;
   --purple: #7152cc;
   --coral: #c2533e;
+  --pink: #c0479c;
 }
 
 *, *::before, *::after {
@@ -56,6 +58,7 @@ html.light {
   --color-green: var(--green);
   --color-purple: var(--purple);
   --color-coral: var(--coral);
+  --color-pink: var(--pink);
   --font-sans: var(--font-outfit);
   --font-serif: var(--font-dm-serif);
   --font-mono: var(--font-dm-mono);

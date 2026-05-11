@@ -9,25 +9,9 @@
 import { NextResponse } from 'next/server';
 import { getUserId } from '@/lib/connectors/auth';
 import { readLastSync } from '../route';
+import { detectTallyError } from '@/lib/connectors/tally/detect-error';
 
 const PREVIEW_CHARS = 1000;
-
-/** Surface common Tally error envelopes / suspicious responses. */
-function detectTallyError(xml: string): string | null {
-  if (!xml) return 'empty response';
-  if (xml.length < 200) return `unusually short response (${xml.length} chars) — likely Tally rejected the request`;
-  if (/<RESPONSE\b[\s\S]*?<ERRORS>(\d+)<\/ERRORS>/i.test(xml)) {
-    const m = /<LINEERROR>([^<]+)<\/LINEERROR>/i.exec(xml);
-    return `Tally returned an error envelope${m ? ': ' + m[1] : ''}`;
-  }
-  if (/<LINEERROR>([^<]+)<\/LINEERROR>/i.test(xml)) {
-    return `Tally LINEERROR: ${/<LINEERROR>([^<]+)<\/LINEERROR>/i.exec(xml)?.[1] ?? '?'}`;
-  }
-  if (/^\s*<!DOCTYPE\s+html/i.test(xml) || /^\s*<html\b/i.test(xml)) {
-    return 'Tally returned HTML instead of XML — gateway misconfigured?';
-  }
-  return null;
-}
 
 export async function GET(req: Request) {
   const userId = await getUserId();

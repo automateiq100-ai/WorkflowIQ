@@ -113,7 +113,8 @@ export type ViewId =
   | 'mis-setup' | 'mis-report'
   | 'reconciliation' | 'aiAnalysis'
   | 'data-view' | 'agent-fix'
-  | 'tally-connection';
+  | 'tally-connection'
+  | 'master-setup';
 
 export type Theme = 'dark' | 'light';
 
@@ -145,6 +146,11 @@ export interface ChunkedStats {
   missingParty: number;
   cashOver10k: number;
   roundCount: number;
+  /** Count of vouchers per `${type}${vno}` key.  Tally allows the
+   *  same voucher number across different voucher types (Sales/001 and
+   *  Receipt/001 are independent series), so keying on type+vno avoids
+   *  flagging legitimate cross-series collisions as duplicates.  Use
+   *  splitDupKey() to render keys back as { type, vno }. */
   dupVnoMap: Record<string, number>;
   monthCounts: Record<string, number>;
   dateSet: string[];        // serialised for session (Set not serialisable)
@@ -156,11 +162,40 @@ export interface ChunkedStats {
   salesVoucherTotal: number;
   purchVoucherTotal: number;
   cashBankNetMovement: number;
+  /** Sum of |amt| over Receipt-semantic vouchers only.  Paired with
+   *  paymentTotal below — together they let H4 derive the net change
+   *  in cash/bank from the DayBook (receipts − payments) to compare
+   *  against the TB's net period movement (closing − opening). */
+  receiptTotal: number;
+  /** Sum of |amt| over Payment-semantic vouchers only (excludes Receipts /
+   *  Contras / Journals).  Drives E6 (TDS reasonableness) — TDS is a
+   *  fraction of money paid out, not money received. */
+  paymentTotal: number;
+  /** Sum of |amt| over Contra-semantic vouchers only (cash↔bank or
+   *  bank↔bank transfers).  Each contra touches TWO cash/bank ledgers,
+   *  so it lands twice in the TB's cash/bank Dr+Cr turnover but only
+   *  once in cashBankNetMovement above; H4 adds contraTotal back to the
+   *  DB side to match the TB's double-count. */
+  contraTotal: number;
   taxVoucherTotal: number;
   journalNetAmt: number;
   outOfFY: number;
   vouchers: Voucher[];
 }
+
+/** Per-voucher findings — set by the DayBook parser at the moment a voucher
+ *  is processed.  Mirrors the aggregate counters on ChunkedStats so the UI
+ *  can drill from "10 of 198 vouchers missing numbers" back to the actual
+ *  10 rows without re-running detection.  Kept as an array of string tokens
+ *  (rather than per-flag booleans) so adding a new finding doesn't touch
+ *  every Voucher write site. */
+export type VoucherFlag =
+  | 'missingVno'
+  | 'missingParty'   // trade-type voucher (sales/sr/pur/pr/receipt/payment) with no party
+  | 'zeroAmt'
+  | 'cashOver10k'
+  | 'outOfFY'
+  | 'wrongType';     // Journal touching cash/bank, or Receipt/Payment with no cash/bank counterpart
 
 export interface Voucher {
   date: string;
@@ -169,6 +204,21 @@ export interface Voucher {
   party: string;
   amount: number;
   narration: string;
+  flags?: VoucherFlag[];
+  /** Per-leg snapshot of ALLLEDGERENTRIES.LIST: lowercased ledger name and
+   *  Dr/Cr direction (Dr = ISDEEMEDPOSITIVE=Yes).  Two engine post-passes
+   *  use it:
+   *    • missingParty rescue scans names looking for a debtor/creditor leg
+   *    • wrong-type classification uses both name (→ category) and direction
+   *      (→ cash-flow direction) to detect e.g. a Payment voucher with the
+   *      bank leg actually Dr (money in) — that's structurally a Receipt. */
+  legs?: Array<{ name: string; dr: boolean }>;
+  /** Set on wrong-type vouchers by the engine post-pass: a best-guess
+   *  voucher type inferred from what categories the ledger entries fall
+   *  under (e.g. Sales + Debtor → "sales"; Bank + Debtor → "receipt").
+   *  Shown in the wrong-type drill-down so the user knows what to
+   *  reclassify the voucher to. */
+  suggestedType?: string;
 }
 
 export interface Check {
@@ -211,6 +261,23 @@ export interface ParsedData {
   outputGSTAmt: number;
   inputITCAmt: number;
   tdsLedgerFound: boolean;
+  /** Sum of |closing| over all TDS Payable / TDS-on-X ledgers in the TB. */
+  tdsPayableAmt: number;
+  /** Sum of |closing| over all Stock-classified ledgers in the TB.  Used
+   *  as a fallback for closingStock when the BS parser's narrow patterns
+   *  miss user-named stock ledgers. */
+  tbStock: number;
+  /** Gross period turnover (Dr + Cr movement) over every cash / bank /
+   *  bank-OD ledger in the Trial Balance.  Compared against DayBook
+   *  cash+bank voucher turnover by H4.  Only populated when the TB
+   *  export includes period movement columns (DSPDRAMTA / DSPCRAMTA);
+   *  a closing-balance-only TB leaves this at 0 and H4 falls back to
+   *  the net-movement comparison below. */
+  tbCashBankMovement: number;
+  /** Signed net movement (closing − opening) across cash/bank/bank-od
+   *  ledgers — always derivable from the bridge's custom TB collection,
+   *  which fetches OpeningBalance regardless of any F12 toggle. */
+  tbCashBankNetMovement: number;
   pfLedgerFound: boolean;
   salesLedgersNoRate: number;
   gstDiffPct: number;
@@ -239,6 +306,11 @@ export interface ParsedData {
   depAmt: number;
   plSections: PLSection[];
   openingStock: number;
+  /** Closing stock amount as it appears on the P&L (typically as a
+   *  "Less: Closing Stock" deduction inside Cost of Sales).  Captured
+   *  alongside openingStock so the D5 check can distinguish "no closing
+   *  stock anywhere" from "P&L has it but BS doesn't". */
+  plClosingStock: number;
 
   // Balance Sheet (signed values — Bug 1)
   ca: number;
@@ -251,6 +323,11 @@ export interface ParsedData {
   bsCashBankTotal: number;
   /** Net Profit read directly from BS "Profit & Loss A/c" line (Bug 2) */
   bsNetProfit: number | null;
+  /** Suspense / miscellaneous rows seen on the BS (non-zero only).
+   *  Surfaces group rollups like "Suspense A/c" that parseTrialBalance
+   *  skips because the master classifies them as TYPE=group, so the
+   *  largest suspense balance in the books doesn't go unflagged. */
+  bsSuspenseLedgers?: Array<{ name: string; amount: number }>;
 
   // Group Summary
   salesWrongGroup: boolean;
@@ -270,6 +347,16 @@ export interface TBLedger {
   nl: string;   // lowercased
   closing: number;
   dr: boolean;
+  /** Period Dr / Cr turnover for this ledger.  Only present when the TB
+   *  export is a "TB with transactions" report (DSPDRAMTA / DSPCRAMTA
+   *  fields populated).  Used by H4 to reconcile DayBook cash/bank
+   *  voucher turnover against TB cash/bank period activity. */
+  movements?: { debit: number; credit: number };
+  /** Period opening balance (signed).  Populated when the bridge pulls
+   *  the TB via the WIQTrialBalance custom collection or when Tally's
+   *  built-in TB had "Show Opening Balance" on.  Lets H4 derive net
+   *  period movement (closing − opening) without needing gross Dr/Cr. */
+  opening?: number;
 }
 
 /**
@@ -315,30 +402,9 @@ export interface UserProfile {
   email: string;
   full_name: string | null;
   mobile: string | null;
-  company_name: string | null;
-  company_type: string | null;
   selected_tools: string[];
-  gst_applicable: boolean;
-  gst_regular: boolean;
-  tds_applicable: boolean;
-  has_employees: boolean;
-  has_fa_filter: boolean;
-  is_goods: boolean;
-  full_fy: boolean;
   theme: 'dark' | 'light';
   onboarding_done: boolean;
-}
-
-export function dbProfileToFilters(p: Partial<UserProfile>): CompanyProfile {
-  return {
-    gstApplicable: p.gst_applicable ?? false,
-    gstRegular:    p.gst_regular ?? false,
-    tdsApplicable: p.tds_applicable ?? false,
-    hasEmployees:  p.has_employees ?? false,
-    hasFAfilter:   p.has_fa_filter ?? false,
-    isGoods:       p.is_goods ?? false,
-    fullFY:        p.full_fy ?? true,
-  };
 }
 
 export interface MISSetup {
@@ -349,8 +415,10 @@ export interface MISSetup {
 
 export interface Company {
   id: string;
-  user_id: string;
+  owner_user_id: string;
   name: string;
+  gstin: string | null;
+  pan: string | null;
   company_type: string | null;
   gst_applicable: boolean;
   gst_regular: boolean;
@@ -359,7 +427,10 @@ export interface Company {
   has_fa_filter: boolean;
   is_goods: boolean;
   full_fy: boolean;
+  tally_company_id: string | null;
+  tally_company_name: string | null;
   created_at: string;
+  updated_at: string;
 }
 
 export interface ActiveCompany {
@@ -406,6 +477,17 @@ export interface AppState {
   aiAnalysisLoading: boolean;
   /** last error from /api/ai, null when clean */
   aiAnalysisError: string | null;
+  /** Per-company ledger classification overrides — user-confirmed mappings
+   *  that always win over auto-classification.  Keyed by lowercased ledger
+   *  name.  Loaded from localStorage on company selection (and synced to
+   *  Supabase later when we move overrides server-side). */
+  ledgerOverrides?: Map<string, import('./ledger-overrides').LedgerOverride>;
+  /** Period the user actually asked for (folder selector or Tally
+   *  bridge sync).  Captured at analysis time so downstream rules can
+   *  compare actual data coverage to user intent — e.g. "user requested
+   *  12 months but only 2 had vouchers" is a sparse-books signal, not
+   *  a partial-period one.  ISO date strings (YYYY-MM-DD). */
+  requestedPeriod?: { start: string; end: string; type: 'monthly' | 'quarterly' | 'yearly' | 'custom' };
 }
 
 export interface Insight {

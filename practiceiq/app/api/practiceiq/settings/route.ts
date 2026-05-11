@@ -1,28 +1,30 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { getFirmContext } from '@/lib/practiceiq/auth';
 
 export async function GET() {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const ctx = await getFirmContext(supabase);
+  if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const { data } = await supabase
     .from('practiceiq_settings')
     .select('*')
-    .eq('owner_user_id', user.id)
+    .eq('firm_id', ctx.firmId)
     .maybeSingle();
   return NextResponse.json({ data });
 }
 
 export async function PUT(req: Request) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const ctx = await getFirmContext(supabase);
+  if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const body = await req.json();
+  delete body.firm_id;
   const { data, error } = await supabase
     .from('practiceiq_settings')
-    .upsert({ ...body, owner_user_id: user.id })
+    .upsert({ ...body, firm_id: ctx.firmId })
     .select()
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

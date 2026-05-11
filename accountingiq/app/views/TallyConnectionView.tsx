@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import type { ConnectorSession, ConnectorCompany, ReportKind } from '@/lib/connectors/types';
+import { useApp } from '@/lib/state';
 
 const SESSION_KEY = 'aiq.tallySession';
 
@@ -52,6 +53,7 @@ function saveSession(s: ConnectorSession | null): void {
 }
 
 export default function TallyConnectionView() {
+  const { dispatch } = useApp();
   const [session, setSession] = useState<ConnectorSession | null>(null);
   const [pairCode, setPairCode] = useState<string | null>(null);
   const [pairing, setPairing] = useState(false);
@@ -365,6 +367,40 @@ export default function TallyConnectionView() {
             </div>
           )}
         </Section>
+      )}
+
+      {/* Next-step CTA — once paired and company is picked, point users at Upload Files */}
+      {session?.selectedCompany && (
+        <div
+          className="rounded-xl p-4 mb-3 flex items-center gap-4"
+          style={{
+            background: 'linear-gradient(135deg, rgba(45,212,191,0.12), rgba(45,212,191,0.04))',
+            border: '1px solid var(--teal)',
+          }}
+        >
+          <div
+            className="shrink-0 w-10 h-10 rounded-full flex items-center justify-center text-lg"
+            style={{ background: 'var(--teal)', color: '#000' }}
+          >
+            ✓
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-semibold" style={{ color: 'var(--text1)' }}>
+              Tally is connected.
+            </div>
+            <div className="text-xs mt-0.5" style={{ color: 'var(--text2)' }}>
+              Next: open <strong>Upload Files</strong> and click <strong>Pull from Tally</strong> to fetch the
+              5 reports needed for analysis.
+            </div>
+          </div>
+          <button
+            onClick={() => dispatch({ type: 'SET_VIEW', view: 'upload' })}
+            className="shrink-0 text-xs px-4 py-2 rounded-lg font-semibold whitespace-nowrap"
+            style={{ background: 'var(--teal)', color: '#000' }}
+          >
+            Go to Upload Files →
+          </button>
+        </div>
       )}
 
       {/* Step 4: Debug Sync — visible once a company is picked */}

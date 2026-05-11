@@ -33,9 +33,9 @@ export async function GET(request: NextRequest) {
   );
 
   let query = admin
-    .from('analysis_runs')
+    .from('accountingiq_analysis_runs')
     .select('id, run_at, overall_score, capped_score, score_capped, period_type, period_start, period_end')
-    .eq('user_id', user.id)
+    .eq('owner_user_id', user.id)
     .order('run_at', { ascending: false })
     .limit(limit);
 

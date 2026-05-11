@@ -37,48 +37,13 @@ export async function GET() {
   const admin = adminClient();
 
   const { data: companies, error } = await admin
-    .from('companies')
+    .from('accountingiq_companies')
     .select('*')
-    .eq('user_id', user.id)
+    .eq('owner_user_id', user.id)
     .order('created_at', { ascending: true });
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-
-  // Auto-migrate: if no companies yet and user_profiles has a company_name, seed one
-  if (!companies || companies.length === 0) {
-    const { data: profile } = await admin
-      .from('user_profiles')
-      .select('company_name, company_type, gst_applicable, gst_regular, tds_applicable, has_employees, has_fa_filter, is_goods, full_fy')
-      .eq('id', user.id)
-      .single();
-
-    if (profile?.company_name) {
-      const { data: inserted, error: insertErr } = await admin
-        .from('companies')
-        .insert({
-          user_id: user.id,
-          name: profile.company_name,
-          company_type: profile.company_type ?? null,
-          gst_applicable: profile.gst_applicable ?? false,
-          gst_regular:    profile.gst_regular ?? false,
-          tds_applicable: profile.tds_applicable ?? false,
-          has_employees:  profile.has_employees ?? false,
-          has_fa_filter:  profile.has_fa_filter ?? false,
-          is_goods:       profile.is_goods ?? false,
-          full_fy:        profile.full_fy ?? true,
-        })
-        .select('*')
-        .single();
-
-      if (!insertErr && inserted) {
-        return NextResponse.json({ companies: [inserted] });
-      }
-    }
-
-    return NextResponse.json({ companies: [] });
-  }
-
-  return NextResponse.json({ companies });
+  return NextResponse.json({ companies: companies ?? [] });
 }
 
 export async function POST(request: NextRequest) {
@@ -92,9 +57,9 @@ export async function POST(request: NextRequest) {
 
   const admin = adminClient();
   const { data, error } = await admin
-    .from('companies')
+    .from('accountingiq_companies')
     .insert({
-      user_id:        user.id,
+      owner_user_id: user.id,
       name:           body.name.trim(),
       company_type:   body.company_type || null,
       gst_applicable: body.gst_applicable ?? false,
