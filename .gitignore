@@ -43,3 +43,4 @@ __pycache__/
 *.pyo
 *.pyd
 .venv/
+.claude/settings.local.json
