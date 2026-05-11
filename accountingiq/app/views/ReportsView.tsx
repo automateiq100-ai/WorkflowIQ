@@ -2,10 +2,11 @@
 
 import { useState } from 'react';
 import { useApp } from '@/lib/state';
-import { getGrade, DIM_LABELS, DIM_WEIGHTS, DIM_COLORS } from '@/lib/constants';
+import { getGrade, DIM_LABELS, DIM_WEIGHTS, DIM_COLORS, TOTAL_FILE_COUNT } from '@/lib/constants';
 import { generateFlags } from '@/lib/flags';
 import { generateInsights } from '@/lib/insights';
 import { generateHealthSignals } from '@/lib/health';
+import { splitDupKey } from '@/lib/voucher-filters';
 import type { DimKey, AnalysisResults, ParsedData, CompanyProfile, ChunkedStats } from '@/lib/types';
 
 const DIMS: DimKey[] = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
@@ -356,8 +357,10 @@ function buildVoucherAnalysis(dbStats: ChunkedStats | null): string {
     : '0';
 
   const dupEntries = Object.entries(dbStats.dupVnoMap ?? {})
+    .filter(([, c]) => c > 1)
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 10);
+    .slice(0, 10)
+    .map(([key, count]) => ({ ...splitDupKey(key), count }));
 
   const monthEntries = Object.entries(dbStats.monthCounts ?? {}).sort((a, b) => a[0].localeCompare(b[0]));
 
@@ -389,8 +392,8 @@ function buildVoucherAnalysis(dbStats: ChunkedStats | null): string {
     ${dupEntries.length > 0 ? `
     <h2>Duplicate Voucher Numbers (Top 10)</h2>
     <div class="card"><table>
-      <thead><tr><th>Voucher No</th><th style="text-align:right">Count</th></tr></thead>
-      <tbody>${dupEntries.map(([vno, cnt]) => `<tr><td class="mono">${vno}</td><td style="text-align:right;color:#f04848">${cnt}</td></tr>`).join('')}</tbody>
+      <thead><tr><th>Voucher Type</th><th>Voucher No</th><th style="text-align:right">Count</th></tr></thead>
+      <tbody>${dupEntries.map(({ type, vno, count }) => `<tr><td>${type || '(no type)'}</td><td class="mono">${vno}</td><td style="text-align:right;color:#f04848">${count}</td></tr>`).join('')}</tbody>
     </table></div>` : ''}
   `);
 }
@@ -422,7 +425,7 @@ function buildMISGroup1(results: AnalysisResults, parsedData: Partial<ParsedData
   const currentRatio  = ca > 0 && cl > 0 ? (ca / cl).toFixed(2) + '×' : '—';
   const workingCap    = ca - cl;
   const netMargin     = revenue > 0 ? ((netProfit / revenue) * 100).toFixed(1) + '%' : '—';
-  const misReadiness  = Math.round((filesLoaded.length / 13) * 100);
+  const misReadiness  = Math.round((filesLoaded.length / TOTAL_FILE_COUNT) * 100);
   const misScore      = Math.round(results.cappedScore * (misReadiness / 100));
 
   const profileTags = Object.entries(filters)
@@ -961,7 +964,7 @@ function MISReportViewer({
   const currentRatio = ca > 0 && cl > 0 ? ca / cl : null;
 
   const filesLoaded = Object.values(files).filter(f => f.hasContent);
-  const misReadiness = Math.round((filesLoaded.length / 13) * 100);
+  const misReadiness = Math.round((filesLoaded.length / TOTAL_FILE_COUNT) * 100);
   const misScore     = Math.round(results.cappedScore * (misReadiness / 100));
 
   const PROFILE_LABELS_SHORT: Record<string, string> = {
@@ -1045,7 +1048,7 @@ function MISReportViewer({
             {/* Files */}
             <div>
               <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--text3)' }}>
-                Files Analysed ({filesLoaded.length} of 13)
+                Files Analysed ({filesLoaded.length} of {TOTAL_FILE_COUNT})
               </div>
               <div className="flex flex-wrap gap-1.5">
                 {filesLoaded.map(f => (

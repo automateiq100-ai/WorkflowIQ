@@ -165,10 +165,40 @@ function UploadScreen({
   const requiredLoaded = FILE_TIERS.required.every(k => files[k].hasContent);
 
   useEffect(() => {
-    try {
-      const raw = sessionStorage.getItem(TALLY_SESSION_KEY);
-      if (raw) setTallySession(JSON.parse(raw) as ConnectorSession);
-    } catch { /* ignore */ }
+    let cancelled = false;
+
+    function readLocal(): ConnectorSession | null {
+      try {
+        const raw = sessionStorage.getItem(TALLY_SESSION_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw) as Partial<ConnectorSession>;
+        if (!parsed || typeof parsed.bridgeId !== 'string' || !parsed.bridgeId) return null;
+        return parsed as ConnectorSession;
+      } catch { return null; }
+    }
+
+    async function refresh() {
+      const local = readLocal();
+      if (local) { if (!cancelled) setTallySession(local); return; }
+      try {
+        const r = await fetch('/api/tally/active-session');
+        if (cancelled || !r.ok) return;
+        const data = (await r.json()) as { session: ConnectorSession | null };
+        if (cancelled || !data.session) return;
+        sessionStorage.setItem(TALLY_SESSION_KEY, JSON.stringify(data.session));
+        setTallySession(data.session);
+      } catch { /* ignore — banner just stays in unpaired state */ }
+    }
+
+    refresh();
+    const onFocus = () => { refresh(); };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
   }, []);
 
   // Period selection
@@ -437,6 +467,11 @@ function UploadScreen({
         start: expected.start.toISOString().slice(0, 10),
         end:   expected.end.toISOString().slice(0, 10),
       };
+      // Capture user's INTENT — what range they asked Tally for.  Drives
+      // sparse-books detection downstream (e.g. H8 distinguishes "user
+      // asked for 12 months but only 2 had vouchers" from "user
+      // intentionally uploaded a 2-month slice").
+      dispatch({ type: 'REQUESTED_PERIOD_SET', period: { ...period, type: periodType } });
       const r = await fetch('/api/tally/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -477,6 +512,19 @@ function UploadScreen({
   }
 
   async function handleAnalyse() {
+    // Capture the user's intended period before analysis runs so the
+    // engine and detector see the requested range alongside actual data.
+    const expected = getExpectedRange();
+    if (expected) {
+      dispatch({
+        type: 'REQUESTED_PERIOD_SET',
+        period: {
+          start: expected.start.toISOString().slice(0, 10),
+          end:   expected.end.toISOString().slice(0, 10),
+          type:  periodType,
+        },
+      });
+    }
     const { results, parsedData, dbStats } = analyseFiles(state);
     dispatch({ type: 'ANALYSIS_DONE', results, parsedData, dbStats });
 

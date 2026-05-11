@@ -4,10 +4,12 @@ import { useState } from 'react';
 import { useApp } from '@/lib/state';
 import { DIM_LABELS, DIM_COLORS, DIM_WEIGHTS } from '@/lib/constants';
 import StatusBadge from '@/app/components/StatusBadge';
-import type { DimKey, FilterMode, Check } from '@/lib/types';
+import type { DimKey, FilterMode, Check, AnomalyFlag } from '@/lib/types';
 import { getRemediation } from '@/lib/remediation';
 import { generateFlags, deriveSeverity } from '@/lib/flags';
+import { getDrillDown, hasDrillDown } from '@/lib/voucher-filters';
 import PushToTallyButton from '@/app/components/PushToTallyButton';
+import VoucherDrillDown from '@/app/components/VoucherDrillDown';
 
 const DIMS: DimKey[] = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
 
@@ -70,6 +72,7 @@ export default function ChecklistView() {
   const { results, parsedData, files } = state;
   const [filter, setFilter] = useState<FilterMode>('all');
   const [collapsed, setCollapsed] = useState<Set<DimKey>>(new Set());
+  const [drillFlag, setDrillFlag] = useState<AnomalyFlag | null>(null);
 
   if (!results) {
     return (
@@ -183,23 +186,52 @@ export default function ChecklistView() {
                     <span className="text-xs" style={{ color: 'var(--text3)' }}>{group.length} flag{group.length !== 1 ? 's' : ''}</span>
                   </div>
                   <div className="rounded-xl border overflow-hidden divide-y" style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}>
-                    {group.map(flag => (
-                      <div key={flag.id} className="flex items-start gap-3 px-4 py-3" style={{ borderColor: 'var(--border)' }}>
-                        <span className="text-xs font-mono shrink-0 mt-0.5" style={{ color: 'var(--text3)' }}>{flag.id}</span>
-                        <div className="flex-1 min-w-0">
-                          <div className="text-sm font-medium" style={{ color: 'var(--text1)' }}>{flag.title}</div>
-                          <div className="text-xs mt-0.5" style={{ color: 'var(--text2)' }}>{flag.detail}</div>
-                        </div>
-                        {flag.count !== undefined && (
-                          <div className="text-xs font-mono shrink-0" style={{ color: 'var(--text3)' }}>×{flag.count}</div>
-                        )}
-                      </div>
-                    ))}
+                    {group.map(flag => {
+                      const drillable = hasDrillDown(flag.id, dbStats, parsedData);
+                      const RowTag: 'button' | 'div' = drillable ? 'button' : 'div';
+                      return (
+                        <RowTag
+                          key={flag.id}
+                          className={`w-full text-left flex items-start gap-3 px-4 py-3 ${drillable ? 'transition-colors hover:bg-[var(--bg3)] cursor-pointer' : ''}`}
+                          style={{ borderColor: 'var(--border)' }}
+                          {...(drillable ? { onClick: () => setDrillFlag(flag) } : {})}
+                        >
+                          <span className="text-xs font-mono shrink-0 mt-0.5" style={{ color: 'var(--text3)' }}>{flag.id}</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm font-medium" style={{ color: 'var(--text1)' }}>{flag.title}</div>
+                            <div className="text-xs mt-0.5" style={{ color: 'var(--text2)' }}>{flag.detail}</div>
+                            {drillable && (
+                              <div className="text-xs mt-1" style={{ color: 'var(--teal)' }}>
+                                View affected vouchers →
+                              </div>
+                            )}
+                          </div>
+                          {flag.count !== undefined && (
+                            <div className="text-xs font-mono shrink-0" style={{ color: 'var(--text3)' }}>×{flag.count}</div>
+                          )}
+                        </RowTag>
+                      );
+                    })}
                   </div>
                 </div>
               );
             })}
           </div>
+        );
+      })()}
+
+      {/* Drill-down modal for clicking a flag in the Flags tab */}
+      {drillFlag && (() => {
+        const dbStats = files.daybook?.chunkedStats ?? null;
+        const drill = getDrillDown(drillFlag.id, drillFlag.title, dbStats, parsedData);
+        if (!drill) return null;
+        return (
+          <VoucherDrillDown
+            title={drill.title}
+            vouchers={drill.vouchers}
+            extraColumns={drill.extraColumns}
+            onClose={() => setDrillFlag(null)}
+          />
         );
       })()}
 

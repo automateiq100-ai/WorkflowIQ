@@ -8,6 +8,7 @@ import { NextResponse } from 'next/server';
 import { getUserId } from '@/lib/connectors/auth';
 import { getSessionForUser, toClientSession } from '@/lib/connectors/session-store';
 import { getConnector } from '@/lib/connectors/registry';
+import { detectTallyError } from '@/lib/connectors/tally/detect-error';
 import type { ReportKind, ReportPeriod } from '@/lib/connectors/types';
 
 // All known reports — required + conditional + optional. Sync attempts each one
@@ -81,6 +82,24 @@ export async function POST(req: Request) {
   for (const kind of kinds) {
     try {
       const r = await connector.fetchReport(clientSession, kind, period);
+      // Tally returns 200 OK with an error envelope inside the XML when a
+      // report name is unknown (e.g. "Fixed Assets Register" doesn't exist
+      // in a vanilla company). Without this check those envelopes would
+      // count as loaded files downstream and the dashboard would say
+      // "14 of 14" even when 2 are garbage.
+      const tallyErr = detectTallyError(r.xml);
+      if (tallyErr) {
+        results[kind] = { ok: false, error: tallyErr };
+        recordLastSync(userId, bridgeId, kind, {
+          xml: r.xml,
+          fetchedAt: Date.now(),
+          sizeBytes: r.xml.length,
+          ok: false,
+          error: tallyErr,
+        });
+        console.log(`[tally-sync] ${kind} REJECT ${tallyErr}`);
+        continue;
+      }
       results[kind] = { ok: true, xml: r.xml };
       recordLastSync(userId, bridgeId, kind, {
         xml: r.xml,

@@ -7,6 +7,7 @@ import * as XLSX from 'xlsx';
 import type { AnalysisResults, ParsedData, ChunkedStats, Check, TBLedger, ParsedStatement, FinancialNode } from './types';
 import { DIM_LABELS, DIM_WEIGHTS, getGrade } from './constants';
 import { decodeEntities, parseAmt, xmlText } from './parser';
+import { splitDupKey } from './voucher-filters';
 
 // ── Formatting helpers ────────────────────────────────────────────────────
 
@@ -375,20 +376,23 @@ function buildDayBookSheet(dbStats: ChunkedStats): XLSX.WorkSheet {
     }
   }
 
-  // Duplicate voucher numbers
-  const dupVnos = Object.entries(dbStats.dupVnoMap).filter(([, c]) => c > 1);
+  // Duplicate voucher numbers — keyed on `${type}${vno}` so cross-series
+  // collisions (Sales/001 vs Receipt/001) don't get reported as dupes.
+  const dupVnos = Object.entries(dbStats.dupVnoMap)
+    .filter(([, c]) => c > 1)
+    .map(([key, count]) => ({ ...splitDupKey(key), count }));
   if (dupVnos.length > 0) {
     rows.push([]);
     rows.push(['DUPLICATE VOUCHER NUMBERS']);
-    rows.push(['Voucher Number', 'Count']);
-    for (const [vno, count] of dupVnos.slice(0, 50)) {
-      rows.push([vno, count]);
+    rows.push(['Voucher Type', 'Voucher Number', 'Count']);
+    for (const { type, vno, count } of dupVnos.slice(0, 50)) {
+      rows.push([type || '(no type)', vno, count]);
     }
-    if (dupVnos.length > 50) rows.push([`… and ${dupVnos.length - 50} more`, '']);
+    if (dupVnos.length > 50) rows.push([`… and ${dupVnos.length - 50} more`, '', '']);
   }
 
   const ws = XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols'] = colWidths([36, 18]);
+  ws['!cols'] = colWidths([24, 28, 12]);
   return ws;
 }
 
