@@ -1,11 +1,12 @@
 {
   "name": "workflowiq",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "WorkFlowIQ — AccountingIQ + ResearchIQ + PracticeIQ, single-server",
   "scripts": {
     "build": "npm install --prefix accountingiq && npm run build --prefix accountingiq && npm install --prefix practiceiq && npm run build --prefix practiceiq",
     "start": "node server.js",
-    "dev": "set NODE_ENV=development && node --use-system-ca server.js"
+    "dev": "node server.js",
+    "dev:turbopack": "node -e \"process.env.NEXT_DEV='1'; require('./server.js')\""
   },
   "workspaces": [
     "accountingiq",

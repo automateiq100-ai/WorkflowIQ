@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { getFirmContext } from '@/lib/practiceiq/auth';
 
 export async function GET(req: Request) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const ctx = await getFirmContext(supabase);
+  if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const url = new URL(req.url);
   const clientId = url.searchParams.get('client_id');
@@ -18,8 +19,8 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const ctx = await getFirmContext(supabase);
+  if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const body = await req.json();
 
@@ -28,17 +29,17 @@ export async function POST(req: Request) {
     const { data: settings } = await supabase
       .from('practiceiq_settings')
       .select('invoice_prefix, invoice_counter')
-      .eq('owner_user_id', user.id)
+      .eq('firm_id', ctx.firmId)
       .single();
     const prefix = settings?.invoice_prefix ?? 'INV';
     const counter = (settings?.invoice_counter ?? 1);
     invoiceNumber = `${prefix}-${String(counter).padStart(4, '0')}`;
     await supabase
       .from('practiceiq_settings')
-      .upsert({ owner_user_id: user.id, invoice_counter: counter + 1 });
+      .upsert({ firm_id: ctx.firmId, owner_user_id: ctx.userId, invoice_counter: counter + 1 });
   }
 
-  const insert = { ...body, invoice_number: invoiceNumber, owner_user_id: user.id };
+  const insert = { ...body, invoice_number: invoiceNumber, firm_id: ctx.firmId, owner_user_id: ctx.userId };
   delete insert.id;
 
   const { data, error } = await supabase

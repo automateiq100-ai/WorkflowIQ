@@ -1,10 +1,21 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 
 type Tab = 'signin' | 'signup';
+
+// Whitelist of safe redirect destinations after sign-in. Mirror of the
+// guard in app/auth/callback/route.ts:isSafeNextPath.
+function safeNext(raw: string | null, fallback = '/portal'): string {
+  if (!raw || typeof raw !== 'string') return fallback;
+  if (!raw.startsWith('/')) return fallback;
+  if (raw.startsWith('//')) return fallback;
+  const okPrefixes = ['/portal', '/login', '/practiceiq', '/researchiq'];
+  if (okPrefixes.some(p => raw === p || raw.startsWith(p + '/'))) return raw;
+  return fallback;
+}
 
 const TOOLS = [
   { id: 'accountingiq', label: 'AccountingIQ', description: 'Tally XML Analyser — 60 checks, 0–100 score' },
@@ -24,7 +35,27 @@ const COUNTRY_CODES = [
 ];
 
 export default function LoginPage() {
+  // Suspense wraps the inner component because useSearchParams() requires
+  // a CSR bailout boundary in Next.js 16.
+  return (
+    <Suspense fallback={<LoginFallback />}>
+      <LoginInner />
+    </Suspense>
+  );
+}
+
+function LoginFallback() {
+  return (
+    <div className="flex items-center justify-center min-h-screen" style={{ background: 'var(--bg)' }}>
+      <div className="text-sm" style={{ color: 'var(--text3)' }}>Loading…</div>
+    </div>
+  );
+}
+
+function LoginInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const next = safeNext(searchParams?.get('next') ?? null);
   const [tab, setTab] = useState<Tab>('signin');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -57,7 +88,14 @@ export default function LoginPage() {
     if (error) {
       setError(error.message);
     } else {
-      router.push('/portal');
+      // Server-side cookies are set by the Supabase auth helper. Use a hard
+      // navigation when bouncing into PracticeIQ/ResearchIQ so the basePath-
+      // rewriting Express server picks up the request fresh.
+      if (next.startsWith('/practiceiq') || next.startsWith('/researchiq')) {
+        window.location.href = next;
+      } else {
+        router.push(next);
+      }
     }
   }
 
@@ -74,7 +112,7 @@ export default function LoginPage() {
       password: suPassword,
       options: {
         data: { full_name: suName.trim(), mobile: `${suCountry.code} ${suMobile.trim()}`, selected_tools: suTools },
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
+        emailRedirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent(next)}`,
       },
     });
     setLoading(false);
@@ -88,7 +126,11 @@ export default function LoginPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ selected_tools: suTools }),
       });
-      router.push('/portal');
+      if (next.startsWith('/practiceiq') || next.startsWith('/researchiq')) {
+        window.location.href = next;
+      } else {
+        router.push(next);
+      }
     } else {
       setMessage('Check your email for a verification link to complete sign-up.');
     }

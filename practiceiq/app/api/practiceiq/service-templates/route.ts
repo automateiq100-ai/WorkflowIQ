@@ -1,0 +1,74 @@
+import { NextResponse } from 'next/server';
+import { createClient } from '@/lib/supabase/server';
+import { getFirmContext } from '@/lib/practiceiq/auth';
+
+export async function GET(req: Request) {
+  const supabase = await createClient();
+  const ctx = await getFirmContext(supabase);
+  if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+
+  const url = new URL(req.url);
+  const moduleId = url.searchParams.get('module_id');
+
+  let q = supabase
+    .from('practiceiq_service_templates')
+    .select('*, doc_types:practiceiq_service_template_doc_types(*)')
+    .order('service', { ascending: true });
+  if (moduleId) q = q.eq('module_id', moduleId);
+
+  const { data, error } = await q;
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json({ data });
+}
+
+export async function POST(req: Request) {
+  const supabase = await createClient();
+  const ctx = await getFirmContext(supabase);
+  if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+
+  const body = await req.json();
+  const docTypes: Array<{ doc_type: string; label?: string | null }> = Array.isArray(body.doc_types)
+    ? body.doc_types
+    : [];
+
+  const insert = {
+    firm_id: ctx.firmId, owner_user_id: ctx.userId,
+    module_id: body.module_id ?? null,
+    service: body.service,
+    cadence: body.cadence,
+    deadline_day: body.deadline_day ?? null,
+    deadline_month: body.deadline_month ?? null,
+    followup_lead_days: body.followup_lead_days ?? null,
+    active: body.active ?? true,
+    is_system: false,
+  };
+
+  const { data: template, error } = await supabase
+    .from('practiceiq_service_templates')
+    .insert(insert)
+    .select()
+    .single();
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  if (docTypes.length) {
+    const rows = docTypes.map(dt => ({
+      template_id: template.id,
+      firm_id: ctx.firmId, owner_user_id: ctx.userId,
+      doc_type: dt.doc_type,
+      label: dt.label ?? null,
+    }));
+    const { error: dtErr } = await supabase
+      .from('practiceiq_service_template_doc_types')
+      .insert(rows);
+    if (dtErr) return NextResponse.json({ error: dtErr.message }, { status: 500 });
+  }
+
+  const { data: full } = await supabase
+    .from('practiceiq_service_templates')
+    .select('*, doc_types:practiceiq_service_template_doc_types(*)')
+    .eq('id', template.id)
+    .single();
+
+  return NextResponse.json({ data: full });
+}

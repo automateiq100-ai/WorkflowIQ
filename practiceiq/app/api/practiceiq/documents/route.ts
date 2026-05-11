@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { getFirmContext } from '@/lib/practiceiq/auth';
 
 const ALLOWED_MIME = new Set([
   'application/pdf',
@@ -14,8 +15,8 @@ const SIGNED_URL_TTL_SECONDS = 5 * 60;
 
 export async function GET(req: Request) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const ctx = await getFirmContext(supabase);
+  if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const url = new URL(req.url);
   const status = url.searchParams.get('status');
@@ -25,8 +26,8 @@ export async function GET(req: Request) {
 
   let q = supabase
     .from('practiceiq_documents')
-    .select('*')
-    .eq('owner_user_id', user.id)
+    .select('*, source_telegram_account:practiceiq_client_telegram_accounts(label, telegram_first_name, telegram_username)')
+    .eq('firm_id', ctx.firmId)
     .is('deleted_at', null)
     .order('uploaded_at', { ascending: false });
 
@@ -50,8 +51,8 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const ctx = await getFirmContext(supabase);
+  if (!ctx) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
   const form = await req.formData();
   const file = form.get('file') as File | null;
@@ -82,7 +83,10 @@ export async function POST(req: Request) {
   const periodSeg = filingPeriod || 'unfiled';
   const docTypeSeg = docType || 'unclassified';
   const clientSeg = clientId || 'unfiled';
-  const path = `${user.id}/${clientSeg}/${periodSeg}/${docTypeSeg}/${ts}_${safeName}`;
+  // Path is firm-scoped so other members of the same firm can download via
+  // signed URLs. Storage RLS allows either firm-prefix (new) or user-prefix
+  // (legacy) for transitional access to pre-migration files.
+  const path = `${ctx.firmId}/${clientSeg}/${periodSeg}/${docTypeSeg}/${ts}_${safeName}`;
 
   const { error: upErr } = await supabase.storage
     .from('practiceiq-docs')
@@ -95,7 +99,7 @@ export async function POST(req: Request) {
   const { data, error } = await supabase
     .from('practiceiq_documents')
     .insert({
-      owner_user_id: user.id,
+      firm_id: ctx.firmId, owner_user_id: ctx.userId,
       client_id: clientId,
       storage_path: path,
       filename: file.name,
@@ -106,7 +110,7 @@ export async function POST(req: Request) {
       category,
       fy,
       source: 'manual',
-      uploaded_by: user.id,
+      uploaded_by: ctx.userId,
       status: 'received',
       retention_until: retentionUntil.toISOString().slice(0, 10),
       is_sensitive: true,
