@@ -48,15 +48,51 @@ export default function CompanyDashboardView() {
 
   useEffect(() => {
     if (!currentCompany) return;
+    let cancelled = false;
+    setLoading(true);
+
+    async function loadHistory(): Promise<unknown[]> {
+      const r = await fetch(`/api/analysis/history?company_id=${currentCompany!.id}&limit=5`);
+      const data = await r.json();
+      return data.runs ?? [];
+    }
 
     Promise.all([
-      fetch(`/api/analysis/history?company_id=${currentCompany.id}&limit=5`).then(r => r.json()),
+      loadHistory(),
       fetch(`/api/companies/${currentCompany.id}`).then(r => r.json()),
-    ]).then(([histData, compData]) => {
-      setRuns(histData.runs ?? []);
+    ]).then(async ([histRuns, compData]) => {
+      if (cancelled) return;
+      // Race-safety: the /api/analysis/save call from UploadView is
+      // fire-and-forget (.catch() => {}), and routing to this view can
+      // happen before the save's POST completes (~250-650ms per
+      // server logs).  If history comes back empty BUT we have a
+      // fresh local results.runAt, the save is likely still in flight.
+      // Retry once after 1s — typically by then it's landed.
+      const noServerRuns = !histRuns || (histRuns as unknown[]).length === 0;
+      const hasLocalRun = !!state.results?.runAt;
+      if (noServerRuns && hasLocalRun) {
+        await new Promise(r => setTimeout(r, 1000));
+        if (cancelled) return;
+        try {
+          const retried = await loadHistory();
+          if (cancelled) return;
+          setRuns(retried as AnalysisRun[]);
+        } catch { /* keep empty */ }
+      } else {
+        setRuns(histRuns as AnalysisRun[]);
+      }
       setCompany(compData.company ?? null);
-    }).catch(() => {}).finally(() => setLoading(false));
-  }, [currentCompany?.id]);
+    }).catch(() => {}).finally(() => {
+      if (!cancelled) setLoading(false);
+    });
+
+    return () => { cancelled = true; };
+    // Re-fetch when `analysed` flips false → true so a fresh save shows
+    // up on the "Last Analysis" panel without needing a manual refresh
+    // or company-switch round-trip.  Also re-fetch when `results?.runAt`
+    // changes — covers re-runs (analysed stays true so it alone wouldn't
+    // trip a re-fetch).
+  }, [currentCompany?.id, analysed, state.results?.runAt]);
 
   if (!currentCompany) {
     return (
@@ -75,8 +111,44 @@ export default function CompanyDashboardView() {
     );
   }
 
-  const latestRun = runs[0] ?? null;
+  // Prefer DB history (canonical source of truth across sessions/devices)
+  // but fall back to in-memory state.results when DB is empty AND the
+  // user has a fresh local analysis.  This covers three corner cases:
+  //   1. The /api/analysis/save call (fire-and-forget from UploadView)
+  //      hasn't completed yet — the 1s retry above handles most of this
+  //      but a slow DB write can still beat us.
+  //   2. The current user logged in as a different identity than the one
+  //      that ran the save — owner_user_id filter excludes the saved runs.
+  //   3. The company_id was null at save time (a known race when the user
+  //      ran analysis before fully selecting a company).
+  // In all three, the in-memory results are the only thing the user can
+  // see for THIS session, so we synthesize an AnalysisRun-shaped object
+  // from state.results to keep the panel useful.
+  const latestRun: AnalysisRun | null = runs[0] ?? (state.results ? {
+    id: 'local-' + state.results.runAt,
+    run_at: new Date(state.results.runAt).toISOString(),
+    overall_score: state.results.overall,
+    capped_score:  state.results.cappedScore,
+    score_capped:  state.results.scoreCapped,
+    period_type:   null,
+    period_start:  null,
+    period_end:    null,
+  } : null);
+  const isLocalOnly = !runs[0] && !!latestRun;
   const grade = latestRun ? getGrade(latestRun.overall_score) : null;
+
+  // Manual refresh handler — re-fetch history without needing to switch
+  // companies.  Useful when the save POST completed slightly later than
+  // the dashboard's auto-fetch (network jitter, slow Supabase write, etc.).
+  function handleRefresh() {
+    if (!currentCompany) return;
+    setLoading(true);
+    fetch(`/api/analysis/history?company_id=${currentCompany.id}&limit=5`)
+      .then(r => r.json())
+      .then(data => setRuns(data.runs ?? []))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }
   const companyInitials = currentCompany.name
     .split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase() ?? '').join('');
 
@@ -139,8 +211,20 @@ export default function CompanyDashboardView() {
           className="rounded-xl border p-5 flex flex-col gap-2"
           style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}
         >
-          <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text3)' }}>
-            Last Analysis
+          <div className="flex items-center justify-between">
+            <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text3)' }}>
+              Last Analysis
+            </div>
+            <button
+              onClick={handleRefresh}
+              disabled={loading}
+              className="text-xs px-1.5 py-0.5 rounded transition-colors"
+              style={{ color: loading ? 'var(--text3)' : 'var(--teal)', opacity: loading ? 0.5 : 1 }}
+              title="Refresh from server"
+              aria-label="Refresh last analysis"
+            >
+              ↻
+            </button>
           </div>
           {loading ? (
             <div className="text-xs" style={{ color: 'var(--text3)' }}>Loading…</div>
@@ -161,6 +245,11 @@ export default function CompanyDashboardView() {
                 </div>
                 {latestRun.score_capped && (
                   <div className="text-xs mt-0.5" style={{ color: 'var(--amber)' }}>⚠ capped</div>
+                )}
+                {isLocalOnly && (
+                  <div className="text-[10px] mt-0.5" style={{ color: 'var(--text3)' }}>
+                    ⓘ in-memory · save still syncing
+                  </div>
                 )}
               </div>
             </div>

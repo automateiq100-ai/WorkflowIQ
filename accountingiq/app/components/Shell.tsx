@@ -21,7 +21,27 @@ const FlagsView         = dynamic(() => import('@/app/views/FlagsView'));
 const ProfileView       = dynamic(() => import('@/app/views/ProfileView'));
 const ReportsView       = dynamic(() => import('@/app/views/ReportsView'));
 const RulesView         = dynamic(() => import('@/app/views/RulesView'));
-const MISReportView     = dynamic(() => import('@/app/views/MISReportView'));
+const MISUploadView     = dynamic(() => import('@/app/views/mis/MISUploadView'));
+const MISProfileView    = dynamic(() => import('@/app/views/mis/MISProfileView'));
+const MISRulesView      = dynamic(() => import('@/app/views/mis/MISRulesView'));
+const MISAnalysisView   = dynamic(() => import('@/app/views/mis/MISAnalysisView'));
+const MISChecklistView  = dynamic(() => import('@/app/views/mis/MISChecklistView'));
+const MISMetricsChecklistView = dynamic(() => import('@/app/views/mis/MISMetricsChecklistView'));
+const MISFixView        = dynamic(() => import('@/app/views/mis/MISFixView'));
+const MISAIFixView      = dynamic(() => import('@/app/views/mis/MISAIFixView'));
+
+// Report panels
+const MISReportCover      = dynamic(() => import('@/app/views/mis/report/MISReportCover'));
+const MISReportDashboard  = dynamic(() => import('@/app/views/mis/report/MISReportDashboard'));
+const MISReportPL         = dynamic(() => import('@/app/views/mis/report/MISReportPL'));
+const MISReportCashFlow   = dynamic(() => import('@/app/views/mis/report/MISReportCashFlow'));
+const MISReportBalanceSheet = dynamic(() => import('@/app/views/mis/report/MISReportBalanceSheet'));
+const MISReportWorkingCapital = dynamic(() => import('@/app/views/mis/report/MISReportWorkingCapital'));
+const MISReportCost       = dynamic(() => import('@/app/views/mis/report/MISReportCost'));
+const MISReportBPI        = dynamic(() => import('@/app/views/mis/report/MISReportBPI'));
+const MISReportStatutory  = dynamic(() => import('@/app/views/mis/report/MISReportStatutory'));
+const MISReportForecast   = dynamic(() => import('@/app/views/mis/report/MISReportForecast'));
+const MISReportBackup     = dynamic(() => import('@/app/views/mis/report/MISReportBackup'));
 const ReconciliationView = dynamic(() => import('@/app/views/ReconciliationView'));
 const AIAnalysisView      = dynamic(() => import('@/app/views/AIAnalysisView'));
 const CompanySelectorView = dynamic(() => import('@/app/views/CompanySelectorView'));
@@ -44,8 +64,25 @@ const VIEW_COMPONENTS: Record<ViewId, React.ComponentType> = {
   profile:         ProfileView,
   reports:         ReportsView,
   rules:           RulesView,
-  'mis-setup':     MISReportView,
-  'mis-report':    MISReportView,
+  'mis-upload':              MISUploadView,
+  'mis-profile':             MISProfileView,
+  'mis-rules':               MISRulesView,
+  'mis-dashboard':           MISReportDashboard,
+  'mis-metrics-checklist':   MISMetricsChecklistView,
+  'mis-checklist':           MISChecklistView,
+  'mis-analysis':            MISAnalysisView,
+  'mis-report-cover':        MISReportCover,
+  'mis-report-pl':           MISReportPL,
+  'mis-report-cf':           MISReportCashFlow,
+  'mis-report-bs':           MISReportBalanceSheet,
+  'mis-report-wc':           MISReportWorkingCapital,
+  'mis-report-cost':         MISReportCost,
+  'mis-report-bpi':          MISReportBPI,
+  'mis-report-statutory':    MISReportStatutory,
+  'mis-report-forecast':     MISReportForecast,
+  'mis-report-backup':       MISReportBackup,
+  'mis-fix':                 MISFixView,
+  'mis-ai-plan':             MISAIFixView,
   reconciliation:  ReconciliationView,
   aiAnalysis:      AIAnalysisView,
   'data-view':     DataView,
@@ -208,6 +245,45 @@ export default function Shell({ user }: { user: UserInfo | null }) {
                   })}
                 </>
               )}
+            </>
+          )}
+
+          {currentModule === 'mis' && (
+            <>
+              {/* Setup journey — Profile → diagnose Missing → Upload → Rules → Master */}
+              {(['mis-profile', 'mis-fix', 'mis-upload', 'mis-rules', 'master-setup'] as ViewId[]).map(id => {
+                const v = VIEWS.find(x => x.id === id);
+                return v ? <NavItem key={v.id} view={v} active={currentView === v.id} onClick={() => navigate(v.id)} /> : null;
+              })}
+
+              <div className="mx-4 my-2 border-t" style={{ borderColor: 'var(--border)' }} />
+
+              {/* Post-setup actions */}
+              {(['mis-dashboard', 'mis-metrics-checklist', 'mis-checklist', 'mis-analysis', 'mis-ai-plan'] as ViewId[]).map(id => {
+                const v = VIEWS.find(x => x.id === id);
+                return v ? <NavItem key={v.id} view={v} active={currentView === v.id} onClick={() => navigate(v.id)} /> : null;
+              })}
+
+              <div className="mx-4 mt-3 mb-1 px-3 text-[10px] uppercase tracking-wider font-semibold" style={{ color: 'var(--text3)' }}>
+                MIS Report
+              </div>
+              {([
+                'mis-report-cover', 'mis-report-pl', 'mis-report-cf',
+                'mis-report-bs', 'mis-report-wc', 'mis-report-cost',
+                'mis-report-bpi', 'mis-report-statutory', 'mis-report-forecast',
+                'mis-report-backup',
+              ] as ViewId[]).map(id => {
+                const v = VIEWS.find(x => x.id === id);
+                return v ? <NavItem key={v.id} view={v} active={currentView === v.id} onClick={() => navigate(v.id)} /> : null;
+              })}
+            </>
+          )}
+
+          {currentModule === 'reconciliation' && (
+            <>
+              {VIEWS.filter(v => MODULE_VIEWS.reconciliation.includes(v.id)).map(v => (
+                <NavItem key={v.id} view={v} active={currentView === v.id} onClick={() => navigate(v.id)} />
+              ))}
             </>
           )}
         </nav>
@@ -394,7 +470,7 @@ function NavItem({
         <span
           className="ml-auto w-2 h-2 rounded-full animate-pulse shrink-0"
           style={{ background: 'var(--purple)' }}
-          title="AI analysis running…"
+          title="Analysis running…"
         />
       )}
     </button>

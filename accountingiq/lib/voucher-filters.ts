@@ -53,6 +53,7 @@ const FLAG_ID_TO_TAG: Record<string, VoucherFlag> = {
   C4: 'outOfFY',
   C5: 'wrongType',
   C6: 'zeroAmt',
+  G3: 'cashOver10k',
   // Data-flag ids (see lib/flags.ts).
   'flag-missing-vno':   'missingVno',
   'flag-missing-party': 'missingParty',
@@ -60,6 +61,21 @@ const FLAG_ID_TO_TAG: Record<string, VoucherFlag> = {
   'flag-cash-limit':    'cashOver10k',
   'flag-out-of-fy':     'outOfFY',
   'flag-wrong-type':    'wrongType',
+};
+
+/** Checks whose drill-down is computed on-the-fly from voucher attributes
+ *  rather than from a parser-set tag.  Each predicate runs over the full
+ *  voucher list to surface the rows that triggered the finding. */
+const VOUCHER_PREDICATE_DRILLDOWNS: Record<string, (v: Voucher) => boolean> = {
+  // F4 — high-value entries (> ₹1,00,000) without narration.
+  F4: v => Math.abs(v.amount) > 100_000 && !v.narration?.trim(),
+  // G4 — round-number entries (multiple of 1,000).  Mirrors the parser's
+  // counter (`amt > 0 && amt % 1000 === 0`) so the drill-down rows agree
+  // with the count surfaced on the check note.
+  G4: v => {
+    const amt = Math.abs(v.amount);
+    return amt > 0 && amt % 1000 === 0;
+  },
 };
 
 // ── Ledger-level drill-downs ───────────────────────────────────────────────
@@ -81,8 +97,17 @@ function ledgersAsVouchers(rows: Array<{ name: string; amount: number }>): Vouch
 }
 
 const LEDGER_FLAG_IDS = new Set([
-  'B1',           // engine check id
-  'flag-suspense', // data flag id
+  'B1',           // suspense / miscellaneous balances
+  'B2',           // near-duplicate ledger pairs (uses dupPairDetails)
+  'G1',           // party split across debtor + creditor (uses partySplitPairs)
+  'G2',           // same expense split across ledger groups (uses dupPairDetails)
+  'flag-suspense', // legacy data-flag id, kept for backward compat
+]);
+
+/** Cross-statement reconciliations that get a custom (non-voucher-list)
+ *  breakdown panel instead of the VoucherDrillDown modal. */
+const CUSTOM_BREAKDOWN_FLAG_IDS = new Set([
+  'H4',           // Cash + Bank reconciliation (DB voucher flow ↔ TB balances)
 ]);
 
 /** Returns true when a drill-down link should render for this flag id. */
@@ -96,9 +121,47 @@ export function hasDrillDown(
     if (flagId === 'B1' || flagId === 'flag-suspense') {
       return (parsedData?.suspenseLedgers?.length ?? 0) > 0;
     }
+    if (flagId === 'B2') {
+      return (parsedData?.dupPairDetails?.length ?? 0) > 0;
+    }
+    if (flagId === 'G1') {
+      return (parsedData?.partySplitPairs?.length ?? 0) > 0;
+    }
+    if (flagId === 'G2') {
+      // G2 surfaces same-name expenses classified into different P&L
+      // categories (e.g. "Office Rent" appearing once under Direct
+      // Expenses and once under Indirect Expenses).  Distinct from B2,
+      // which catches name-only near-duplicates.
+      return (parsedData?.expenseSplitPairs?.length ?? 0) > 0;
+    }
+  }
+  // Custom breakdowns render their own panel — the click handler in the
+  // view picks the right component based on flag id.  H4 surfaces TB
+  // cash/bank ledgers + DayBook receipt/payment/contra totals, so we only
+  // need one of them to be non-empty for the click to be useful.
+  if (CUSTOM_BREAKDOWN_FLAG_IDS.has(flagId)) {
+    const hasTBLedgers = (parsedData?.tbLedgers?.length ?? 0) > 0;
+    const hasVouchers = (dbStats?.vouchers?.length ?? 0) > 0;
+    return hasTBLedgers || hasVouchers;
   }
   if (!dbStats?.vouchers?.length) return false;
   if (flagId === 'C2' || flagId === 'flag-dup-vno') return true;
+  if (flagId in VOUCHER_PREDICATE_DRILLDOWNS) return true;
+  return flagId in FLAG_ID_TO_TAG;
+}
+
+/** Returns true when a check id is conceptually drillable — i.e. there's a
+ *  drill-down handler for it — regardless of whether the underlying data
+ *  is currently loaded.  Used to render the drill-down link even when
+ *  the user is viewing a saved analysis from history (where dbStats and
+ *  parsedData haven't been reconstructed): the modal click handler then
+ *  surfaces a "re-upload files to load voucher details" message instead
+ *  of the link silently disappearing. */
+export function isDrillableCheck(flagId: string): boolean {
+  if (LEDGER_FLAG_IDS.has(flagId)) return true;
+  if (CUSTOM_BREAKDOWN_FLAG_IDS.has(flagId)) return true;
+  if (flagId === 'C2' || flagId === 'flag-dup-vno') return true;
+  if (flagId in VOUCHER_PREDICATE_DRILLDOWNS) return true;
   return flagId in FLAG_ID_TO_TAG;
 }
 
@@ -117,8 +180,24 @@ export function getDrillDown(
     return { title, vouchers: ledgersAsVouchers(rows) };
   }
 
+  // B2 near-duplicate ledger pairs are rendered by a dedicated
+  // LedgerPairDrillDown component in each view (see view-level B2
+  // special-case alongside H4).  G1 (party split across debtor+creditor)
+  // and G2 (same expense in multiple ledger groups) reuse the same modal
+  // shape — return null here so the default VoucherDrillDown doesn't try
+  // to render the pairs as synthetic vouchers.
+  if (flagId === 'B2' || flagId === 'G1' || flagId === 'G2') return null;
+
   const vouchers = dbStats?.vouchers;
   if (!vouchers?.length) return null;
+
+  // Predicate-driven drill-downs (computed on the fly).  Currently F4
+  // (high-value entries missing narration); extend the map above to add
+  // more.
+  const predicate = VOUCHER_PREDICATE_DRILLDOWNS[flagId];
+  if (predicate) {
+    return { title, vouchers: vouchers.filter(predicate) };
+  }
 
   // Duplicate voucher numbers — no per-voucher marker; recompute from the
   // map.  Sorted so vouchers with the same number land next to each other.

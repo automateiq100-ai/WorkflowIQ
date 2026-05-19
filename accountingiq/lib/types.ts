@@ -22,6 +22,16 @@ export interface MasterEntry {
   /** Parent group name. "Primary" when the item has no parent (top-level Tally group). */
   parent: string;
   type: MasterItemType;
+  /** GST rate (percent) configured on this ledger in Tally master.
+   *  Populated from RATEOFTAX / GSTDETAILS.LIST.RATE / GSTTAXRATE fields
+   *  in the "All Masters" XML export.  Only meaningful for sales /
+   *  purchase / Duties & Taxes ledgers; undefined for everything else
+   *  AND for sales ledgers where the user never set a rate.  E2a uses
+   *  this to verify per-ledger GST rate configuration. */
+  gstRate?: number;
+  /** Whether GST applicability is set on the ledger ("Applicable" /
+   *  "Not Applicable" / "Use Default").  Parsed from GSTAPPLICABILITY. */
+  gstApplicable?: 'applicable' | 'not-applicable' | 'use-default';
 }
 
 // ── Structured Financial Statement types (Phase 2-4) ─────────────────────
@@ -110,7 +120,13 @@ export type ViewId =
   | 'company-select' | 'company-dashboard'
   | 'dashboard' | 'checklist' | 'insights' | 'health'
   | 'flags' | 'upload' | 'profile' | 'reports' | 'rules'
-  | 'mis-setup' | 'mis-report'
+  | 'mis-upload' | 'mis-profile' | 'mis-rules'
+  | 'mis-dashboard' | 'mis-checklist' | 'mis-analysis'
+  | 'mis-metrics-checklist'
+  | 'mis-report-cover' | 'mis-report-pl' | 'mis-report-cf'
+  | 'mis-report-bs' | 'mis-report-wc' | 'mis-report-cost'
+  | 'mis-report-bpi' | 'mis-report-statutory' | 'mis-report-forecast'
+  | 'mis-report-backup' | 'mis-fix' | 'mis-ai-plan'
   | 'reconciliation' | 'aiAnalysis'
   | 'data-view' | 'agent-fix'
   | 'tally-connection'
@@ -161,6 +177,21 @@ export interface ChunkedStats {
   totalCredit: number;
   salesVoucherTotal: number;
   purchVoucherTotal: number;
+  /** Sales voucher Debit-column total (sum of |amt| where the first leg
+   *  is on Dr side).  Used by H2 backup to show Tally-style Debit /
+   *  Credit / Net breakdown — net is salesVoucherDr − salesVoucherCr. */
+  salesVoucherDr?: number;
+  salesVoucherCr?: number;
+  purchVoucherDr?: number;
+  purchVoucherCr?: number;
+  /** Per-voucher contributions for the H2/H3 net (vno, amount, direction
+   *  Dr/Cr).  Populated up to 1,000 entries — enough for the user to
+   *  drill into the breakdown and spot which voucher is being summed in
+   *  which column.  Helps debug Tally-vs-engine mismatches (e.g. the
+   *  "(-)5,000" reversal entry that triggers a different column choice
+   *  in Tally vs in the engine). */
+  purchVoucherBreakdown?: Array<{ vno: string; amt: number; dr: boolean }>;
+  salesVoucherBreakdown?: Array<{ vno: string; amt: number; dr: boolean }>;
   cashBankNetMovement: number;
   /** Sum of |amt| over Receipt-semantic vouchers only.  Paired with
    *  paymentTotal below — together they let H4 derive the net change
@@ -205,14 +236,16 @@ export interface Voucher {
   amount: number;
   narration: string;
   flags?: VoucherFlag[];
-  /** Per-leg snapshot of ALLLEDGERENTRIES.LIST: lowercased ledger name and
-   *  Dr/Cr direction (Dr = ISDEEMEDPOSITIVE=Yes).  Two engine post-passes
-   *  use it:
+  /** Per-leg snapshot of ALLLEDGERENTRIES.LIST: lowercased ledger name,
+   *  Dr/Cr direction (Dr = ISDEEMEDPOSITIVE=Yes), and absolute leg amount.
+   *  Three downstream uses:
    *    • missingParty rescue scans names looking for a debtor/creditor leg
    *    • wrong-type classification uses both name (→ category) and direction
    *      (→ cash-flow direction) to detect e.g. a Payment voucher with the
-   *      bank leg actually Dr (money in) — that's structurally a Receipt. */
-  legs?: Array<{ name: string; dr: boolean }>;
+   *      bank leg actually Dr (money in) — that's structurally a Receipt.
+   *    • H4 cash/bank drill-down sums the amount of the cash/bank leg per
+   *      voucher (not the sum of Dr+Cr — that double-counts the value). */
+  legs?: Array<{ name: string; dr: boolean; amt: number }>;
   /** Set on wrong-type vouchers by the engine post-pass: a best-guess
    *  voucher type inferred from what categories the ledger entries fall
    *  under (e.g. Sales + Debtor → "sales"; Bank + Debtor → "receipt").
@@ -278,6 +311,12 @@ export interface ParsedData {
    *  ledgers — always derivable from the bridge's custom TB collection,
    *  which fetches OpeningBalance regardless of any F12 toggle. */
   tbCashBankNetMovement: number;
+  /** Sign-convention vote outcome from parseTrialBalance.  +1/−1 =
+   *  confidently detected; 0 = ambiguous (too few classifiable ledgers).
+   *  D1 / D5 surface as uncertain when this is 0 so a thin TB-only
+   *  upload with cryptic ledger names doesn't get a confidently-wrong
+   *  Dr/Cr answer. */
+  tbSignFlip?: 1 | -1 | 0;
   pfLedgerFound: boolean;
   salesLedgersNoRate: number;
   gstDiffPct: number;
@@ -285,6 +324,29 @@ export interface ParsedData {
   suspenseLedgers: Array<{ name: string; amount: number }>;
   /** Near-duplicate ledger pair names for fail labels */
   dupPairDetails: Array<[string, string]>;
+  /** Party ledgers whose name appears in BOTH debtor AND creditor categories
+   *  — populated by the G1 check in engine.ts.  Surfaces in the G1 drill-down
+   *  via LedgerPairDrillDown so the user can see exactly which parties are
+   *  split across receivable / payable buckets. */
+  partySplitPairs?: Array<[string, string]>;
+  /** Same-name expense ledgers classified into DIFFERENT P&L categories
+   *  (e.g. one under 'direct-expense' and one under 'indirect-expense').
+   *  Populated by the G2 check in engine.ts.  Surfaces in the G2 drill-down
+   *  via LedgerPairDrillDown — distinct from B2's name-only near-duplicates. */
+  expenseSplitPairs?: Array<[string, string]>;
+  /** Journal vouchers that close P&L Net Profit into Capital / Reserves at
+   *  year-end — typically one entry per period: Dr P&L A/c, Cr Capital A/c.
+   *  Populated by the H6 engine pass.  Used by the H6 backup modal to show
+   *  whether the books are finalised (profit transferred to equity).  Empty
+   *  array means no such entry was found in the DayBook. */
+  profitClosingEntries?: Array<{
+    date: string;
+    vno: string;
+    type: string;
+    plLedger: string;
+    capitalLedger: string;
+    amount: number;
+  }>;
 
   // Strict Master / financial statement trees for Data View
   masterEntries?: MasterEntry[];
@@ -300,8 +362,17 @@ export interface ParsedData {
   directRevenue: number;
   otherIncome: number;
   costOfMaterials: number;
+  /** Direct Expenses bucket (factory wages, freight inward, carriage,
+   *  power for production, etc.).  Sits above the Gross Profit line in
+   *  Indian P&L convention — included in the COGS deduction when
+   *  computing GP, separate from the `expenses` indirect bucket. */
+  directExpenses?: number;
   expenses: number;
   netProfit: number;
+  /** Raw P&L-derived net profit, captured before the engine's BS-preferred
+   *  overwrite of `netProfit`.  Used by the D2 check / modal to compare
+   *  the two raw figures.  Null when the P&L parser couldn't extract it. */
+  plNetProfit?: number | null;
   depFound: boolean;
   depAmt: number;
   plSections: PLSection[];
@@ -488,6 +559,49 @@ export interface AppState {
    *  12 months but only 2 had vouchers" is a sparse-books signal, not
    *  a partial-period one.  ISO date strings (YYYY-MM-DD). */
   requestedPeriod?: { start: string; end: string; type: 'monthly' | 'quarterly' | 'yearly' | 'custom' };
+  /** Manual inputs collected from the MIS Data Intake form (Step 2 of
+   *  the spec).  Drives metrics that have no Tally source — headcount,
+   *  order book, drawing power, covenants, contingent liabilities,
+   *  production qty.  See lib/layer2/types.ts ManualInputs. */
+  misManualInputs?: import('./layer2/types').ManualInputs;
+  /** Parsed budget data from uploaded budget Excel.  Drives budget-vs-
+   *  actual variance metrics.  See lib/layer2/types.ts BudgetData. */
+  misBudget?: import('./layer2/types').BudgetData;
+  /** Uploaded documents (PDFs).  Stored as metadata only; structured
+   *  values from each doc are keyed by the user into manualInputs. */
+  misDocuments?: Record<string, MISDocumentRef>;
+  /** MIS rule overrides — when present, used instead of DEFAULT_RULES.
+   *  Stored as the *full* effective rule set rather than a diff so the
+   *  resolver doesn't need to merge.  Undefined = use defaults. */
+  misRules?: import('./layer2/rules').Rule[];
+  /** Metric id to focus on when entering the Backup Working view.  Set by
+   *  clicking "View working" on a metric card; cleared after Backup view
+   *  scrolls + highlights the row.  Drives the report's hyperlink trace. */
+  misBackupFocusMetricId?: string;
+  /** Deep-link target for the MIS Upload Files view — set by Missing
+   *  Details when the user clicks "Fix this →" on a specific input.
+   *  Upload Files reads this on mount, switches to the matching tab,
+   *  optionally scrolls/highlights the source row, then clears the flag. */
+  misUploadDeepLink?: { tab: 'tally' | 'excel' | 'pdf' | 'manual'; sourceId?: string };
+  /** Per-module memory of the last view visited.  Used by SET_MODULE so
+   *  switching modules within a session returns the user to where they
+   *  were rather than dumping them on each module's first view.  Not
+   *  persisted across page refreshes — purely an in-session convenience. */
+  lastViewByModule?: Partial<Record<ModuleId, ViewId>>;
+}
+
+/** Reference to an uploaded MIS document — kept lightweight (no blob in state). */
+export interface MISDocumentRef {
+  /** Logical doc id from data-sources.ts (e.g. 'loan-sanction'). */
+  id: string;
+  /** Original filename. */
+  filename: string;
+  /** Bytes size. */
+  size: number;
+  /** When uploaded (Unix ms). */
+  uploadedAt: number;
+  /** Notes the user added at upload time. */
+  note?: string;
 }
 
 export interface Insight {
@@ -542,6 +656,38 @@ export interface AIRequest {
     fixedAssets: number;
     closingStock: number;
   };
+  /** Aggregate fingerprints the AI uses to spot patterns the rule
+   *  engine doesn't catch.  All numeric (no PII), all percentages or
+   *  ratios — so the AI can reason about concentration / anomalies
+   *  without ever seeing names or amounts of individual entities. */
+  aggregates?: {
+    /** Top-N voucher-amount concentration: percentage of total voucher
+     *  amount accounted for by the top 1 / top 3 / top 10 parties.
+     *  Surfaces vendor / customer concentration risk. */
+    topPartyConcentration?: { top1Pct: number; top3Pct: number; top10Pct: number };
+    /** Voucher pattern fingerprints (all percentages of totalVouchers). */
+    voucherPatterns?: {
+      roundNumberPct: number;
+      zeroAmountPct: number;
+      missingNarrationPct: number;
+      cashOver10kCount: number;
+      wrongTypeCount: number;
+      journalPct: number;
+    };
+    /** Period clustering — max month volume divided by mean month
+     *  volume.  > 3× suggests back-dated bulk entry. */
+    monthlyVolumeSpike?: number;
+    /** Distinct active months in the period (3 minimum for spike detection). */
+    activeMonths?: number;
+    /** Key financial ratios (computed once, sent to AI for reasoning). */
+    ratios?: {
+      currentRatio?: number;       // CA / CL
+      debtToEquity?: number;       // creditor / capital (approximate)
+      gstAsPctOfSales?: number;
+      stockTurnover?: number;      // pur / closing stock
+      netProfitMargin?: number;    // netProfit / revenue
+    };
+  };
   profile: CompanyProfile;
   dataNotes: {
     filesUploaded: number;
@@ -576,6 +722,54 @@ export interface AIResponse {
   }>;
   /** 2-3 sentence narrative about data completeness and quality */
   dataQualityNarrative?: string;
+  /** AI-detected findings the rule-based engine doesn't catch — patterns
+   *  across check failures, anomalies in voucher fingerprints, ratio
+   *  outliers.  Distinguished from rule insights by carrying explicit
+   *  evidence (the data points the finding is based on) and being
+   *  generated by reasoning over the aggregates payload rather than a
+   *  hard-coded rule.  Rendered with an AI badge on the Insights view. */
+  smartInsights?: AISmartInsight[];
+  /** Per-failed-check explanation generated by AI, keyed by check id.
+   *  Replaces the generic remediation text on Checklist / Flags rows
+   *  with a contextual reasoning specific to THIS company's data
+   *  (cited numbers from `note`, related dimension failures, etc.).
+   *  Empty record means the AI didn't return per-check breakdowns. */
+  checkExplanations?: Record<string, AICheckExplanation>;
+}
+
+/** A single AI-detected finding.  Distinguished from rule-based
+ *  Insight by: (a) evidence array citing the data points behind the
+ *  finding; (b) `confidence` reflecting AI uncertainty; (c) generated
+ *  by pattern recognition rather than a hard-coded rule. */
+export interface AISmartInsight {
+  /** Short title — used as the row heading on the Insights panel. */
+  title: string;
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'positive';
+  /** Dimensions this insight spans (e.g. ['B', 'D'] when patterns
+   *  cluster across multiple rule dimensions). */
+  dimensions?: DimKey[];
+  /** 2-3 sentences explaining what the AI noticed and why it matters. */
+  finding: string;
+  /** Concrete data points the AI is reasoning over — e.g.
+   *  ["Top vendor = 80% of purchases", "Suspense balance ₹2.1L"].
+   *  Lets the user verify the finding rather than trust blindly. */
+  evidence: string[];
+  /** Single concrete action the user should take. */
+  recommendation: string;
+  /** AI's self-reported confidence — low for speculative pattern
+   *  matches, high for findings backed by multiple data points. */
+  confidence?: 'high' | 'medium' | 'low';
+}
+
+/** Per-check AI explanation surfaced inline on Checklist / Flags rows. */
+export interface AICheckExplanation {
+  /** Why THIS check failed for THIS company, citing specific numbers
+   *  from the check's `note`.  2-3 sentences max. */
+  rationale: string;
+  /** Downstream impact: which other checks / metrics this affects. */
+  impact: string;
+  /** Ordered concrete steps to fix in Tally.  3-5 items typical. */
+  fixSteps: string[];
 }
 
 // ── Agentic Fix Loop types ──

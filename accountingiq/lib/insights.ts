@@ -35,17 +35,17 @@ export function generateInsights(
     });
   }
 
-  const d4 = getCheck('D4');
-  if (d4 && d4.status === 'fail') {
+  const d3 = getCheck('D3');
+  if (d3 && d3.status === 'fail') {
     insights.push({
-      id: 'D4-bs',
+      id: 'D3-bs',
       urgency: 'critical',
       cat: 'Arithmetical Accuracy',
       finding: 'Balance Sheet equation broken — Assets ≠ Liabilities + Equity.',
       implication: 'Capital or liability accounts may be misposted. Auditors will flag this immediately.',
       action: 'Reconcile Capital, Reserves, and Loan accounts against year-end figures.',
       copyText: 'Balance Sheet equation is broken. Assets do not equal Liabilities + Equity.',
-      checkId: 'D4',
+      checkId: 'D3',
     });
   }
 
@@ -64,17 +64,17 @@ export function generateInsights(
     });
   }
 
-  const b9 = getCheck('B9');
-  if (b9 && b9.status === 'fail') {
+  const b2 = getCheck('B2');
+  if (b2 && b2.status === 'fail') {
     insights.push({
-      id: 'B9-dup',
+      id: 'B2-dup',
       urgency: 'high',
       cat: 'Ledger Structure',
       finding: 'Duplicate ledger names detected (similar-looking accounts).',
       implication: 'Transactions may be split across duplicate ledgers, causing incorrect balances.',
       action: 'Merge or delete duplicate ledgers in Tally and re-post affected vouchers.',
       copyText: 'Duplicate ledger names found — possible split balances.',
-      checkId: 'B9',
+      checkId: 'B2',
     });
   }
 
@@ -107,17 +107,17 @@ export function generateInsights(
     });
   }
 
-  const c6 = getCheck('C6');
-  if (c6 && (c6.status === 'fail' || c6.status === 'partial')) {
+  const c3 = getCheck('C3');
+  if (c3 && (c3.status === 'fail' || c3.status === 'partial')) {
     insights.push({
-      id: 'C6-party',
+      id: 'C3-party',
       urgency: 'medium',
       cat: 'Voucher Integrity',
       finding: 'Sales/purchase vouchers have missing party names.',
       implication: 'Cannot reconcile outstanding receivables or payables. Affects bills tracking.',
       action: 'Update affected vouchers with correct party (ledger) names.',
       copyText: 'Sales/purchase vouchers missing party names — bills tracking affected.',
-      checkId: 'C6',
+      checkId: 'C3',
     });
   }
 
@@ -156,26 +156,26 @@ export function generateInsights(
       id: 'F1-gaps',
       urgency: 'medium',
       cat: 'Recording Discipline',
-      finding: 'Significant gaps (>7 days) in voucher dates detected.',
+      finding: 'Significant gaps (>30 days) in voucher dates detected.',
       implication: 'Transactions may have been recorded in bulk, suggesting delayed bookkeeping.',
       action: 'Review missing date ranges and post any pending entries for those periods.',
-      copyText: 'Date gaps >7 days found in DayBook — possible delayed data entry.',
+      copyText: 'Date gaps >30 days found in DayBook — possible delayed data entry.',
       checkId: 'F1',
     });
   }
 
   // ── Dimension G: Consistency ─────────────────────────────────────────
-  const g2 = getCheck('G2');
-  if (g2 && g2.status === 'fail') {
+  const g3 = getCheck('G3');
+  if (g3 && g3.status === 'fail') {
     insights.push({
-      id: 'G2-cash',
+      id: 'G3-cash',
       urgency: 'high',
       cat: 'Compliance — Section 269ST',
       finding: 'Cash receipts/payments exceeding ₹10,000 detected.',
       implication: 'Section 269ST of Income Tax Act prohibits cash transactions ≥ ₹2 lakh in one day. Amounts over ₹10k are flagged for review.',
       action: 'Review flagged cash vouchers. Transactions over ₹2 lakh in cash are illegal and attract penalty equal to the amount.',
       copyText: 'Cash transactions exceeding ₹10,000 detected — Section 269ST review required.',
-      checkId: 'G2',
+      checkId: 'G3',
     });
   }
 
@@ -192,6 +192,34 @@ export function generateInsights(
         action: 'Ensure Output GST and Input ITC ledgers exist under the Duties & Taxes group.',
         copyText: 'GST ledgers missing or unbalanced — return filing data may not match books.',
         checkId: 'E1',
+      });
+    }
+    // E2b — output GST collected vs sales × applicable slab.  Fail (>15%
+    // variance) is a HIGH urgency audit signal; partial (5–15%) is a
+    // MEDIUM warning — often a multi-rate sales mix that needs a sanity
+    // check but isn't immediately critical.
+    const e2b = getCheck('E2b');
+    if (e2b?.status === 'fail') {
+      insights.push({
+        id: 'E2b-gst-variance',
+        urgency: 'high',
+        cat: 'Statutory Compliance',
+        finding: 'Output GST collected diverges from expected by more than 15%.',
+        implication: e2b.note ?? 'Recorded Output GST does not align with the headline GST rate applied to sales — risk of under-reporting on GSTR-1.',
+        action: 'Reconcile sales ledger rates against the Output GST ledger.  If your business is single-rate, the recorded GST should be ~sales × rate.  Correct the misposting before filing.',
+        copyText: 'Output GST variance > 15% — recorded GST does not match expected.',
+        checkId: 'E2b',
+      });
+    } else if (e2b?.status === 'partial') {
+      insights.push({
+        id: 'E2b-gst-variance',
+        urgency: 'medium',
+        cat: 'Statutory Compliance',
+        finding: 'Output GST collected diverges from expected by 5–15%.',
+        implication: e2b.note ?? 'Recorded Output GST partially diverges from the headline slab applied to sales — often a multi-rate sales mix, occasionally a misposting.',
+        action: 'Cross-check sales-ledger GST rates against the Output GST ledger.  If you have mixed-rate sales (5% & 18%), a moderate variance is expected; otherwise investigate before filing.',
+        copyText: 'Output GST variance 5–15%.',
+        checkId: 'E2b',
       });
     }
   }
@@ -213,17 +241,17 @@ export function generateInsights(
   }
 
   if (filters.hasEmployees) {
-    const e6 = getCheck('E6');
-    if (e6 && (e6.status === 'fail' || e6.status === 'missing')) {
+    const e7 = getCheck('E7');
+    if (e7 && (e7.status === 'fail' || e7.status === 'missing')) {
       insights.push({
-        id: 'E6-pf',
+        id: 'E7-pf',
         urgency: 'medium',
         cat: 'Statutory Compliance',
         finding: 'PF/ESI payable ledger not found.',
         implication: 'Statutory contributions may not be recorded. Risk during PF/ESIC audit.',
         action: 'Create PF Payable and ESI Payable ledgers and post monthly contributions.',
         copyText: 'PF/ESI payable ledgers not found — employee statutory compliance at risk.',
-        checkId: 'E6',
+        checkId: 'E7',
       });
     }
   }
@@ -244,7 +272,13 @@ export function generateInsights(
 
   if (filters.gstApplicable) {
     const e1p = getCheck('E1');
-    if (e1p && e1p.status === 'pass') {
+    const e2bp = getCheck('E2b');
+    // Positive insight fires only when BOTH ledger-existence (E1) and
+    // amount-within-threshold (E2b) pass.  A pass-or-na on E2b counts —
+    // 'na' means non-regular taxpayer (composition / unregistered), where
+    // E2b's expected-rate check doesn't apply.
+    const e2bOk = !e2bp || e2bp.status === 'pass' || e2bp.status === 'na';
+    if (e1p && e1p.status === 'pass' && e2bOk) {
       insights.push({
         id: 'pos-gst',
         urgency: 'positive',

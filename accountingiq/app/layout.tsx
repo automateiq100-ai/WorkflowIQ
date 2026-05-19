@@ -1,23 +1,23 @@
 import type { Metadata } from "next";
-import { DM_Serif_Display, Outfit, DM_Mono } from "next/font/google";
+import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
-const dmSerif = DM_Serif_Display({
-  variable: "--font-dm-serif",
+// Inter — the industry-standard UI font (Stripe, Brex, Linear, Vercel).
+// Excellent legibility at small sizes, real tabular figures, no
+// editorial flourish.  Used for both headings and body via weight.
+const inter = Inter({
+  variable: "--font-inter",
   subsets: ["latin"],
-  weight: "400",
+  weight: ["300", "400", "500", "600", "700", "800"],
+  display: "swap",
 });
 
-const outfit = Outfit({
-  variable: "--font-outfit",
+// JetBrains Mono — for code blocks and formula cells in Backup Working.
+const jetbrains = JetBrains_Mono({
+  variable: "--font-jetbrains",
   subsets: ["latin"],
-  weight: ["300", "400", "500", "600", "700"],
-});
-
-const dmMono = DM_Mono({
-  variable: "--font-dm-mono",
-  subsets: ["latin"],
-  weight: ["400", "500"],
+  weight: ["400", "500", "600"],
+  display: "swap",
 });
 
 export const metadata: Metadata = {
@@ -31,9 +31,9 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${dmSerif.variable} ${outfit.variable} ${dmMono.variable} h-full`}
+      className={`${inter.variable} ${jetbrains.variable} h-full`}
     >
-      <body className="h-full" style={{ fontFamily: "var(--font-outfit, Outfit, sans-serif)" }}>
+      <body className="h-full" style={{ fontFamily: "var(--font-inter), -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" }}>
         {children}
       </body>
     </html>
