@@ -60,13 +60,17 @@ export function readTBClosing(infoBlock: string): number {
   return parseAmt(dr) + parseAmt(cr);
 }
 
-/** Same dual-shape logic as readTBClosing for Opening Balance.  Returns 0
- *  when neither column is present (older TB exports). */
-export function readTBOpening(infoBlock: string): number {
+/** Same dual-shape logic as readTBClosing for Opening Balance.  Returns
+ *  null when no opening tag is present in the block (closing-only TB
+ *  exports) so callers can distinguish "absent" from "explicitly zero".
+ *  H4 needs this distinction to avoid treating a missing-opening export
+ *  as a real zero net movement. */
+export function readTBOpening(infoBlock: string): number | null {
   const single = xmlText(infoBlock, 'DSPOPAMTA');
   if (single) return parseAmt(single);
   const dr = xmlText(infoBlock, 'DSPOPDRAMTA');
   const cr = xmlText(infoBlock, 'DSPOPCRAMTA');
+  if (!dr && !cr) return null;
   return parseAmt(dr) + parseAmt(cr);
 }
 
@@ -251,6 +255,51 @@ export function findAmountNearText(xml: string, labels: RegExp[]): number {
 /** Extract amount — tries multiple tags in fallback order.
  *  NOTE: Uses Math.abs() because voucher amounts are always positive quantities.
  *  For BS/PL amounts where sign matters, use parseAmt() directly. */
+/**
+ * Extract the voucher master amount as an ABSOLUTE magnitude.  Used for
+ * threshold checks and counters where sign doesn't matter:
+ *   - per-voucher amount display
+ *   - high-value flag (`> ₹1L`)
+ *   - cash-over-₹10k flag (Sec 269ST)
+ *   - zero-amount flag
+ *   - round-number detection (`% 1000 === 0`)
+ *
+ * For sign-aware logic (sales/purchase NET direction, Tally Day Book
+ * columnar Dr/Cr placement), use {@link extractSignedAmt} instead — or
+ * better, read the FIRST leg's `ISDEEMEDPOSITIVE` flag from
+ * `ALLLEDGERENTRIES.LIST` / `LEDGERENTRIES.LIST` directly, which is the
+ * authoritative direction signal in Tally invoice-mode exports.
+ *
+ * Tag fallback chain reflects Tally export variants — `AMOUNT` at voucher
+ * level (most exports), `DSPAMT` for display reports, `BSSUBAMT` for
+ * occasional invoice shapes, and finally the first per-leg `AMOUNT`
+ * inside ALLLEDGERENTRIES.LIST when no voucher-level tag is present.
+ */
+/**
+ * Effective Dr/Cr direction of a single voucher leg.  Shared by both the
+ * first-leg sign-aware H2/H3 net calculator AND the per-voucher `legs[]`
+ * array populator — keeping them in lockstep so H4 cash-leg direction,
+ * wrong-type rescan, and net-sales/purchase totals all agree on what's
+ * Dr vs Cr for the same leg, including reversal entries.
+ *
+ * Rules in priority order:
+ *   1. ISDEEMEDPOSITIVE=Yes                → Dr  (regardless of AMOUNT sign)
+ *   2. ISDEEMEDPOSITIVE=No, AMOUNT ≥ 0     → Cr  (standard Cr)
+ *   3. ISDEEMEDPOSITIVE=No, AMOUNT < 0     → Dr  (reversal entry — Tally
+ *                                                 displays as "(-)X" in
+ *                                                 the Dr column)
+ *   4. flag missing, AMOUNT ≥ 0            → Dr  (positive value = Dr)
+ *   5. flag missing, AMOUNT < 0            → Cr  (negative value = Cr)
+ *
+ * Empirically verified against Tally Prime invoice-mode exports (which
+ * counter-intuitively store Dr legs as flag=Yes + negative AMOUNT) and
+ * voucher-mode exports (Dr = positive AMOUNT, flag often absent).
+ */
+export function legDirection(flag: string, amount: number): boolean {
+  if (flag) return /yes/i.test(flag) ? true : amount < 0;
+  return amount >= 0;
+}
+
 export function extractAmt(voucherXml: string): number {
   for (const tag of ['AMOUNT', 'DSPAMT', 'BSSUBAMT']) {
     const v = xmlText(voucherXml, tag);
@@ -259,6 +308,33 @@ export function extractAmt(voucherXml: string): number {
   // Try inside ALLLEDGERENTRIES.LIST
   const entries = xmlAll(voucherXml, 'AMOUNT');
   if (entries.length > 0) return Math.abs(parseAmt(entries[0]));
+  return 0;
+}
+
+/** Signed variant of extractAmt — preserves the Tally Dr/Cr sign on the
+ *  master voucher amount.  Used by sales/purchase totals so returns
+ *  entered as Cr-side line items inside a regular "Purchase" voucher type
+ *  (the common pattern) subtract from the net instead of inflating it.
+ *
+ *  Sign convention (mirrors how parseAmt + ISDEEMEDPOSITIVE align in
+ *  ALLLEDGERENTRIES.LIST):
+ *    • positive → party-leg is Dr (sale: customer owes you;
+ *      purchase return: refund flowing back to you)
+ *    • negative → party-leg is Cr (purchase: you owe vendor;
+ *      sales return: refund flowing out)
+ *
+ *  Normal sale          → master AMOUNT positive → add as-is.
+ *  Sales return         → master AMOUNT negative → still add → reduces total.
+ *  Normal purchase      → master AMOUNT negative → negate → add positive.
+ *  Purchase return      → master AMOUNT positive → negate → add negative → reduces.
+ */
+export function extractSignedAmt(voucherXml: string): number {
+  for (const tag of ['AMOUNT', 'DSPAMT', 'BSSUBAMT']) {
+    const v = xmlText(voucherXml, tag);
+    if (v) return parseAmt(v);
+  }
+  const entries = xmlAll(voucherXml, 'AMOUNT');
+  if (entries.length > 0) return parseAmt(entries[0]);
   return 0;
 }
 
@@ -273,6 +349,73 @@ export function parseTallyDate(s: string): Date | null {
 }
 
 // ── Trial Balance parser ─────────────────────────────────────────────────
+
+/**
+ * Detect whether the TB XML uses Dr-positive or Cr-positive sign convention.
+ * Returns the multiplier needed to normalize each ledger value to canonical
+ * **Dr-positive** form (positive = Dr balance, negative = Cr balance).
+ *
+ *   +1 → source is Dr-positive (no flip needed)
+ *   −1 → source is Cr-positive (apply ×−1 to closing/opening)
+ *    0 → too few classifiable ledgers to vote conclusively; caller
+ *        should treat the convention as uncertain.  Downstream code
+ *        currently treats 0 as "no flip" (matches Dr-positive in the
+ *        common case) but engine checks can opt to surface "uncertain"
+ *        on D1/D5 when this happens, avoiding a confidently-wrong result
+ *        on a thin TB-only upload with cryptic ledger names.
+ *
+ * Vote logic: for each ledger whose category we know the natural side of
+ * (capital should be Cr, debtor should be Dr, etc.), check whether its
+ * raw closing sign matches the Dr-positive expectation.  Majority wins.
+ */
+export function detectTBSignFlipVote(
+  tbLedgers: TBLedger[],
+  masterMap: Map<string, MasterEntry>,
+  overrides?: OverrideMap,
+  bsHierarchy?: BSHierarchyMap,
+): 1 | -1 | 0 {
+  const expectedSignDrPos: Partial<Record<string, 1 | -1>> = {
+    capital:   -1,
+    creditor:  -1,
+    'bank-od': -1,
+    debtor:     1,
+    sales:     -1,
+    purchase:   1,
+  };
+  let crPosVotes = 0;
+  let drPosVotes = 0;
+  for (const l of tbLedgers) {
+    if (l.closing === 0) continue;
+    const cat = classifyLedger(l.name, masterMap, overrides, bsHierarchy).category;
+    const expected = expectedSignDrPos[cat];
+    if (!expected) continue;
+    const actual: 1 | -1 = l.closing > 0 ? 1 : -1;
+    if (actual === expected) drPosVotes++; else crPosVotes++;
+  }
+  // Need ≥3 informative votes to make a confident call.  Below that, the
+  // result is too noisy on thin uploads (e.g. TB-only with cryptic ledger
+  // names) and would silently flip the convention the wrong way.
+  if (crPosVotes + drPosVotes < 3) return 0;
+  return crPosVotes > drPosVotes ? -1 : 1;
+}
+
+/** Apply a sign-flip multiplier to a TBLedger array IN-PLACE.  Always
+ *  recomputes `dr` from the resulting closing sign so every downstream
+ *  consumer sees consistent (positive=Dr, negative=Cr) values.  `0` is
+ *  treated as "no flip" — caller decides whether to also raise an
+ *  uncertain status on downstream checks.  Period movements come from
+ *  `readTBMovements` as absolute magnitudes, so they don't need a flip. */
+export function applyTBSignFlip(tbLedgers: TBLedger[], flip: 1 | -1 | 0): void {
+  if (flip === -1) {
+    for (const l of tbLedgers) {
+      l.closing = -l.closing;
+      if (l.opening !== undefined) l.opening = -l.opening;
+    }
+  }
+  for (const l of tbLedgers) {
+    l.dr = l.closing >= 0;
+  }
+}
 
 export function parseTrialBalance(
   xml: string,
@@ -318,6 +461,11 @@ export function parseTrialBalance(
   gstDiffPct: number;
   suspenseLedgers: Array<{ name: string; amount: number }>;
   dupPairDetails: Array<[string, string]>;
+  /** Vote-based sign-convention detection result.  +1 / −1 = confidently
+   *  detected; 0 = ambiguous (too few classifiable ledgers).  Engine
+   *  surfaces D1/D5 as uncertain when this is 0 so thin uploads with
+   *  cryptic ledger names don't get a confidently-wrong answer. */
+  tbSignFlip: 1 | -1 | 0;
 } {
   const tbLedgers: TBLedger[] = [];
 
@@ -341,7 +489,10 @@ export function parseTrialBalance(
     tbLedgers.push({
       name, nl: name.toLowerCase(), closing, dr: closing >= 0,
       ...(hasMovements ? { movements } : {}),
-      ...(opening !== 0 ? { opening } : {}),
+      // Preserve opening when the XML actually had the tag, even if its
+      // value is zero — H4's net-flow math needs that to distinguish a
+      // genuine zero opening from a closing-only TB export.
+      ...(opening !== null ? { opening } : {}),
     });
   }
 
@@ -396,13 +547,22 @@ export function parseTrialBalance(
       if (masterMap.get(normalizeMasterKey(name))?.type === 'group') continue;
       if (isPLDerivedRow(name)) continue;
       const closing = parseAmt(xmlText(block, 'CLOSINGBALANCE') || xmlText(block, 'CLOSINGBAL'));
-      const opening = parseAmt(xmlText(block, 'OPENINGBALANCE') || xmlText(block, 'OPENINGBAL'));
+      const openingRaw = xmlText(block, 'OPENINGBALANCE') || xmlText(block, 'OPENINGBAL');
+      const opening = openingRaw ? parseAmt(openingRaw) : null;
       tbLedgers.push({
         name, nl: name.toLowerCase(), closing, dr: closing >= 0,
-        ...(opening !== 0 ? { opening } : {}),
+        ...(opening !== null ? { opening } : {}),
       });
     }
   }
+
+  // ── Sign-convention normalization ─────────────────────────────────────
+  // After this block, every TBLedger field is normalized to canonical
+  // Dr-positive convention regardless of which sign convention the source
+  // used (positive=Dr, negative=Cr).  See `detectTBSignFlipVote` for the
+  // shared vote-based detector — same flip is applied in parseTBFull.
+  const signFlip = detectTBSignFlipVote(tbLedgers, masterMap, overrides, bsHierarchy);
+  applyTBSignFlip(tbLedgers, signFlip);
 
   // Flags
   let suspenseCount = 0;
@@ -483,9 +643,36 @@ export function parseTrialBalance(
     }
 
 
-    // Aggregations for cross-statement reconciliation.
-    if (cls.category === 'sales')    tbSales += Math.abs(l.closing);
-    if (cls.category === 'purchase') tbPurch += Math.abs(l.closing);
+    // Aggregations for cross-statement reconciliation.  Classifier-based
+    // (high confidence) PLUS a name-pattern fallback so non-standard
+    // ledger names with obvious sales/purchase semantics aren't missed.
+    // The fallback only fires when the classifier returned a category
+    // that isn't a Cr-side or Dr-side ledger that would conflict —
+    // we don't want to misclassify a "Sales Return" Dr ledger as sales,
+    // for instance.
+    if (cls.category === 'sales') {
+      tbSales += Math.abs(l.closing);
+    } else if (
+      // Name-pattern fallback for sales: matches "Sales Account",
+      // "Revenue from Operations", "Service Revenue", etc., when the
+      // classifier couldn't categorize confidently.
+      (cls.category === 'unknown' || cls.category === undefined) &&
+      (/\bsales\b/.test(n) || /\brevenue\b/.test(n) || /\bturnover\b/.test(n)) &&
+      !/return|cost\s+of\s+sales/.test(n)
+    ) {
+      tbSales += Math.abs(l.closing);
+    }
+    if (cls.category === 'purchase') {
+      tbPurch += Math.abs(l.closing);
+    } else if (
+      // Name-pattern fallback for purchase: matches "Purchases A/c",
+      // "Goods Purchased", etc., when the classifier didn't catch them.
+      (cls.category === 'unknown' || cls.category === undefined) &&
+      /\bpurchas/.test(n) &&
+      !/return/.test(n)
+    ) {
+      tbPurch += Math.abs(l.closing);
+    }
     // Stock — used as fallback for BS-derived closingStock when the BS
     // parser's narrow regex ("closing stock", "stock-in-trade") misses
     // the user's custom stock-ledger names ("Inventory", "Stock-in-Hand").
@@ -536,6 +723,7 @@ export function parseTrialBalance(
     gstDiffPct: 0,
     suspenseLedgers,
     dupPairDetails,
+    tbSignFlip: signFlip,
   };
 }
 
@@ -545,11 +733,20 @@ export function parseTrialBalance(
  * children).  Intended for the hierarchical Data View display only; does NOT
  * filter groups (use parseTrialBalance for analysis checks).
  *
- * Sign convention: positive closing = Cr balance, negative = Dr balance.
+ * Sign convention: normalized to **Dr-positive** form (positive closing = Dr
+ * balance, negative = Cr balance) via the same vote-based detector used by
+ * parseTrialBalance.  Pre-normalization, sources can be Dr-positive (Dummy
+ * data) or Cr-positive (many real exports); after this function, callers see
+ * a single canonical convention regardless of source.
+ *
+ * Note: TBFullRow doesn't carry a `dr` boolean, only `closing`/`opening`.
+ * Consumers (DataView) should treat `closing > 0 → Dr`, `closing < 0 → Cr`.
  */
 export function parseTBFull(
   xml: string,
   masterMap: Map<string, MasterEntry> = new Map(),
+  overrides?: OverrideMap,
+  bsHierarchy?: BSHierarchyMap,
 ): TBFullRow[] {
   const rows: TBFullRow[] = [];
 
@@ -567,7 +764,7 @@ export function parseTBFull(
     const mov = readTBMovements(infoBlock);
     rows.push({
       name,
-      opening:   readTBOpening(infoBlock),
+      opening:   readTBOpening(infoBlock) ?? 0,
       debitMov:  mov.debit,
       creditMov: mov.credit,
       closing:   readTBClosing(infoBlock),
@@ -640,6 +837,26 @@ export function parseTBFull(
     });
   }
 
+  // Sign-convention normalization — vote across ledger (non-group) rows
+  // whose natural Dr/Cr side we know, then flip every row to canonical
+  // Dr-positive form so DataView's `closing > 0 → Dr` bucketing reads
+  // correctly regardless of which sign convention the source XML used.
+  //
+  // Only ledger rows vote (groups inherit their children's signs and
+  // would skew the result on a pure-group TB header view).  Apply the
+  // resulting flip to ALL rows (groups + ledgers) so parent/child
+  // rollups stay consistent under the normalized convention.
+  const voteLedgers: TBLedger[] = rows
+    .filter(r => !r.isGroup)
+    .map(r => ({ name: r.name, nl: r.name.toLowerCase(), closing: r.closing, dr: r.closing >= 0 }));
+  const flip = detectTBSignFlipVote(voteLedgers, masterMap, overrides, bsHierarchy);
+  if (flip === -1) {
+    for (const r of rows) {
+      r.closing = -r.closing;
+      r.opening = -r.opening;
+    }
+  }
+
   return rows;
 }
 
@@ -647,8 +864,27 @@ export function parseTBFull(
 
 /** Stem a word: strip trailing 'es', 's', 'ing' for comparison */
 function stem(word: string): string {
-  if (word.endsWith('ing') && word.length > 5) return word.slice(0, -3);
+  // -ing suffix.  Also handle the doubled-consonant English rule so
+  // "travelling" → "travell" → "travel" and "selling" → "sell".  The
+  // letter set covers the consonants that English actually doubles
+  // before -ing (b, d, f, g, l, m, n, p, r, t).  We accept that this
+  // can over-stem in rare cases (e.g. "filling" → "fil") because
+  // accounting ledger names hardly ever use those words as standalone
+  // tokens — the upside (catching Travel / Travelling) is bigger.
+  if (word.endsWith('ing') && word.length > 5) {
+    let s = word.slice(0, -3);
+    if (s.length >= 2
+      && s[s.length - 1] === s[s.length - 2]
+      && /[bcdfglmnprt]/.test(s[s.length - 1])) {
+      s = s.slice(0, -1);
+    }
+    return s;
+  }
   if (word.endsWith('es') && word.length > 4) return word.slice(0, -2);
+  // Trailing -e mirrors the -es rule so "expense" and "expenses" both
+  // stem to "expens"; without this, plurals where the singular ends in
+  // -e (expense / charge / service / sale) fail to merge.
+  if (word.endsWith('e') && word.length > 4) return word.slice(0, -1);
   if (word.endsWith('s') && word.length > 3) return word.slice(0, -1);
   return word;
 }
@@ -724,28 +960,129 @@ function similarity(a: string, b: string): number {
   return 1 - levenshtein(a, b) / maxLen;
 }
 
+/** Common accounting abbreviations and their expansions.  Applied before
+ *  tokenisation so "HDFC Bank A/c" tokenises the same as "HDFC Bank
+ *  Account", and "ABC Pvt Ltd" the same as "ABC Private Limited". */
+function expandAbbrev(s: string): string {
+  return s
+    .replace(/\ba\s*\/\s*c\b/gi, ' account ')
+    .replace(/\bac\b/gi,         ' account ')
+    .replace(/\bltd\b/gi,        ' limited ')
+    .replace(/\bpvt\b/gi,        ' private ')
+    .replace(/\bco\b/gi,         ' company ')
+    .replace(/\binc\b/gi,        ' incorporated ')
+    .replace(/\bcorp\b/gi,       ' corporation ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+/** Tokenise a ledger name: lowercase, split on whitespace AND punctuation
+ *  (so "Cash-in-hand" → ["cash","in","hand"], not ["cashinhand"]).
+ *  Preserves % as part of tokens because GST rate labels use it. */
+function tokenize(s: string): string[] {
+  return s.toLowerCase()
+    .replace(/[^\w\s%]/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+/** Stop-words / qualifier tokens — when present in the longer name but
+ *  absent in the shorter, they don't materially distinguish the two
+ *  ledgers.  Lets us treat "Cash" and "Cash in hand" as duplicates while
+ *  still treating "Cash" and "Cash Sales" as distinct (Sales is NOT a
+ *  qualifier — it shifts the meaning). */
+const QUALIFIER_TOKENS = new Set([
+  'in', 'on', 'of', 'the', 'and', 'to', 'for', 'by', 'with',
+  'account', 'ledger', 'a',
+  'hand', 'main', 'primary', 'sub',
+]);
+
 /**
- * Three-stage near-duplicate detection (Bug 3 fix)
- * Returns true if two ledger names are likely duplicates.
+ * Near-duplicate detection.  Returns true if two ledger names are likely
+ * the same underlying account under slightly different labels.  Designed
+ * to catch all of:
+ *   1. "Rent Expense" / "Rent Expenses"                  — plural form
+ *   2. "Travel Expenses" / "Travelling Expenses"         — verb form (-ing)
+ *   3. "Cash" / "Cash-in-hand"                           — qualifier tokens
+ *   4. "Axis Bank" / "Axis Bank 916010… A/c"             — formal/expanded
+ *   5. "ABC Traders" / "ABC Traders 123"                 — long numeric suffix
+ *   6. "HDFC Bank A/c" / "HDFC Bank Account"             — abbreviation
+ *   7. "Purchase Account" / "Purchase Accounts (Bills to come)"
+ *                                                          — plural + extras
+ *   8. Same tokens in different order
+ * …without false-positives on:
+ *   • "Cash" / "Cash Sales"        — distinct (Sales is a real distinguisher)
+ *   • "Cash" / "Petty Cash"        — distinct (Petty is a real qualifier in
+ *                                    accounting, kept distinct intentionally)
+ *   • "Input CGST" / "Input CGST 9%" — sibling variant (rate slabs)
  */
 function isDuplicate(a: string, b: string): boolean {
   if (a === b) return false; // identical names are not "near-duplicate pairs"
 
-  // Stage 2 first (sibling exception): if they're just sibling variants, NOT duplicates
+  // Sibling-variant exception (rate slabs, A/B/C suffixes, single-digit
+  // numbers) wins — these are deliberately separate ledgers in Tally.
   if (isSiblingVariant(a, b)) return false;
 
-  // Stage 1: cleaned-identical match (with stemming)
-  const stemA = stemClean(a);
-  const stemB = stemClean(b);
-  if (stemA === stemB) return true;
+  const aExp = expandAbbrev(a);
+  const bExp = expandAbbrev(b);
+  const tokensA = tokenize(aExp);
+  const tokensB = tokenize(bExp);
+  const stemsA  = tokensA.map(stem);
+  const stemsB  = tokensB.map(stem);
 
-  // Also check cleaned (no stemming) for exact match
-  const cleanA = cleanName(a);
-  const cleanB = cleanName(b);
+  // Stage 1: identical cleaned strings (kept for parity with the old
+  // algorithm — same-after-strip-punctuation is the highest-confidence
+  // signal).
+  const cleanA = cleanName(aExp);
+  const cleanB = cleanName(bExp);
   if (cleanA === cleanB) return true;
 
-  // Stage 3: Levenshtein-based, threshold ≥ 0.92
-  if (Math.abs(a.length - b.length) > 6) return false; // quick reject
+  // Stage 2: concatenated stems equal (handles "Rent Expense" / "Rent
+  // Expenses", "Travel" / "Travelling", etc. — relies on the improved
+  // stem() that handles plurals + verb forms).
+  if (stemsA.join('') === stemsB.join('')) return true;
+
+  // Stage 3: stemmed token-SET equality (handles word-order shuffles
+  // like "Account Sales" / "Sales Account").  Requires same number of
+  // distinct stems on both sides.
+  if (stemsA.length === stemsB.length) {
+    const setA = new Set(stemsA);
+    const setB = new Set(stemsB);
+    if (setA.size === setB.size) {
+      let allMatch = true;
+      for (const t of setA) if (!setB.has(t)) { allMatch = false; break; }
+      if (allMatch) return true;
+    }
+  }
+
+  // Stage 4: stemmed-token prefix containment.  Catches:
+  //   • 2+ token prefix matches with arbitrary trailing tokens — e.g.
+  //     "Axis Bank" / "Axis Bank 916010030858199 A/c"
+  //   • Plural-tolerant prefix matches — e.g. "Purchase Account" /
+  //     "Purchase Accounts (Bills to come)" (using stemmed tokens).
+  // Plus a 1-token-prefix variant when the extra tokens are all
+  // qualifiers (handles "Cash" / "Cash-in-hand" without flagging
+  // "Cash" / "Cash Sales").
+  if (stemsA.length !== stemsB.length) {
+    const short = stemsA.length < stemsB.length ? stemsA : stemsB;
+    const long  = stemsA.length < stemsB.length ? stemsB : stemsA;
+    if (short.length >= 2 && long.slice(0, short.length).every((t, i) => t === short[i])) {
+      return true;
+    }
+    if (short.length === 1 && long[0] === short[0]) {
+      const extensions = long.slice(1);
+      if (extensions.length > 0 && extensions.every(t => QUALIFIER_TOKENS.has(t))) {
+        return true;
+      }
+    }
+  }
+
+  // Stage 5: Levenshtein similarity on cleaned strings (final safety
+  // net for typos / single-character swaps).  Keep the length-diff
+  // quick-reject — by this point the earlier prefix / set / stem
+  // stages already handle most of what falls outside that window.
+  if (Math.abs(a.length - b.length) > 6) return false;
   const sim = similarity(cleanA, cleanB);
   if (sim >= 0.92) return true;
 
@@ -777,6 +1114,11 @@ export function parsePandL(xml: string): {
   directRevenue: number;
   otherIncome: number;
   costOfMaterials: number;
+  /** Direct Expenses bucket — Indian accounting treats these as part of Cost
+   *  of Sales (deducted above the Gross Profit line).  Tracked separately
+   *  from `expenses` (indirect) so GP = Revenue − (Stock movement + Purchases
+   *  + Direct Expenses) reconciles with Tally's own "Cost of Sales :" rollup. */
+  directExpenses: number;
   expenses: number;
   netProfit: number;
   depFound: boolean;
@@ -819,6 +1161,7 @@ export function parsePandL(xml: string): {
   let directRevenue = 0;
   let otherIncome = 0;
   let costOfMaterials = 0;
+  let directExpenses = 0;
   let expenses = 0;
   let depAmt = 0;
   let openingStock = 0;
@@ -833,21 +1176,109 @@ export function parsePandL(xml: string): {
   for (const sec of plSections) {
     const nl = sec.name.toLowerCase();
     const absTotal = Math.abs(sec.total);
-    if (nl.includes('sales') && !nl.includes('cost of sales')) {
+    // Tally Prime emits subtotal/rollup HEADERS whose display name ends
+    // with a colon ("Cost of Sales :", "Trading Account :").  Their
+    // constituent line items (Opening Stock, Add: Purchases, Less: Closing,
+    // Direct Expenses, …) are emitted as SEPARATE sibling sections in the
+    // same XML.  Summing both produced the classic double-count where
+    // costOfMaterials came back at roughly 2× the true purchase total
+    // (e.g. ₹13.11L instead of ₹6.46L on data with a ~₹665K rollup).
+    // Skip rollup headers — their components are processed individually.
+    if (nl.trim().endsWith(':')) continue;
+    // Stock-equation items (Opening Stock / Closing Stock) are handled
+    // separately below and must NOT be classified as revenue / cost /
+    // income / expense — otherwise they double-skew the P&L derived
+    // numbers (Opening Stock 10k would land in otherIncome, etc.).
+    const isStockItem =
+      nl.includes('opening stock') ||
+      nl.includes('closing stock') ||
+      nl.includes('stock-in-trade') ||
+      nl.includes('stock in trade');
+    // Classification by section name substring.  Strengthened matchers
+    // catch the most common Tally group names so genuine revenue/expense
+    // sections don't slip into the sign-based fallback below (which
+    // can't tell a weirdly-named sales group from misc income).
+    const isSalesGroup = (
+      nl.includes('sales') ||
+      nl.includes('revenue') ||
+      nl.includes('turnover')
+    ) && !nl.includes('cost of sales');
+    const isCostGroup = (
+      nl.includes('purchase') ||
+      nl.includes('cost of sales') ||
+      nl.includes('cost of materials') ||
+      nl.includes('manufacturing') ||
+      nl.includes('raw material')
+    );
+    const isIncomeGroup = (
+      nl.includes('indirect income') ||
+      nl.includes('direct income') ||
+      (nl.includes('income') && !nl.includes('expense')) ||
+      nl.includes('commission received') ||
+      nl.includes('interest received') ||
+      nl.includes('rent received') ||
+      nl.includes('dividend') ||
+      nl.includes('royalty')
+    );
+    // Direct Expenses are tracked separately because Indian accounting
+    // treats them as a deduction from Revenue WHEN computing Gross Profit
+    // (Tally's "Cost of Sales :" rollup includes Direct Expenses alongside
+    // Opening / Purchases / Closing).  Keep them out of the generic
+    // expense bucket so GP can subtract them cleanly.
+    const isDirectExpenseGroup = (
+      // Exact head: "Direct Expenses" group plus common direct-cost ledgers
+      // typically nested under it (freight inward, carriage inward, fuel,
+      // power & water for production, factory wages).
+      nl === 'direct expenses' ||
+      nl.startsWith('direct expense') ||
+      nl.includes('freight inward') ||
+      nl.includes('freight-in') ||
+      nl.includes('carriage inward')
+    );
+    const isExpenseGroup = !isDirectExpenseGroup && (
+      nl.includes('expense') ||
+      nl.includes('indirect expense') ||
+      nl.includes('salary') ||
+      nl.includes('salaries') ||
+      nl.includes('wages') ||
+      nl.includes('depreciation') ||
+      nl.includes('rent paid') ||
+      nl.includes('freight') ||
+      nl.includes('discount allowed')
+    );
+
+    if (isStockItem) {
+      // Falls through to the openingStock / plClosingStock capture block.
+    } else if (isSalesGroup) {
       directRevenue += absTotal;
-    } else if (nl.includes('purchase') || nl.includes('cost of sales') || nl.includes('direct expense') || nl.includes('manufacturing')) {
+    } else if (isCostGroup) {
+      // Tightened: only purchase-style aggregates feed costOfMaterials.
+      // Direct Expenses (factory wages, freight inward, etc.) go to
+      // `directExpenses` below and are added back into the COGS deduction
+      // at the metrics layer when GP is computed.
       costOfMaterials += absTotal;
-    } else if (nl.includes('indirect income') || nl.includes('direct income') || (nl.includes('income') && !nl.includes('expense'))) {
+    } else if (isDirectExpenseGroup) {
+      directExpenses += absTotal;
+      // Direct Expenses can still contain a depreciation child (e.g.
+      // Depreciation on Plant) — capture it for EBITDA add-back.
+      for (const ch of sec.children) {
+        if (ch.name.toLowerCase().includes('depreciation')) depAmt += Math.abs(ch.amount);
+      }
+    } else if (isIncomeGroup) {
       otherIncome += absTotal;
-    } else if (nl.includes('expense') || nl.includes('indirect expense')) {
+    } else if (isExpenseGroup) {
       expenses += absTotal;
       // Pick depreciation from children
       for (const ch of sec.children) {
         if (ch.name.toLowerCase().includes('depreciation')) depAmt += Math.abs(ch.amount);
       }
     } else if (sec.total !== 0) {
-      // Sign-based fallback for non-standard group names (e.g. "COMMISSION", "Brokerage Paid")
-      // Negative BSMAINAMT = debit side = cost/expense; Positive = credit side = income
+      // Sign-based fallback for non-standard group names.  Sees only
+      // sections that didn't match ANY of the keyword sets above, so
+      // genuine revenue/expense almost never lands here.  If it does
+      // (very custom naming), we still want a deterministic answer
+      // rather than ignoring the section entirely.
+      // Negative BSMAINAMT = debit side → expense; Positive → income.
       if (sec.total < 0) {
         expenses += Math.abs(sec.total);
       } else {
@@ -862,6 +1293,14 @@ export function parsePandL(xml: string): {
       if (cn.includes('closing stock') || cn.includes('stock-in-trade') || cn.includes('stock in trade')) {
         plClosingStock += Math.abs(ch.amount);
       }
+    }
+    // Tally Prime EDU lays out the P&L with Opening Stock and Closing
+    // Stock as top-level GROUP rows (siblings of Purchase Accounts,
+    // Direct Expenses, Sales Accounts), NOT as children of a Cost-of-
+    // Sales aggregate.  Catch them at the section level too, mirroring
+    // the existing closing-stock fallback below.
+    if (nl.includes('opening stock')) {
+      openingStock += absTotal;
     }
     // Sometimes Tally emits "Closing Stock" as its own GROUP (not a
     // child) under Cost of Sales / Manufacturing — pick that up too.
@@ -933,7 +1372,7 @@ export function parsePandL(xml: string): {
   }
 
   const revenue = directRevenue + otherIncome;
-  const totalExpenses = costOfMaterials + expenses;
+  const totalExpenses = costOfMaterials + directExpenses + expenses;
   const netProfit = parseAmt(xmlText(xml, 'NETPROFIT') || xmlText(xml, 'PROFITLOSS') || xmlText(xml, 'NETLOSS')) || (revenue - totalExpenses);
 
   const depFound = xmlLower.includes('depreciation') || xmlLower.includes('dep exp');
@@ -943,7 +1382,7 @@ export function parsePandL(xml: string): {
     depAmt = Math.abs(parseAmt(xmlText(slice, 'BSSUBAMT') || xmlText(slice, 'AMOUNT')));
   }
 
-  return { revenue, directRevenue, otherIncome, costOfMaterials, expenses: totalExpenses, netProfit, depFound, depAmt, openingStock, plClosingStock, plSections };
+  return { revenue, directRevenue, otherIncome, costOfMaterials, directExpenses, expenses: totalExpenses, netProfit, depFound, depAmt, openingStock, plClosingStock, plSections };
 }
 
 
@@ -1006,7 +1445,17 @@ export function parseBSheet(xml: string): {
 
   // Tally display-report format: BSNAME blocks with DSPDISPNAME + BSAMT(BSSUBAMT/BSMAINAMT)
   // Walk through DSPDISPNAME+amount pairs — use BSMAINAMT when non-empty, else BSSUBAMT
-  // Bug 1 fix: do NOT call Math.abs() — preserve sign
+  //
+  // Sign convention note: Tally's BS XML stores asset Dr-balances as
+  // NEGATIVE in BSMAINAMT (e.g. a bank balance of ₹10,000 shows as
+  // "-10000.00") because the report layout reverses Dr/Cr direction
+  // relative to the TB.  A negative BSMAINAMT on a bank/cash ledger is
+  // NOT an overdraft — it's just a normal Dr asset rendered in BS
+  // convention.  Asset items below are abs()'d so downstream code sees
+  // the magnitude and doesn't mistakenly flag normal balances as
+  // anomalies (overdrafts get classified as bank-od under liabilities,
+  // not under bank assets).  Liabilities and equity (capital, creditors)
+  // keep their natural BS sign — they're Cr balances stored positive.
   const pairRe = /<DSPDISPNAME>([^<]+)<\/DSPDISPNAME>[\s\S]*?<BSAMT\b[^>]*>([\s\S]*?)<\/BSAMT>/gi;
   let m: RegExpExecArray | null;
   while ((m = pairRe.exec(xml)) !== null) {
@@ -1015,7 +1464,7 @@ export function parseBSheet(xml: string): {
     const amtBlock = m[2];
     const mainAmt = xmlText(amtBlock, 'BSMAINAMT');
     const subAmt  = xmlText(amtBlock, 'BSSUBAMT');
-    const amt = parseAmt(mainAmt || subAmt); // Bug 1: signed value preserved
+    const amt = parseAmt(mainAmt || subAmt);
     if (amt === 0 && !mainAmt && !subAmt) continue;
 
     // Bug 2: capture "Profit & Loss A/c" BSMAINAMT for net profit
@@ -1023,27 +1472,38 @@ export function parseBSheet(xml: string): {
       if (mainAmt) { bsNetProfit = parseAmt(mainAmt); }
       inCurrentAssets = false;
     } else if (name.includes('current assets')) {
-      ca = amt;
+      ca = Math.abs(amt);
       inCurrentAssets = true;
     } else if (name.includes('current liabilities')) {
-      cl = amt;
+      // Liabilities: always abs.  Different Tally builds emit "Current
+      // Liabilities" with positive OR negative BSMAINAMT depending on
+      // the company file's sign convention.  Downstream consumers
+      // (current ratio = ca/cl, dashboard tiles) need a positive
+      // magnitude — keeping it signed produced a negative current
+      // ratio on some files and made "Creditors −₹2.06L" appear on the
+      // Dashboard alongside a positive Debtors balance.
+      cl = Math.abs(amt);
       inCurrentAssets = false;
     } else if (name.includes('fixed asset')) {
-      fixedAssets = amt;
+      fixedAssets = Math.abs(amt);
       inCurrentAssets = false;
     } else if (name.includes('bank')) {
-      bankBal += amt;
+      bankBal += Math.abs(amt);
     } else if (name.includes('sundry debtor') || name.includes('trade receiv') || name.includes('debtor')) {
       debtorBal += Math.abs(amt);
     } else if (name.includes('sundry creditor') || name.includes('trade payable') || name.includes('creditor')) {
-      creditorBal += amt;
+      // Same abs treatment as assets — creditors is a magnitude (the
+      // amount the company owes), not a signed value.  Previously this
+      // kept Tally's BS sign and rendered as "−₹2.06L" on company files
+      // whose BS export stored Sundry Creditors as a negative value.
+      creditorBal += Math.abs(amt);
     } else if (isStockLikeName(name)) {
       // Capture the largest non-zero match so a leaf-level "Stock" doesn't
       // overwrite a group-level rollup like "Stock-in-Hand" with a more
       // complete total.
-      if (Math.abs(amt) > Math.abs(closingStock)) closingStock = amt;
+      if (Math.abs(amt) > Math.abs(closingStock)) closingStock = Math.abs(amt);
     } else if (name === 'cash' || name.includes('cash in hand') || name.includes('cash-in-hand')) {
-      cashBal += amt;
+      cashBal += Math.abs(amt);
     } else if (/\bsuspense\b|\bmiscellaneous\b/.test(name) && amt !== 0) {
       // BS-side suspense detection.  Catches the "Suspense A/c" group
       // rollup (and similar) which parseTrialBalance skips because the
@@ -1059,7 +1519,7 @@ export function parseBSheet(xml: string): {
       // would otherwise slip through as "otherCurrentAssets" and the D5
       // check would falsely report no closing stock.
       if (isStockLikeName(name)) {
-        if (Math.abs(subAmtVal) > Math.abs(closingStock)) closingStock = subAmtVal;
+        if (Math.abs(subAmtVal) > Math.abs(closingStock)) closingStock = Math.abs(subAmtVal);
       } else {
         // Uncategorized sub-item under Current Assets (e.g. Input GST, Advance Tax, Prepaid)
         otherCurrentAssets.push({ name: rawName, amount: Math.abs(subAmtVal) });
@@ -1067,16 +1527,21 @@ export function parseBSheet(xml: string): {
     }
   }
 
-  // Classic import-format fallback — also retain signs
+  // Classic import-format fallback — every magnitude is abs()'d so
+  // downstream consumers see positive values regardless of which sign
+  // convention Tally's BS export used.  Treats assets and liabilities
+  // symmetrically — the BS equation check (D3) reads from
+  // parseBSheetStatement.totals which preserves signs separately, so
+  // we don't need to keep raw signs here.
   if (ca === 0 && cl === 0) {
-    ca         = parseAmt(xmlText(xml, 'CURRENTASSETS') || xmlText(xml, 'CURRENTASSET'));
-    cl         = parseAmt(xmlText(xml, 'CURRENTLIABILITIES') || xmlText(xml, 'CURRENTLIABILITY'));
-    bankBal    = parseAmt(xmlText(xml, 'BANKBALANCES') || xmlText(xml, 'BANKBAL'));
-    debtorBal  = parseAmt(xmlText(xml, 'DEBTORS') || xmlText(xml, 'SUNDRYDEBTORS'));
-    creditorBal = parseAmt(xmlText(xml, 'CREDITORS') || xmlText(xml, 'SUNDRYCREDITORS'));
-    closingStock = parseAmt(xmlText(xml, 'CLOSINGSTOCK') || xmlText(xml, 'STOCKINTRADE'));
-    fixedAssets  = parseAmt(xmlText(xml, 'FIXEDASSETS') || xmlText(xml, 'FIXEDASSET'));
-    cashBal     = parseAmt(xmlText(xml, 'CASHINHAND') || xmlText(xml, 'CASH'));
+    ca         = Math.abs(parseAmt(xmlText(xml, 'CURRENTASSETS') || xmlText(xml, 'CURRENTASSET')));
+    cl         = Math.abs(parseAmt(xmlText(xml, 'CURRENTLIABILITIES') || xmlText(xml, 'CURRENTLIABILITY')));
+    bankBal    = Math.abs(parseAmt(xmlText(xml, 'BANKBALANCES') || xmlText(xml, 'BANKBAL')));
+    debtorBal  = Math.abs(parseAmt(xmlText(xml, 'DEBTORS') || xmlText(xml, 'SUNDRYDEBTORS')));
+    creditorBal = Math.abs(parseAmt(xmlText(xml, 'CREDITORS') || xmlText(xml, 'SUNDRYCREDITORS')));
+    closingStock = Math.abs(parseAmt(xmlText(xml, 'CLOSINGSTOCK') || xmlText(xml, 'STOCKINTRADE')));
+    fixedAssets  = Math.abs(parseAmt(xmlText(xml, 'FIXEDASSETS') || xmlText(xml, 'FIXEDASSET')));
+    cashBal     = Math.abs(parseAmt(xmlText(xml, 'CASHINHAND') || xmlText(xml, 'CASH')));
   }
 
   // Last-resort closing-stock catch — Tally's BS XML sometimes lists
@@ -1298,6 +1763,11 @@ export function processVoucher(
   }
   const dateStr = xmlText(block, 'DATE');
   const amt = extractAmt(block);
+  // Signed master amount — used only by the net sales/purchase totals.
+  // All other counters and flags keep using the absolute `amt`, which is
+  // the right semantic for "did this voucher exceed ₹X / lack narration /
+  // get bunched into October" type checks.
+  const signedAmt = extractSignedAmt(block);
 
   // Phase 4: classify the voucher type to its semantic role.  This is the
   // single source of truth for every downstream rule that asks "is this a
@@ -1388,15 +1858,136 @@ export function processVoucher(
 
   if (amt > 0 && amt % 1000 === 0) stats.roundCount++;
 
-  // Phase 4: sign-aware revenue/expense aggregation.  Sales Returns and
-  // Purchase Returns reduce the net total instead of inflating it (the
-  // pre-Phase-4 code added them as positive sales because vtype string
-  // contained "sales").
-  if (isSales)          stats.salesVoucherTotal += amt;
-  if (isSalesReturn)    stats.salesVoucherTotal -= amt;
-  if (isPurchase)       stats.purchVoucherTotal += amt;
-  if (isPurchaseReturn) stats.purchVoucherTotal -= amt;
-  if (isJournal)        stats.taxVoucherTotal   += amt;
+  // Sign-aware revenue/expense aggregation.
+  //
+  // Goal: net = Tally's Debit-column total − Credit-column total for the
+  // voucher type — the bottom-line figure on Tally's columnar Day Book.
+  //
+  // Algorithm: look at the FIRST <ALLLEDGERENTRIES.LIST> entry — that's
+  // the ledger Tally displays in its "Particulars" column for each
+  // voucher row.  Read its ISDEEMEDPOSITIVE flag for direction; if the
+  // flag is empty, default to Dr (matches Tally's "(-)X" notation case
+  // where a negative-Dr entry shows under the Debit column rather than
+  // flipping to Credit — Tally's column placement honours the deemed
+  // direction, not the raw AMOUNT sign).  Apply Dr → +amt, Cr → −amt.
+  //
+  // Why first leg, not party leg or master AMOUNT:
+  //   • Party-leg direction encodes "the trade party's accounting
+  //     impact" (Cr for normal purchase = vendor to be paid), which is
+  //     correct accounting but DOES NOT match Tally's daybook column
+  //     placement — Tally shows the Purchase A/c leg (Dr) in Particulars
+  //     for normal purchases, not the party.  Using party direction
+  //     produces a sign-inverted net.
+  //   • Master <AMOUNT> tag position varies across exports; xmlText
+  //     picks whichever happens to come first, leading to inconsistent
+  //     direction across voucher types.
+  //   • First <ALLLEDGERENTRIES.LIST> entry is what Tally's display
+  //     engine treats as the voucher's primary leg — deterministic
+  //     across exports.
+  //
+  // Empty-flag fallback: default to Dr.  Tally's daybook total math
+  // (verified against user's purchase data) sums abs(amount) under the
+  // deemed direction's column regardless of AMOUNT sign — so when the
+  // flag is missing on a reversal-style entry like "(-)5,000 Dr", we
+  // pick Dr direction and contribute +amt, which is what Tally does.
+  //
+  //   • Return-type vouchers (Sales/Purchase Return) override with an
+  //     explicit −amt branch — type-level signal is unambiguous.
+  // Direction for Tally's columnar Day Book = the FIRST leg's
+  // ISDEEMEDPOSITIVE flag, with a special "reversal Dr" rule for entries
+  // displayed as "(-)X" in the Dr column.  Empirically verified against
+  // Tally Prime sample data and the user's actual data:
+  //
+  //   <VOUCHER VCHTYPE="Purchase">
+  //     <PARTYLEDGERNAME>AutomateIQ</PARTYLEDGERNAME>
+  //     <LEDGERENTRIES.LIST>
+  //       <LEDGERNAME>Purchase</LEDGERNAME>
+  //       <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>   ← flag=Yes ⇒ Dr
+  //       <AMOUNT>-100000.00</AMOUNT>                ← Tally invoice mode stores Dr as flag=Yes + negative AMOUNT
+  //     </LEDGERENTRIES.LIST>
+  //     <LEDGERENTRIES.LIST>
+  //       <LEDGERNAME>AutomateIQ</LEDGERNAME>
+  //       <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>    ← flag=No ⇒ Cr
+  //       <AMOUNT>118000.00</AMOUNT>                 ← Cr leg has positive AMOUNT
+  //     </LEDGERENTRIES.LIST>
+  //   </VOUCHER>
+  //
+  // Rules (in priority order):
+  //   1. flag=Yes  → Dr (standard Tally-invoice Dr leg)
+  //   2. flag=No, AMOUNT >= 0 → Cr (standard Cr leg)
+  //   3. flag=No, AMOUNT < 0  → Dr (reversal entry — Tally displays as
+  //                                  "(-)X" in Dr column.  This is the
+  //                                  case for v33-style adjustment
+  //                                  vouchers.)
+  //   4. flag missing → Dr (default)
+  //
+  // Three important fixes vs the earlier XNOR rule:
+  //   • The container is LEDGERENTRIES.LIST for invoice-mode vouchers
+  //     (not ALLLEDGERENTRIES.LIST).  Match BOTH so we don't miss
+  //     invoice-mode vouchers entirely (the old regex only matched
+  //     ALL-prefixed and skipped Purchase/Sales Invoice vouchers).
+  //   • Trust ISDEEMEDPOSITIVE alone for the Yes case.  XNOR with sign
+  //     flipped every normal Dr leg into Cr because Tally invoice mode
+  //     stores Dr legs with negative AMOUNT (counter-intuitive).
+  //   • For flag=No, the AMOUNT sign DOES matter — distinguishes
+  //     standard Cr (positive AMOUNT) from a "reversal Dr" (negative
+  //     AMOUNT, displayed with "(-)X" notation under the Dr column).
+  // Match both container shapes (LEDGERENTRIES.LIST and ALLLEDGERENTRIES.LIST).
+  const legContainerRe =
+    /<((?:ALL)?LEDGERENTRIES)\.LIST\b[^>]*>([\s\S]*?)<\/\1\.LIST>/i;
+  const firstLegMatch = block.match(legContainerRe);
+  let firstLegIsDr: boolean | null = null;
+  if (firstLegMatch) {
+    const entry = firstLegMatch[2];
+    const flag = xmlText(entry, 'ISDEEMEDPOSITIVE');
+    const entryAmt = parseAmt(xmlText(entry, 'AMOUNT'));
+    firstLegIsDr = legDirection(flag, entryAmt);
+  } else {
+    firstLegIsDr = true;
+  }
+  const drSign = firstLegIsDr === false ? -1 : +1;
+
+  // Initialize breakdown buckets on first hit (the type marks them
+  // optional for backward compat with cached chunkedStats from prior runs).
+  if (stats.salesVoucherDr === undefined) {
+    stats.salesVoucherDr = 0;
+    stats.salesVoucherCr = 0;
+    stats.purchVoucherDr = 0;
+    stats.purchVoucherCr = 0;
+    stats.salesVoucherBreakdown = [];
+    stats.purchVoucherBreakdown = [];
+  }
+
+  function recordBreakdown(arr: Array<{ vno: string; amt: number; dr: boolean }> | undefined, dr: boolean) {
+    if (!arr) return;
+    if (arr.length >= 1000) return;  // cap to keep memory bounded
+    arr.push({ vno: vno || '', amt, dr });
+  }
+
+  if (isSales) {
+    stats.salesVoucherTotal += drSign * amt;
+    if (firstLegIsDr) stats.salesVoucherDr! += amt;
+    else              stats.salesVoucherCr! += amt;
+    recordBreakdown(stats.salesVoucherBreakdown, !!firstLegIsDr);
+  }
+  if (isSalesReturn) {
+    stats.salesVoucherTotal -= amt;
+    // Return type forces Cr-column accounting (subtracts from net).
+    stats.salesVoucherCr! += amt;
+    recordBreakdown(stats.salesVoucherBreakdown, false);
+  }
+  if (isPurchase) {
+    stats.purchVoucherTotal += drSign * amt;
+    if (firstLegIsDr) stats.purchVoucherDr! += amt;
+    else              stats.purchVoucherCr! += amt;
+    recordBreakdown(stats.purchVoucherBreakdown, !!firstLegIsDr);
+  }
+  if (isPurchaseReturn) {
+    stats.purchVoucherTotal -= amt;
+    stats.purchVoucherCr! += amt;
+    recordBreakdown(stats.purchVoucherBreakdown, false);
+  }
+  if (isJournal)                      stats.taxVoucherTotal   += amt;
 
   // Cash/Bank movement total — fired by Receipt, Payment, and Contra
   // vouchers (Contra moves between cash and bank), plus the legacy
@@ -1420,6 +2011,21 @@ export function processVoucher(
   // once in cashBankNetMovement above.  H4 adds this back to the DB
   // side to keep both totals comparable.
   if (isContra) stats.contraTotal += amt;
+
+  // Customer / vendor concentration maps — keyed on the voucher's
+  // resolved party (PARTYLEDGERNAME, with fallbacks already applied
+  // upstream).  Drives BPI1 (top customers / concentration), BPI8
+  // (top vendors / concentration), WC3 (top debtors), WC9 (top
+  // creditors), BPI3 (new vs repeat customer detection).  Sales-side
+  // vouchers contribute to custMap; purchase-side to vendMap.  Returns
+  // (credit / debit notes) subtract so a fully-returned customer
+  // shows net-zero rather than inflated turnover.
+  if (party && amt > 0) {
+    if (isSales)            stats.custMap[party] = (stats.custMap[party] ?? 0) + amt;
+    else if (isSalesReturn) stats.custMap[party] = (stats.custMap[party] ?? 0) - amt;
+    else if (isPurchase)    stats.vendMap[party] = (stats.vendMap[party] ?? 0) + amt;
+    else if (isPurchaseReturn) stats.vendMap[party] = (stats.vendMap[party] ?? 0) - amt;
+  }
 
   stats.totalDebit += amt;
   stats.totalCredit += amt;
@@ -1446,7 +2052,7 @@ export function processVoucher(
     //     (money flowed INTO the bank) — that's structurally a Receipt.
     // Falls back to AMOUNT sign (negative = Cr) when ISDEEMEDPOSITIVE is
     // absent in the entry — older Tally exports sometimes skip the flag.
-    const legs: Array<{ name: string; dr: boolean }> = [];
+    const legs: Array<{ name: string; dr: boolean; amt: number }> = [];
     const seenLegs = new Set<string>();
     const entryBlockRe = /<ALLLEDGERENTRIES\.LIST\b[^>]*>([\s\S]*?)<\/ALLLEDGERENTRIES\.LIST>/gi;
     let lm: RegExpExecArray | null;
@@ -1455,19 +2061,19 @@ export function processVoucher(
       const rawName = xmlText(entry, 'LEDGERNAME');
       if (!rawName) continue;
       const name = rawName.toLowerCase();
-      let dr: boolean;
+      const amtTxt = xmlText(entry, 'AMOUNT');
+      const amtN = parseAmt(amtTxt);
+      // Shared legDirection helper — handles ISDEEMEDPOSITIVE=No + neg
+      // AMOUNT reversal correctly.  Previously this loop used a "flag
+      // wins" rule and disagreed with H2/H3 first-leg sign netting on
+      // reversal entries, causing H4 cash-leg direction + wrong-type
+      // rescan to miscount on those vouchers.
       const flag = xmlText(entry, 'ISDEEMEDPOSITIVE');
-      if (flag) {
-        dr = /yes/i.test(flag);
-      } else {
-        const amtTxt = xmlText(entry, 'AMOUNT');
-        const amtN = parseFloat(amtTxt);
-        dr = !isNaN(amtN) && amtN >= 0;
-      }
+      const dr = legDirection(flag, amtN);
       const key = `${name}${dr ? 'd' : 'c'}`;
       if (seenLegs.has(key)) continue;
       seenLegs.add(key);
-      legs.push({ name, dr });
+      legs.push({ name, dr, amt: Math.abs(amtN) });
     }
     stats.vouchers.push({
       date: dateStr || '',
@@ -1511,6 +2117,55 @@ export function assembleParsedData(
 //  • LEDGER blocks → type = 'ledger' (overrides same-keyed group if duplicate)
 //  • Empty <PARENT> → defaults to "Primary"
 
+/** Extract a GST rate (percent) from a Tally master <LEDGER> block.
+ *
+ *  Tally Prime stores per-ledger GST configuration under several field
+ *  names depending on version and how GST was originally configured:
+ *
+ *    Direct rate fields (most common):
+ *      <RATEOFTAX>18.00</RATEOFTAX>
+ *      <GSTTAXRATE>18</GSTTAXRATE>
+ *
+ *    Nested in <GSTDETAILS.LIST>:
+ *      <GSTDETAILS.LIST>
+ *        <GSTRATE>18</GSTRATE>
+ *        ...
+ *      </GSTDETAILS.LIST>
+ *
+ *    Statutory details nested deeper (Tally Prime 3.x+):
+ *      <STATUTORYDETAILS.LIST>
+ *        <GSTAPPLICABILITY>Applicable</GSTAPPLICABILITY>
+ *        <GSTRATE>18</GSTRATE>
+ *      </STATUTORYDETAILS.LIST>
+ *
+ *  Returns the first non-zero rate found across these tag candidates,
+ *  or undefined when no rate is present (which is what E2a flags as
+ *  missing GST configuration on a sales ledger).
+ */
+function extractGstRate(ledgerBlock: string): number | undefined {
+  const TAG_CANDIDATES = ['RATEOFTAX', 'GSTTAXRATE', 'GSTRATE', 'TAXRATE'];
+  for (const tag of TAG_CANDIDATES) {
+    const all = xmlAll(ledgerBlock, tag);
+    for (const v of all) {
+      const n = parseAmt(v);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+  }
+  return undefined;
+}
+
+/** Extract GST applicability from a Tally master <LEDGER> block.
+ *  Looks for <GSTAPPLICABILITY> with values "Applicable" / "Not Applicable" /
+ *  "Use Default" (Tally's canonical strings). */
+function extractGstApplicability(ledgerBlock: string): MasterEntry['gstApplicable'] {
+  const raw = xmlText(ledgerBlock, 'GSTAPPLICABILITY').toLowerCase().trim();
+  if (!raw) return undefined;
+  if (raw.includes('not applicable')) return 'not-applicable';
+  if (raw.includes('use default'))    return 'use-default';
+  if (raw.includes('applicable'))     return 'applicable';
+  return undefined;
+}
+
 export function parseMasterMap(xml: string): Map<string, MasterEntry> {
   const map = new Map<string, MasterEntry>();
   const ordered = parseOrderedXml(xml);
@@ -1529,8 +2184,37 @@ export function parseMasterMap(xml: string): Map<string, MasterEntry> {
   readEntries('GROUP', 'group');
   readEntries('LEDGER', 'ledger');
 
+  // GST rate / applicability extraction — pull from raw XML with a
+  // per-LEDGER regex pass and merge into the entries we already built.
+  // The ordered XML structure exposes children as opaque nodes that
+  // would need re-serialisation to use the flat tag extractors;
+  // running a parallel regex pass over the raw text is simpler and
+  // reuses the same helpers that the fallback path below already uses.
+  //
+  // We do this AFTER the ordered-parse loop because the ordered path
+  // is the high-quality source of truth for name+parent+type; the
+  // regex pass just enriches existing entries with GST fields.
+  const ledgerEnrichRe = /<LEDGER\s+NAME="([^"]+)"[^>]*>([\s\S]*?)<\/LEDGER>/gi;
+  let em: RegExpExecArray | null;
+  while ((em = ledgerEnrichRe.exec(xml)) !== null) {
+    const name = decodeEntities(em[1].trim());
+    if (!name || name === 'undefined') continue;
+    const key = normalizeMasterKey(name);
+    const existing = map.get(key);
+    if (!existing || existing.type !== 'ledger') continue;
+    const block = em[2];
+    const gstRate = extractGstRate(block);
+    const gstApplicable = extractGstApplicability(block);
+    if (gstRate !== undefined || gstApplicable !== undefined) {
+      map.set(key, { ...existing, gstRate, gstApplicable });
+    }
+  }
+
   if (map.size > 0) return map;
 
+  // Fallback regex path — runs only when the ordered XML parser didn't
+  // produce anything (rare; older Tally exports without standard
+  // grouping).  Same GST extraction applied here for consistency.
   const groupRe = /<GROUP\s+NAME="([^"]+)"[^>]*>([\s\S]*?)<\/GROUP>/gi;
   let m: RegExpExecArray | null;
   while ((m = groupRe.exec(xml)) !== null) {
@@ -1544,8 +2228,11 @@ export function parseMasterMap(xml: string): Map<string, MasterEntry> {
   while ((m = ledgerRe.exec(xml)) !== null) {
     const name = decodeEntities(m[1].trim());
     if (!name || name === 'undefined') continue;
-    const parent = xmlText(m[2], 'PARENT').trim() || 'Primary';
-    map.set(normalizeMasterKey(name), { name, parent, type: 'ledger' });
+    const block = m[2];
+    const parent = xmlText(block, 'PARENT').trim() || 'Primary';
+    const gstRate = extractGstRate(block);
+    const gstApplicable = extractGstApplicability(block);
+    map.set(normalizeMasterKey(name), { name, parent, type: 'ledger', gstRate, gstApplicable });
   }
 
   return map;

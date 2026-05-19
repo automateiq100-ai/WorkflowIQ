@@ -42,9 +42,14 @@ export const AI_PROVIDERS: Record<AIProvider, AIProviderConfig> = {
     apiKey: process.env.OPENAI_API_KEY ?? '',
     model: 'gpt-4o',
     supportsJsonMode: true,
-    maxTokens: 2500,
+    // Bumped from 2500 → 6000 to accommodate the richer response shape
+    // (smartInsights + per-failed-check explanations).  At 15 failing
+    // checks with 3-5 fix steps each, checkExplanations alone consumes
+    // ~1.5k tokens; the old cap silently truncated the JSON mid-object
+    // and the parser surfaced a "not valid JSON" error.
+    maxTokens: 6000,
     temperature: 0.2,
-    timeoutMs: 30_000,
+    timeoutMs: 60_000,
   },
 
   workflowiq: {

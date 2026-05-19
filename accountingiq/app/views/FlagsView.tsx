@@ -5,6 +5,8 @@ import { useApp } from '@/lib/state';
 import { generateFlags } from '@/lib/flags';
 import { getDrillDown, hasDrillDown } from '@/lib/voucher-filters';
 import VoucherDrillDown from '@/app/components/VoucherDrillDown';
+import H4Breakdown from '@/app/components/H4Breakdown';
+import LedgerPairDrillDown from '@/app/components/LedgerPairDrillDown';
 import type { AnomalyFlag } from '@/lib/types';
 
 type Severity = AnomalyFlag['severity'];
@@ -115,7 +117,34 @@ export default function FlagsView() {
         </div>
       )}
 
-      {drillFlag && (() => {
+      {drillFlag && drillFlag.id === 'H4' && (
+        <H4Breakdown
+          tbLedgers={parsedData.tbLedgers ?? []}
+          masterEntries={parsedData.masterEntries ?? []}
+          bsStatement={parsedData.bsheetStatement}
+          ledgerOverrides={state.ledgerOverrides}
+          dbStats={dbStats}
+          onClose={() => setDrillFlag(null)}
+        />
+      )}
+      {drillFlag && (drillFlag.id === 'B2' || drillFlag.id === 'G1' || drillFlag.id === 'G2') && (() => {
+        // B2 / G1 / G2 all use LedgerPairDrillDown but read from
+        // different parsedData fields — see ChecklistView for the
+        // canonical routing.
+        const pairs =
+          drillFlag.id === 'G1' ? (parsedData.partySplitPairs   ?? [])
+          : drillFlag.id === 'G2' ? (parsedData.expenseSplitPairs ?? [])
+                                  : (parsedData.dupPairDetails    ?? []);
+        if (pairs.length === 0) return null;
+        return (
+          <LedgerPairDrillDown
+            title={drillFlag.title}
+            pairs={pairs}
+            onClose={() => setDrillFlag(null)}
+          />
+        );
+      })()}
+      {drillFlag && drillFlag.id !== 'H4' && drillFlag.id !== 'B2' && drillFlag.id !== 'G1' && drillFlag.id !== 'G2' && (() => {
         const drill = getDrillDown(drillFlag.id, drillFlag.title, dbStats, parsedData);
         if (!drill) return null;
         return (

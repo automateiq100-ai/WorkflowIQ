@@ -54,12 +54,20 @@ function exportEnvelope({ reportName, company, period, extraStaticVars = '' }: E
 </ENVELOPE>`;
 }
 
-/** Per-kind extra static variables.  Trial Balance asks Tally to include the
- *  Opening Balance and Transactions columns — Tally's F12 toggles are exposed
- *  through SV variables, but the exact names vary across versions (Prime 2.x
- *  vs 3.x vs 4.x and across release builds).  Setting all known candidates is
- *  safe — Tally silently ignores names it doesn't recognise.  The parser
- *  reads whichever tags actually come back, and the UI hides empty columns. */
+/** Per-kind extra static variables.  Two main uses:
+ *  1. Flip Tally's F12-style toggles (e.g. Trial Balance: "Show Opening
+ *     Balance" / "Show Transactions").
+ *  2. Pre-select scope for reports that open with a picker dialog
+ *     (Group Summary / Bills Receivable / Bills Payable / Sales Register
+ *     / Purchase Register / Cash Flow).  Without this, Tally Prime
+ *     halts the export waiting for the user to dismiss the dialog —
+ *     forcing the user to switch to Tally to "close the issue" before
+ *     the live sync can proceed.
+ *
+ *  Exact variable names vary across Tally Prime versions (2.x / 3.x / 4.x
+ *  and across release builds), so we set all known candidates — Tally
+ *  silently ignores names it doesn't recognise.  Pattern matches the
+ *  existing trialbal block. */
 const EXTRA_STATIC_VARS: Partial<Record<ReportKind, string>> = {
   trialbal: `
         <ISITRRBOPNGBAL>Yes</ISITRRBOPNGBAL>
@@ -74,6 +82,57 @@ const EXTRA_STATIC_VARS: Partial<Record<ReportKind, string>> = {
         <SHOWTRANSACTIONS>Yes</SHOWTRANSACTIONS>
         <TBONALLLEDGER>Yes</TBONALLLEDGER>
         <SHOWFORACCOUNTS>Yes</SHOWFORACCOUNTS>`,
+  // Group Summary opens with "Select Group: <picker>" in Tally Prime.
+  // Pre-select "Primary" so the report runs against the full chart of
+  // accounts (every group rolls up to Primary).  All variant names
+  // included because the canonical name differs across Tally builds.
+  grpsum: `
+        <DSPACCNAME>Primary</DSPACCNAME>
+        <SVACCNAME>Primary</SVACCNAME>
+        <ACCOUNTNAME>Primary</ACCOUNTNAME>
+        <DSPGROUPNAME>Primary</DSPGROUPNAME>
+        <SVGROUPNAME>Primary</SVGROUPNAME>
+        <SVCURRENTGROUP>Primary</SVCURRENTGROUP>
+        <ISSHOWOWNGROUP>No</ISSHOWOWNGROUP>
+        <ISGRPSUMMARY>Yes</ISGRPSUMMARY>
+        <EXPANDFLAG>Yes</EXPANDFLAG>`,
+  // Bills Receivable / Bills Payable open with "Bills Receivable for:
+  // <ledger picker>".  Pre-select "All Items" / "All Ledgers" so the
+  // report aggregates across every party.
+  bills: `
+        <DSPACCNAME>All Items</DSPACCNAME>
+        <SVACCNAME>All Items</SVACCNAME>
+        <ACCOUNTNAME>All Items</ACCOUNTNAME>
+        <ISALLITEMS>Yes</ISALLITEMS>
+        <SHOWALLBILLS>Yes</SHOWALLBILLS>`,
+  payables: `
+        <DSPACCNAME>All Items</DSPACCNAME>
+        <SVACCNAME>All Items</SVACCNAME>
+        <ACCOUNTNAME>All Items</ACCOUNTNAME>
+        <ISALLITEMS>Yes</ISALLITEMS>
+        <SHOWALLBILLS>Yes</SHOWALLBILLS>`,
+  // Sales / Purchase Register open with "Sales Register: <voucher type
+  // picker>" in some Tally Prime builds.  Pre-select "All Vouchers"
+  // (which is also the menu's default label) so the export covers
+  // every voucher type without prompting.
+  sales: `
+        <DSPACCNAME>All Vouchers</DSPACCNAME>
+        <SVACCNAME>All Vouchers</SVACCNAME>
+        <VOUCHERTYPENAME>All Vouchers</VOUCHERTYPENAME>
+        <ISALLVOUCHERS>Yes</ISALLVOUCHERS>`,
+  purchase: `
+        <DSPACCNAME>All Vouchers</DSPACCNAME>
+        <SVACCNAME>All Vouchers</SVACCNAME>
+        <VOUCHERTYPENAME>All Vouchers</VOUCHERTYPENAME>
+        <ISALLVOUCHERS>Yes</ISALLVOUCHERS>`,
+  // Cash Flow opens with a "Period: monthly / quarterly / yearly"
+  // selector in some Tally Prime versions.  Force monthly granularity
+  // (the most data-rich option) and full-period scope.
+  cashflow: `
+        <SVPERIODICITY>Monthly</SVPERIODICITY>
+        <PERIODICITY>Monthly</PERIODICITY>
+        <ISMONTHLY>Yes</ISMONTHLY>
+        <EXPLODEFLAG>Yes</EXPLODEFLAG>`,
 };
 
 // Map our ReportKind → the Tally REPORT id that returns the same shape the
@@ -81,24 +140,32 @@ const EXTRA_STATIC_VARS: Partial<Record<ReportKind, string>> = {
 // Tally Prime built-in REPORT ids. These match the names Tally uses for
 // Display → Statements / Account Books / Inventory Books menus, which is the
 // same string Tally accepts as <ID> in an Export envelope.
-const REPORT_IDS: Record<ReportKind, string> = {
+/** Tally Prime built-in report IDs accepted by `<ID>…</ID>` in an Export
+ *  envelope.  Only includes reports that exist as standalone TDL-callable
+ *  reports.  Anything that's a drill-down (Group Summary → Fixed Assets)
+ *  or an interactive workflow (F5 Bank Reconciliation) is fetched via a
+ *  custom Collection — see buildReportRequest. */
+const REPORT_IDS: Partial<Record<ReportKind, string>> = {
   // Required (always pulled, parser depends on these)
   master:     'List of Accounts',
-  trialbal:   'Trial Balance',
+  // trialbal handled via custom WIQTrialBalance collection (see buildReportRequest)
   pandl:      'Profit and Loss',
   bsheet:     'Balance Sheet',
   grpsum:     'Group Summary',
-  daybook:    'Day Book',
+  // daybook handled via custom WIQDayBook collection (see buildReportRequest)
   // Conditional — depend on company having sales/purchase/billing modules enabled
   sales:      'Sales Register',
   purchase:   'Purchase Register',
   bills:      'Bills Receivable',
   payables:   'Bills Payable',
   cashflow:   'Cash Flow',
-  // Optional — may not exist in every Tally setup; sync handles per-kind errors
-  faregister: 'Fixed Assets Register',
+  // Optional
+  // faregister handled via custom WIQFixedAssets collection (see buildReportRequest)
   stock:      'Stock Summary',
-  bankrecon:  'Bank Reconciliation',
+  // bankrecon: NO entry — Tally Prime has no standalone Bank Reconciliation
+  //   report.  F5 (Reconcile) is an interactive workflow on each bank
+  //   ledger.  The sync skips this kind; users export it manually per
+  //   bank ledger if they need the BRS data.
 };
 
 /**
@@ -176,6 +243,55 @@ function buildDayBookCollectionRequest(company: string, period: ReportPeriod): s
  * "DayBook cash/bank flow ≈ TB cash/bank movement" cross-check.  The
  * parser's existing <LEDGER>-block fallback reads this shape natively.
  */
+/**
+ * Custom Collection for Fixed-Asset ledgers.
+ *
+ * Why this exists: Tally Prime does NOT have a built-in report called
+ * "Fixed Assets Register" at the TDL level — the manual export path uses
+ * Group Summary → Fixed Assets, which is a drill-down into a specific
+ * primary group, not a standalone report.  Asking Tally for
+ * `<ID>Fixed Assets Register</ID>` produces a LINEERROR.
+ *
+ * Solution: a custom Ledger collection filtered to ledgers whose Primary
+ * Group is "Fixed Assets" (the default Tally group name; any ledger
+ * classified under it inherits through `$PrimaryGroup`).  Closing
+ * balance + parent path are enough to populate the Fixed Asset Register
+ * slot — the parser's `<LEDGER>`-block fallback reads this shape natively.
+ */
+/** Fixed Assets export via Tally Prime's built-in Group Summary report
+ *  with `<DSPACCNAME>Fixed Assets</DSPACCNAME>` pre-selected as the scope.
+ *
+ *  Why this approach: a custom Collection with `<FILTER>` + `<SYSTEM>`
+ *  declaration ran into TDL dictionary lookup quirks across Tally Prime
+ *  versions ("Description not found: System Formulae - 'WIQFAFilter'")
+ *  no matter whether the SYSTEM TYPE was set to "Formula" or "Formulae",
+ *  or whether the body used <VALUE> or <FORMULA>.  Built-in reports are
+ *  much more reliable because they're version-stable, and the scope
+ *  pre-selection trick (same one we use for grpsum's "Primary" group)
+ *  is the documented way to drive Group Summary without an interactive
+ *  picker.
+ *
+ *  Output shape: standard Tally Group Summary XML — the existing
+ *  `<DSPACCNAME>` / `<DSPCLAMTA>` blocks the trial balance parser
+ *  already understands.  Drill-downs into per-ledger detail happen
+ *  client-side via the parsed `Parent` field. */
+function buildFixedAssetsCollectionRequest(company: string, period: ReportPeriod): string {
+  return exportEnvelope({
+    reportName: 'Group Summary',
+    company,
+    period,
+    extraStaticVars: `
+        <DSPACCNAME>Fixed Assets</DSPACCNAME>
+        <SVACCNAME>Fixed Assets</SVACCNAME>
+        <ACCOUNTNAME>Fixed Assets</ACCOUNTNAME>
+        <DSPGROUPNAME>Fixed Assets</DSPGROUPNAME>
+        <SVGROUPNAME>Fixed Assets</SVGROUPNAME>
+        <SVCURRENTGROUP>Fixed Assets</SVCURRENTGROUP>
+        <ISSHOWOWNGROUP>No</ISSHOWOWNGROUP>
+        <EXPANDFLAG>Yes</EXPANDFLAG>`,
+  });
+}
+
 function buildTrialBalanceCollectionRequest(company: string, period: ReportPeriod): string {
   const from = toTallyDate(period.start);
   const to = toTallyDate(period.end);
@@ -212,6 +328,21 @@ function buildTrialBalanceCollectionRequest(company: string, period: ReportPerio
 }
 
 
+/** Sentinel prefix on error messages for `ReportKind` values that
+ *  intentionally have no Tally-side implementation (e.g. `bankrecon`
+ *  requires per-ledger F5 workflow).  The UI splits these out from real
+ *  Tally errors so users see them as a separate "skipped — export
+ *  manually" category instead of a generic failure. */
+export const MANUAL_ONLY_PREFIX = 'MANUAL_ONLY: ';
+
+export class ReportNotAvailableError extends Error {
+  manualOnly = true;
+  constructor(public kind: ReportKind, reason: string) {
+    super(MANUAL_ONLY_PREFIX + reason);
+    this.name = 'ReportNotAvailableError';
+  }
+}
+
 export function buildReportRequest(
   kind: ReportKind,
   company: string,
@@ -227,8 +358,28 @@ export function buildReportRequest(
   if (kind === 'trialbal') {
     return buildTrialBalanceCollectionRequest(company, period);
   }
+  // Fixed Assets: no standalone "Fixed Assets Register" report exists in
+  // Tally Prime — use a custom Ledger collection filtered to ledgers
+  // under the Fixed Assets primary group.
+  if (kind === 'faregister') {
+    return buildFixedAssetsCollectionRequest(company, period);
+  }
+  // Bank Reconciliation has no Tally-side implementation — F5 is an
+  // interactive per-ledger workflow.  Throwing here lets the connector
+  // skip the network round-trip and surface a clean "manual-only"
+  // status instead of a Tally LINEERROR.
+  if (kind === 'bankrecon') {
+    throw new ReportNotAvailableError(
+      kind,
+      'Bank Reconciliation has no standalone report in Tally Prime — F5 is per-ledger. Export manually from Account Books → Cash/Bank Books → <Bank Ledger> → F5.',
+    );
+  }
+  const reportName = REPORT_IDS[kind];
+  if (!reportName) {
+    throw new ReportNotAvailableError(kind, `No Tally report mapping for "${kind}"`);
+  }
   return exportEnvelope({
-    reportName: REPORT_IDS[kind],
+    reportName,
     company,
     period,
     extraStaticVars: EXTRA_STATIC_VARS[kind],

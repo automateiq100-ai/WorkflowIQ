@@ -8,6 +8,8 @@ import { generateHealthSignals } from '@/lib/health';
 import { getDrillDown, hasDrillDown } from '@/lib/voucher-filters';
 import ScoreRing from '@/app/components/ScoreRing';
 import VoucherDrillDown from '@/app/components/VoucherDrillDown';
+import H4Breakdown from '@/app/components/H4Breakdown';
+import LedgerPairDrillDown from '@/app/components/LedgerPairDrillDown';
 import type { DimKey, Check, ParsedData, ChunkedStats, AnomalyFlag } from '@/lib/types';
 import { useEffect, useState } from 'react';
 
@@ -485,7 +487,34 @@ export default function DashboardView() {
         </div>
       )}
 
-      {drillFlag && (() => {
+      {drillFlag && drillFlag.id === 'H4' && (
+        <H4Breakdown
+          tbLedgers={parsedData.tbLedgers ?? []}
+          masterEntries={parsedData.masterEntries ?? []}
+          bsStatement={parsedData.bsheetStatement}
+          ledgerOverrides={state.ledgerOverrides}
+          dbStats={dbStatsRef}
+          onClose={() => setDrillFlag(null)}
+        />
+      )}
+      {drillFlag && (drillFlag.id === 'B2' || drillFlag.id === 'G1' || drillFlag.id === 'G2') && (() => {
+        // Ledger-pair drill-downs share one modal; pair source depends
+        // on which check is being drilled (see ChecklistView for canonical
+        // routing).
+        const pairs =
+          drillFlag.id === 'G1' ? (parsedData.partySplitPairs   ?? [])
+          : drillFlag.id === 'G2' ? (parsedData.expenseSplitPairs ?? [])
+                                  : (parsedData.dupPairDetails    ?? []);
+        if (pairs.length === 0) return null;
+        return (
+          <LedgerPairDrillDown
+            title={drillFlag.title}
+            pairs={pairs}
+            onClose={() => setDrillFlag(null)}
+          />
+        );
+      })()}
+      {drillFlag && drillFlag.id !== 'H4' && drillFlag.id !== 'B2' && drillFlag.id !== 'G1' && drillFlag.id !== 'G2' && (() => {
         const drill = getDrillDown(drillFlag.id, drillFlag.title, dbStatsRef, parsedData);
         if (!drill) return null;
         return (
@@ -514,28 +543,51 @@ export default function DashboardView() {
             </button>
           </div>
           <div className="space-y-2">
-            {topInsights.map(insight => (
-              <div
-                key={insight.id}
-                className="rounded-xl border px-4 py-3"
-                style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}
-              >
-                <div className="flex items-start gap-3">
-                  <span
-                    className="text-xs px-1.5 py-0.5 rounded font-semibold shrink-0 mt-0.5"
-                    style={{ color: URGENCY_COLORS[insight.urgency] ?? 'var(--text2)', background: `${URGENCY_COLORS[insight.urgency] ?? '#888'}18` }}
-                  >
-                    {insight.urgency.toUpperCase()}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium" style={{ color: 'var(--text1)' }}>{insight.finding}</div>
-                    <div className="text-xs mt-0.5" style={{ color: 'var(--text2)' }}>
-                      <span style={{ color: 'var(--text3)' }}>Action: </span>{insight.action}
+            {topInsights.map(insight => {
+              // If the insight points at an engine check that has a
+              // drill-down handler (per-voucher / per-ledger / H4 modal),
+              // make the whole card clickable and route it through the
+              // same setDrillFlag path the Critical Flags panel uses.
+              const drillable = !!insight.checkId
+                && hasDrillDown(insight.checkId, dbStatsRef, parsedData);
+              const handleClick = drillable && insight.checkId
+                ? () => setDrillFlag({
+                    id: insight.checkId!,
+                    severity: insight.urgency === 'high' ? 'high' : insight.urgency === 'medium' ? 'medium' : 'low',
+                    title: insight.finding,
+                    detail: insight.action,
+                  })
+                : undefined;
+              const Wrapper: 'button' | 'div' = drillable ? 'button' : 'div';
+              return (
+                <Wrapper
+                  key={insight.id}
+                  className={`w-full text-left rounded-xl border px-4 py-3 ${drillable ? 'transition-colors hover:bg-[var(--bg3)] cursor-pointer' : ''}`}
+                  style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}
+                  {...(handleClick ? { onClick: handleClick } : {})}
+                >
+                  <div className="flex items-start gap-3">
+                    <span
+                      className="text-xs px-1.5 py-0.5 rounded font-semibold shrink-0 mt-0.5"
+                      style={{ color: URGENCY_COLORS[insight.urgency] ?? 'var(--text2)', background: `${URGENCY_COLORS[insight.urgency] ?? '#888'}18` }}
+                    >
+                      {insight.urgency.toUpperCase()}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium" style={{ color: 'var(--text1)' }}>{insight.finding}</div>
+                      <div className="text-xs mt-0.5" style={{ color: 'var(--text2)' }}>
+                        <span style={{ color: 'var(--text3)' }}>Action: </span>{insight.action}
+                      </div>
+                      {drillable && (
+                        <div className="text-xs mt-1" style={{ color: 'var(--teal)' }}>
+                          View affected vouchers →
+                        </div>
+                      )}
                     </div>
                   </div>
-                </div>
-              </div>
-            ))}
+                </Wrapper>
+              );
+            })}
           </div>
         </div>
       )}

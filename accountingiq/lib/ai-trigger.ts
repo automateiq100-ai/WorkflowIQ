@@ -23,7 +23,72 @@ export function buildAIPayload(state: AppState): AIRequest | null {
   if (!results) return null;
 
   const pd = parsedData as Record<string, number | boolean | null | undefined>;
-  const monthCounts = files.daybook?.chunkedStats?.monthCounts ?? {};
+  const dbStats = files.daybook?.chunkedStats;
+  const monthCounts = dbStats?.monthCounts ?? {};
+  const totalVouchers = dbStats?.totalVouchers ?? 0;
+
+  const revenue = (pd.revenue as number) ?? 0;
+  const netProfit = (pd.netProfit as number) ?? 0;
+  const ca = (pd.ca as number) ?? 0;
+  const cl = (pd.cl as number) ?? 0;
+  const creditorBal = (pd.creditorBal as number) ?? 0;
+  const closingStock = (pd.closingStock as number) ?? 0;
+  const tbPurch = (pd.tbPurch as number) ?? 0;
+  const outputGST = (pd.outputGSTAmt as number) ?? 0;
+
+  // ── Aggregate fingerprints — let AI spot patterns the rules can't ────
+  //
+  // All numeric, all derived from already-parsed aggregates.  No PII —
+  // we never send party names or per-voucher amounts.
+  //
+  // Top-party concentration: sum |amount| across vouchers, then ratio of
+  // top-1/3/10 partyMap entries to total.  Detects vendor/customer
+  // concentration risk that wouldn't surface in dimension scores.
+  let topPartyConcentration: { top1Pct: number; top3Pct: number; top10Pct: number } | undefined;
+  if (dbStats?.vouchers && dbStats.vouchers.length > 0) {
+    const byParty = new Map<string, number>();
+    let total = 0;
+    for (const v of dbStats.vouchers) {
+      if (!v.party) continue;
+      const amt = Math.abs(v.amount);
+      total += amt;
+      byParty.set(v.party, (byParty.get(v.party) ?? 0) + amt);
+    }
+    if (total > 0 && byParty.size > 0) {
+      const sorted = [...byParty.values()].sort((a, b) => b - a);
+      const sum = (n: number) => sorted.slice(0, n).reduce((s, v) => s + v, 0);
+      topPartyConcentration = {
+        top1Pct:  sum(1)  / total,
+        top3Pct:  sum(3)  / total,
+        top10Pct: sum(10) / total,
+      };
+    }
+  }
+
+  // Voucher pattern fingerprints — all percentages of totalVouchers.
+  const voucherPatterns = dbStats && totalVouchers > 0 ? {
+    roundNumberPct:      dbStats.roundCount      / totalVouchers,
+    zeroAmountPct:       dbStats.zeroAmt         / totalVouchers,
+    missingNarrationPct: 1 - (dbStats.narrated / totalVouchers),
+    cashOver10kCount:    dbStats.cashOver10k,
+    wrongTypeCount:      dbStats.wrongType,
+    journalPct:          dbStats.totalJournals   / totalVouchers,
+  } : undefined;
+
+  // Monthly volume spike — max month / mean month.
+  const monthVals = Object.values(monthCounts);
+  const monthMean = monthVals.length > 0 ? monthVals.reduce((a, b) => a + b, 0) / monthVals.length : 0;
+  const monthMax  = monthVals.length > 0 ? Math.max(...monthVals) : 0;
+  const monthlyVolumeSpike = monthMean > 0 ? monthMax / monthMean : 0;
+
+  // Key ratios — AI reasons over these to spot outliers.
+  const ratios = {
+    currentRatio:    cl > 0      ? ca / cl                : undefined,
+    debtToEquity:    undefined,                                              // skip until we expose capital total
+    gstAsPctOfSales: revenue > 0 ? outputGST / revenue    : undefined,
+    stockTurnover:   closingStock > 0 ? tbPurch / closingStock : undefined,
+    netProfitMargin: revenue > 0 ? netProfit / revenue    : undefined,
+  };
 
   return {
     score: results.cappedScore,
@@ -40,34 +105,61 @@ export function buildAIPayload(state: AppState): AIRequest | null {
         max: c.max,
       })),
     financials: {
-      revenue:             (pd.revenue as number)      ?? 0,
-      netProfit:           (pd.netProfit as number)    ?? 0,
-      currentAssets:       (pd.ca as number)           ?? 0,
-      currentLiabilities:  (pd.cl as number)           ?? 0,
+      revenue,
+      netProfit,
+      currentAssets:       ca,
+      currentLiabilities:  cl,
       bankBalance:         (pd.bankBal as number)      ?? 0,
       debtorBalance:       (pd.debtorBal as number)    ?? 0,
-      creditorBalance:     (pd.creditorBal as number)  ?? 0,
+      creditorBalance:     creditorBal,
       suspenseBalance:     (pd.tbTotal as number)      ?? 0,
       fixedAssets:         (pd.fixedAssets as number)  ?? 0,
-      closingStock:        (pd.closingStock as number) ?? 0,
+      closingStock,
+    },
+    aggregates: {
+      topPartyConcentration,
+      voucherPatterns,
+      monthlyVolumeSpike,
+      activeMonths: monthVals.length,
+      ratios,
     },
     profile: filters as unknown as CompanyProfile,
     dataNotes: {
       filesUploaded:          Object.values(files).filter(f => f.hasContent).length,
-      dayBookVoucherCount:    files.daybook?.chunkedStats?.totalVouchers ?? 0,
+      dayBookVoucherCount:    totalVouchers,
       distinctMonthsInData:   Object.keys(monthCounts).length,
       scoreCapped:            results.scoreCapped,
     },
   };
 }
 
-/** Compute the cache hash for a given app state */
+/** Compute the cache hash for a given app state.
+ *
+ *  Includes enough signal that the cache busts when ANYTHING the AI was
+ *  fed has changed:
+ *    - currentCompany.id  → defence-in-depth across company switches
+ *    - dimScores + overall → ties to the engine output
+ *    - per-check id+status → busts when a check flips fail↔pass etc.
+ *      even if the dimension score stays the same (the previous narrow
+ *      hash kept old AI explanations alongside new check statuses).
+ *    - filesUploaded count → so adding/removing a file slot busts cache
+ *
+ *  Financials and aggregates aren't hashed because they only matter to
+ *  the AI when they change *materially* (small rounding shifts don't
+ *  warrant a re-run — the user can still Regenerate manually).
+ */
 export function computeAIHash(state: AppState): string {
   if (!state.results) return '';
+  const checkFingerprint = state.results.checks
+    .map(c => `${c.id}:${c.status}`)
+    .join('|');
+  const filesLoaded = Object.values(state.files).filter(f => f.hasContent).length;
   return hashInput(JSON.stringify({
-    dimScores: state.results.dimScores,
-    overall: state.results.overall,
-    checks: state.results.checks.length,
+    company:    state.currentCompany?.id ?? null,
+    dimScores:  state.results.dimScores,
+    overall:    state.results.overall,
+    checks:     checkFingerprint,
+    files:      filesLoaded,
   }));
 }
 

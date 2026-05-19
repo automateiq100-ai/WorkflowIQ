@@ -6,7 +6,12 @@ import { getGrade, DIM_LABELS } from '@/lib/constants';
 import { persistAIConsent } from '@/lib/session';
 import { generateInsights } from '@/lib/insights';
 import { runAIAnalysis, computeAIHash } from '@/lib/ai-trigger';
-import type { DimKey } from '@/lib/types';
+import { getDrillDown, hasDrillDown } from '@/lib/voucher-filters';
+import VoucherDrillDown from '@/app/components/VoucherDrillDown';
+import H4Breakdown from '@/app/components/H4Breakdown';
+import LedgerPairDrillDown from '@/app/components/LedgerPairDrillDown';
+import InsightBackup from '@/app/components/InsightBackup';
+import type { DimKey, AnomalyFlag, Insight } from '@/lib/types';
 
 const IMPACT_COLORS: Record<string, string> = {
   critical: 'var(--red)',
@@ -44,6 +49,14 @@ export default function AIAnalysisView() {
 
   const [tab, setTab] = useState<'insights' | 'ai'>('insights');
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [drillFlag, setDrillFlag] = useState<AnomalyFlag | null>(null);
+  const [backupInsight, setBackupInsight] = useState<Insight | null>(null);
+  const dbStats = files.daybook?.chunkedStats ?? null;
+
+  // Insight ids that get a structured backup view instead of a voucher
+  // drill-down (positive / summary insights — no per-row data to show, but
+  // there's still working that the user wants to inspect).
+  const BACKUP_INSIGHT_IDS = new Set(['pos-arith', 'pos-gst']);
 
   if (!results) {
     return (
@@ -97,7 +110,7 @@ export default function AIAnalysisView() {
       >
         {([
           { id: 'insights', label: 'Insights' },
-          { id: 'ai',       label: aiConsentGiven ? 'AI Report' : 'AI Report 🔒' },
+          { id: 'ai',       label: aiConsentGiven ? 'Insights Report' : 'Insights Report 🔒' },
         ] as const).map(t => (
           <button
             key={t.id}
@@ -132,47 +145,70 @@ export default function AIAnalysisView() {
                     {urg} — {group.length}
                   </div>
                   <div className="space-y-2">
-                    {group.map(ins => (
-                      <div
-                        key={ins.id}
-                        className="rounded-xl border p-4"
-                        style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}
-                      >
-                        <div className="flex items-start gap-3">
-                          <span
-                            className="text-[10px] px-1.5 py-0.5 rounded font-semibold shrink-0 mt-0.5"
-                            style={{ color: URGENCY_COLORS[ins.urgency], background: `${URGENCY_COLORS[ins.urgency]}18` }}
-                          >
-                            {ins.cat}
-                          </span>
-                          <div className="flex-1 min-w-0">
-                            <div className="text-sm font-medium mb-1" style={{ color: 'var(--text1)' }}>{ins.finding}</div>
-                            {ins.implication && (
-                              <div className="text-xs mb-1 leading-relaxed" style={{ color: 'var(--text3)' }}>
-                                {ins.implication}
-                              </div>
-                            )}
-                            <div className="text-xs leading-relaxed" style={{ color: 'var(--text2)' }}>
-                              <span style={{ color: 'var(--text3)' }}>Action: </span>{ins.action}
-                            </div>
-                          </div>
-                          {ins.copyText && (
-                            <button
-                              onClick={() => {
-                                navigator.clipboard.writeText(ins.copyText!).catch(() => {});
-                                setCopiedId(ins.id);
-                                setTimeout(() => setCopiedId(null), 1500);
-                              }}
-                              className="shrink-0 text-[10px] px-2 py-1 rounded transition-colors"
-                              style={{ background: 'var(--bg4)', color: copiedId === ins.id ? 'var(--teal)' : 'var(--text3)' }}
-                              title="Copy finding"
+                    {group.map(ins => {
+                      const hasBackup = BACKUP_INSIGHT_IDS.has(ins.id);
+                      const drillable = hasBackup
+                        || (!!ins.checkId && hasDrillDown(ins.checkId, dbStats, parsedData));
+                      const handleDrill = hasBackup
+                        ? () => setBackupInsight(ins)
+                        : (drillable && ins.checkId ? () => setDrillFlag({
+                            id: ins.checkId!,
+                            severity: ins.urgency === 'positive' ? 'low' : ins.urgency,
+                            title: ins.finding,
+                            detail: ins.action,
+                          }) : undefined);
+                      const drillLabel = hasBackup ? 'View backup →' : 'View affected vouchers →';
+                      return (
+                        <div
+                          key={ins.id}
+                          className="rounded-xl border p-4"
+                          style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}
+                        >
+                          <div className="flex items-start gap-3">
+                            <span
+                              className="text-[10px] px-1.5 py-0.5 rounded font-semibold shrink-0 mt-0.5"
+                              style={{ color: URGENCY_COLORS[ins.urgency], background: `${URGENCY_COLORS[ins.urgency]}18` }}
                             >
-                              {copiedId === ins.id ? '✓' : '⎘'}
-                            </button>
-                          )}
+                              {ins.cat}
+                            </span>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm font-medium mb-1" style={{ color: 'var(--text1)' }}>{ins.finding}</div>
+                              {ins.implication && (
+                                <div className="text-xs mb-1 leading-relaxed" style={{ color: 'var(--text3)' }}>
+                                  {ins.implication}
+                                </div>
+                              )}
+                              <div className="text-xs leading-relaxed" style={{ color: 'var(--text2)' }}>
+                                <span style={{ color: 'var(--text3)' }}>Action: </span>{ins.action}
+                              </div>
+                              {handleDrill && (
+                                <button
+                                  onClick={handleDrill}
+                                  className="text-xs mt-1.5 transition-opacity hover:opacity-80"
+                                  style={{ color: 'var(--teal)' }}
+                                >
+                                  {drillLabel}
+                                </button>
+                              )}
+                            </div>
+                            {ins.copyText && (
+                              <button
+                                onClick={() => {
+                                  navigator.clipboard.writeText(ins.copyText!).catch(() => {});
+                                  setCopiedId(ins.id);
+                                  setTimeout(() => setCopiedId(null), 1500);
+                                }}
+                                className="shrink-0 text-[10px] px-2 py-1 rounded transition-colors"
+                                style={{ background: 'var(--bg4)', color: copiedId === ins.id ? 'var(--teal)' : 'var(--text3)' }}
+                                title="Copy finding"
+                              >
+                                {copiedId === ins.id ? '✓' : '⎘'}
+                              </button>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               );
@@ -220,7 +256,7 @@ export default function AIAnalysisView() {
             {!hasCachedAnalysis && !aiAnalysisLoading && !aiAnalysisError && (
               <div className="rounded-xl border p-8 text-center" style={{ background: 'var(--bg2)', borderColor: 'var(--border)' }}>
                 <div className="text-3xl mb-3">⚡</div>
-                <p className="text-sm mb-2" style={{ color: 'var(--text1)' }}>AI analysis will start automatically</p>
+                <p className="text-sm mb-2" style={{ color: 'var(--text1)' }}>Analysis will start automatically</p>
                 <p className="text-xs mb-4" style={{ color: 'var(--text3)' }}>
                   Processed on India-resident server. No raw XML, no voucher details, no party names.
                 </p>
@@ -425,7 +461,7 @@ export default function AIAnalysisView() {
 
                 {/* Disclaimer */}
                 <p className="text-[10px] text-center leading-relaxed" style={{ color: 'var(--text3)' }}>
-                  AI-generated analysis based on scoring output only. No raw XML or voucher data was sent.
+                  Auto-generated analysis based on scoring output only. No raw XML or voucher data was sent.
                   Verify findings against source data before acting. Not a substitute for professional accounting advice.
                 </p>
               </div>
@@ -433,6 +469,55 @@ export default function AIAnalysisView() {
           </div>
         )
       )}
+
+      {/* Backup modal — structured working for positive/summary insights
+          that don't have a voucher list to drill into (pos-arith, pos-gst,
+          and the synthetic pos-recon backups built by ChecklistView when
+          a check has an entry in BACKUP_CHECK_TO_INSIGHT).  Passing
+          dbStats so the recon backup branch has the DayBook aggregates
+          it needs — currently this branch isn't reachable from this view
+          (BACKUP_INSIGHT_IDS excludes pos-recon) but the prop is required
+          if anyone widens the set in future. */}
+      {backupInsight && (
+        <InsightBackup
+          insight={backupInsight}
+          parsedData={parsedData}
+          dbStats={dbStats}
+          onClose={() => setBackupInsight(null)}
+        />
+      )}
+
+      {/* Drill-down modal — H4 gets the custom breakdown panel, everything
+          else routes through the standard VoucherDrillDown. */}
+      {drillFlag && drillFlag.id === 'H4' && (
+        <H4Breakdown
+          tbLedgers={parsedData.tbLedgers ?? []}
+          masterEntries={parsedData.masterEntries ?? []}
+          bsStatement={parsedData.bsheetStatement}
+          ledgerOverrides={state.ledgerOverrides}
+          dbStats={dbStats}
+          onClose={() => setDrillFlag(null)}
+        />
+      )}
+      {drillFlag && drillFlag.id === 'B2' && (
+        <LedgerPairDrillDown
+          title="Near-duplicate ledger pairs"
+          pairs={parsedData.dupPairDetails ?? []}
+          onClose={() => setDrillFlag(null)}
+        />
+      )}
+      {drillFlag && drillFlag.id !== 'H4' && drillFlag.id !== 'B2' && (() => {
+        const drill = getDrillDown(drillFlag.id, drillFlag.title, dbStats, parsedData);
+        if (!drill) return null;
+        return (
+          <VoucherDrillDown
+            title={drill.title}
+            vouchers={drill.vouchers}
+            extraColumns={drill.extraColumns}
+            onClose={() => setDrillFlag(null)}
+          />
+        );
+      })()}
     </div>
   );
 }
@@ -452,10 +537,10 @@ function AIConsentGate() {
       <div className="max-w-md w-full text-center">
         <div className="text-4xl mb-4">🔒</div>
         <h2 className="text-lg font-semibold mb-2" style={{ color: 'var(--text1)' }}>
-          AI Analysis requires consent
+          Insights Report requires consent
         </h2>
         <p className="text-sm mb-4 leading-relaxed" style={{ color: 'var(--text2)' }}>
-          AI Analysis sends aggregated scoring results (no raw XML, no voucher details, no party names)
+          The report sends aggregated scoring results (no raw XML, no voucher details, no party names)
           to an India-resident server for narrative generation. No data leaves India.
         </p>
         <button
@@ -463,7 +548,7 @@ function AIConsentGate() {
           className="px-6 py-2.5 rounded-lg text-sm font-semibold transition-opacity hover:opacity-80"
           style={{ background: 'var(--purple)', color: '#fff' }}
         >
-          I consent — enable AI Analysis
+          I consent — enable Insights Report
         </button>
       </div>
     </div>

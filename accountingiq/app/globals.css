@@ -77,9 +77,15 @@ html.light {
   --color-green: var(--green);
   --color-purple: var(--purple);
   --color-coral: var(--coral);
-  --font-sans: var(--font-outfit);
-  --font-serif: var(--font-dm-serif);
-  --font-mono: var(--font-dm-mono);
+  --font-sans: var(--font-inter);
+  --font-serif: var(--font-inter);
+  --font-mono: var(--font-jetbrains);
+  /* Legacy aliases — keep so existing inline styles using --font-dm-serif /
+     --font-outfit / --font-dm-mono continue to render with Inter / JetBrains
+     until each call site is migrated. */
+  --font-dm-serif: var(--font-inter);
+  --font-outfit:   var(--font-inter);
+  --font-dm-mono:  var(--font-jetbrains);
 }
 
 * { box-sizing: border-box; }
@@ -89,7 +95,16 @@ html, body {
   background: var(--bg);
   color: var(--text1);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'cv11', 'ss01';  /* Inter stylistic alternates */
+  font-variant-numeric: tabular-nums;     /* uniform digit widths everywhere */
+  text-rendering: optimizeLegibility;
 }
+
+/* Inter benefits from negative tracking at larger sizes. */
+h1, .text-2xl, .text-3xl, .text-4xl { letter-spacing: -0.025em; }
+h2, h3, .text-xl, .text-lg          { letter-spacing: -0.015em; }
+.tabular-nums                       { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; }
 
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: var(--bg2); }

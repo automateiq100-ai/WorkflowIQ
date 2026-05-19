@@ -13,14 +13,26 @@ import type { ReportKind, ReportPeriod } from '@/lib/connectors/types';
 
 // All known reports — required + conditional + optional. Sync attempts each one
 // and returns per-kind ok/error so a missing optional report doesn't fail the run.
+//
+// Excluded by design:
+//   • `bankrecon` — Tally Prime has no standalone Bank Reconciliation report
+//     (F5 is an interactive per-ledger workflow).  Asking for it always
+//     fails, and the engine doesn't consume this file slot anyway.  Users
+//     who want BRS data can upload it manually via the per-row ⓘ in
+//     UploadView, which surfaces the F5 export path.
 const DEFAULT_KINDS: ReportKind[] = [
   'master', 'trialbal', 'pandl', 'bsheet', 'grpsum', 'daybook',
   'sales', 'purchase', 'bills', 'payables', 'cashflow',
-  'faregister', 'stock', 'bankrecon',
+  'faregister', 'stock',
 ];
 
+/** Every ReportKind we know about — used by isReportKind for type-narrowing
+ *  the request body.  Includes `bankrecon` so a caller can still explicitly
+ *  request it (e.g. /api/tally/sync/debug), but the default pull skips it. */
+const ALL_KNOWN_KINDS: ReportKind[] = [...DEFAULT_KINDS, 'bankrecon'];
+
 function isReportKind(s: string): s is ReportKind {
-  return DEFAULT_KINDS.includes(s as ReportKind);
+  return ALL_KNOWN_KINDS.includes(s as ReportKind);
 }
 
 // ── Last-XML-per-kind ring (diagnostic) ───────────────────────────────────

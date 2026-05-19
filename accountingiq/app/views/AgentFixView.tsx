@@ -295,10 +295,10 @@ export default function AgentFixView({ embedded }: { embedded?: boolean }) {
     return (
       <div className={embedded ? 'py-8 text-center' : 'flex flex-col items-center justify-center h-full gap-4 py-24'}>
         <div style={{ fontSize: 40, opacity: 0.3 }}>🔒</div>
-        <div className="text-sm font-medium" style={{ color: 'var(--text1)' }}>AI consent required</div>
+        <div className="text-sm font-medium" style={{ color: 'var(--text1)' }}>Smart insights consent required</div>
         <div className="text-xs text-center max-w-sm" style={{ color: 'var(--text3)' }}>
           Fix Planner sends anonymised check findings (no party names, no amounts) to Gemma 4 running on an India-resident server.
-          Enable AI Analysis consent in the consent modal to continue.
+          Enable consent in the consent modal to continue.
         </div>
       </div>
     );
@@ -315,7 +315,7 @@ export default function AgentFixView({ embedded }: { embedded?: boolean }) {
           <div>
             <h1 className="text-lg font-semibold" style={{ color: 'var(--text1)' }}>Fix Planner</h1>
             <p className="text-xs mt-0.5" style={{ color: 'var(--text3)' }}>
-              AI-generated step-by-step Tally fixes ordered by score impact
+              Smart step-by-step Tally fixes ordered by score impact
             </p>
           </div>
           {/* Score + progress */}
@@ -357,7 +357,7 @@ export default function AgentFixView({ embedded }: { embedded?: boolean }) {
               Generate a prioritised list of Tally fixes based on your analysis results.
             </div>
             <div className="text-xs text-center max-w-md" style={{ color: 'var(--text3)' }}>
-              The AI will analyse {results.checks.filter(c => c.status === 'fail' || c.status === 'partial').length} failing checks
+              We&apos;ll analyse {results.checks.filter(c => c.status === 'fail' || c.status === 'partial').length} failing checks
               and produce concrete Tally Prime steps to fix each issue, ordered by score impact.
             </div>
             <button

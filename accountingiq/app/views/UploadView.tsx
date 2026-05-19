@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useApp } from '@/lib/state';
-import { FILE_LABELS, FILE_DESCRIPTIONS, FILE_TIERS } from '@/lib/constants';
+import { FILE_LABELS, FILE_DESCRIPTIONS, FILE_TIERS, FILE_EXPORT_PATHS, FILE_EXPORT_ACTION } from '@/lib/constants';
 import { analyseFiles } from '@/lib/engine';
 import { parseDAYBOOK_chunked } from '@/lib/chunkedParser';
 import type { FileKey, ParsedData } from '@/lib/types';
@@ -480,14 +480,29 @@ function UploadScreen({
       const data = await r.json();
       if (!r.ok) throw new Error(data.error ?? 'Sync failed');
       const results = data.results as Record<string, { ok: boolean; xml?: string; error?: string }>;
-      const failed: string[] = [];
+      const realFailures: string[] = [];
+      const manualOnly: string[] = [];
+      // Sentinel from connectors/tally/tdl.ts: errors prefixed with
+      // "MANUAL_ONLY: " are reports that intentionally aren't fetched
+      // (no standalone Tally TDL implementation — e.g. Bank Reconciliation
+      // requires per-ledger F5).  Show them as a separate "manual-only"
+      // category so users don't read them as broken integration.
+      const MANUAL_ONLY_PREFIX = 'MANUAL_ONLY: ';
       for (const [kind, res] of Object.entries(results)) {
         const fileKey = TALLY_KIND_TO_FILE[kind as ReportKind];
         if (!fileKey) continue;
         // Diagnostic: per-kind size in browser DevTools console — helps a user
         // copy-paste evidence into a bug report without us asking for raw XML.
         console.log('[tally-sync]', kind, res.ok ? 'ok' : 'fail', 'len=' + (res.xml?.length ?? 0), res.error ?? '');
-        if (!res.ok || !res.xml) { failed.push(`${kind}: ${res.error ?? 'unknown'}`); continue; }
+        if (!res.ok || !res.xml) {
+          const err = res.error ?? 'unknown';
+          if (err.startsWith(MANUAL_ONLY_PREFIX)) {
+            manualOnly.push(`${FILE_LABELS[fileKey]} — ${err.slice(MANUAL_ONLY_PREFIX.length)}`);
+          } else {
+            realFailures.push(`${kind}: ${err}`);
+          }
+          continue;
+        }
         dispatch({
           type: 'FILE_LOADED',
           key: fileKey,
@@ -502,7 +517,10 @@ function UploadScreen({
           },
         });
       }
-      if (failed.length > 0) setTallyPullError(`Some reports failed: ${failed.join('; ')}`);
+      const parts: string[] = [];
+      if (realFailures.length > 0) parts.push(`Failed: ${realFailures.join('; ')}`);
+      if (manualOnly.length > 0)   parts.push(`Manual-only (export from Tally yourself): ${manualOnly.join('; ')}`);
+      if (parts.length > 0) setTallyPullError(parts.join(' | '));
     } catch (e) {
       setTallyPullError((e as Error).message);
     } finally {
@@ -540,24 +558,37 @@ function UploadScreen({
       currentRatio: (pd.ca && pd.cl) ? +(pd.ca / pd.cl).toFixed(2) : null,
     };
 
-    // Save to DB in the background — don't block UI
+    // Save to DB — used to be fire-and-forget but the post-analysis
+    // navigation to the dashboard frequently ran the history fetch
+    // BEFORE this POST landed (~250-650ms), leaving "Last Analysis"
+    // empty until manual refresh.  Awaiting (but not blocking analysis
+    // dispatch above) ensures the canonical server-side record exists
+    // before any view that reads from /api/analysis/history mounts.
+    // Errors are still swallowed — a failed save shouldn't prevent the
+    // user from seeing their fresh local analysis.
     const periodDB = getPeriodForDB();
-    fetch('/api/analysis/save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        overall_score: results.overall,
-        capped_score: results.cappedScore,
-        score_capped: results.scoreCapped,
-        dim_scores: results.dimScores,
-        checks: results.checks,
-        company_id: state.currentCompany?.id ?? null,
-        period_type:  periodDB.period_type,
-        period_start: periodDB.period_start,
-        period_end:   periodDB.period_end,
-        financial_summary: financialSummary,
-      }),
-    }).catch(() => {});
+    try {
+      await fetch('/api/analysis/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          overall_score: results.overall,
+          capped_score: results.cappedScore,
+          score_capped: results.scoreCapped,
+          dim_scores: results.dimScores,
+          checks: results.checks,
+          company_id: state.currentCompany?.id ?? null,
+          period_type:  periodDB.period_type,
+          period_start: periodDB.period_start,
+          period_end:   periodDB.period_end,
+          financial_summary: financialSummary,
+        }),
+      });
+    } catch {
+      // Save failed — UI fallback in CompanyDashboardView synthesizes a
+      // local AnalysisRun from state.results so the user still sees this
+      // session's numbers.  Next successful save will write it through.
+    }
   }
 
 
@@ -1047,6 +1078,12 @@ function FileRow({
         )}
       </div>
 
+      {/* How-to-export popover — surfaces the manual Tally export path
+          per file slot.  Clickable so the panel stays open while the user
+          reads the multi-line instructions (a pure hover popover would
+          dismiss every time they moved the cursor down). */}
+      <ExportPathInfo fileKey={fileKey} />
+
       {/* Actions */}
       {expired && (
         <button
@@ -1084,6 +1121,79 @@ function FileRow({
   );
 }
 
+// ── Per-row "How to export from Tally" popover ────────────────────────────
+//
+// Small ⓘ trigger that, when clicked, opens a panel below the row with
+// the Tally export path, hotkey, and any report-specific tip.  Sourced
+// from FILE_EXPORT_PATHS so every file slot stays in sync with the
+// email modal and any other surface that surfaces the same data.
+function ExportPathInfo({ fileKey }: { fileKey: FileKey }) {
+  const [open, setOpen] = useState(false);
+  const entry = FILE_EXPORT_PATHS[fileKey];
+  // Close when clicking outside.  Tracked via a ref + global click
+  // listener so the popover doesn't trap focus or block other rows from
+  // opening their own info panels.
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener('mousedown', onClick);
+    return () => window.removeEventListener('mousedown', onClick);
+  }, [open]);
+
+  return (
+    <div ref={wrapRef} className="relative shrink-0">
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen(v => !v); }}
+        className="text-xs w-6 h-6 rounded flex items-center justify-center transition-colors"
+        style={{
+          color: open ? 'var(--teal)' : 'var(--text3)',
+          background: open ? 'rgba(15,212,160,0.12)' : 'transparent',
+        }}
+        title="How to export from Tally"
+        aria-label="How to export from Tally"
+      >
+        ⓘ
+      </button>
+      {open && (
+        <div
+          className="absolute right-0 top-7 z-20 w-80 rounded-lg border shadow-lg p-3 text-xs leading-relaxed"
+          style={{ background: 'var(--bg3)', borderColor: 'var(--border)', color: 'var(--text2)' }}
+          onClick={e => e.stopPropagation()}
+        >
+          <div className="font-semibold mb-2" style={{ color: 'var(--text1)' }}>
+            Export {FILE_LABELS[fileKey]} from Tally Prime
+          </div>
+          <div className="space-y-2">
+            <div>
+              <div className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: 'var(--text3)' }}>Path</div>
+              <div style={{ color: 'var(--text1)' }}>{entry.path}</div>
+            </div>
+            {entry.hotkey && (
+              <div>
+                <div className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: 'var(--text3)' }}>Shortcut</div>
+                <div className="font-mono" style={{ color: 'var(--text1)' }}>{entry.hotkey}</div>
+              </div>
+            )}
+            <div>
+              <div className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: 'var(--text3)' }}>Then</div>
+              <div style={{ color: 'var(--text1)' }}>{FILE_EXPORT_ACTION}</div>
+            </div>
+            {entry.tip && (
+              <div className="pt-1 mt-1 border-t" style={{ borderColor: 'var(--border)' }}>
+                <div className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: 'var(--amber)' }}>Tip</div>
+                <div style={{ color: 'var(--text2)' }}>{entry.tip}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Request from Client modal ─────────────────────────────────────────────
 
 function RequestClientModal({
@@ -1099,24 +1209,16 @@ function RequestClientModal({
   const missingOptional    = FILE_TIERS.optional.filter(k => !files[k].hasContent);
   const [copied, setCopied] = useState(false);
 
-  const TALLY_PATHS: Partial<Record<FileKey, string>> = {
-    sales:      'Display More Reports → Sales Register',
-    purchase:   'Display More Reports → Purchase Register',
-    bills:      'Display More Reports → Statements of Accounts → Bills Receivable',
-    payables:   'Display More Reports → Statements of Accounts → Bills Payable',
-    cashflow:   'Display More Reports → Cash Flow',
-    faregister: 'Display More Reports → Fixed Assets → Fixed Assets Register',
-    stock:      'Display More Reports → Inventory Books → Stock Summary',
-    bankrecon:  'Display More Reports → Banking → Bank Reconciliation',
-  };
+  // Paths sourced from the shared FILE_EXPORT_PATHS constant so the email
+  // template stays in sync with the per-row ⓘ popover (and any other
+  // surface that lists export instructions).
+  const formatPath = (k: FileKey) =>
+    `  - ${FILE_LABELS[k]} — ${FILE_DESCRIPTIONS[k]}\n    Tally: ${FILE_EXPORT_PATHS[k].path} → ${FILE_EXPORT_ACTION}`
+    + (FILE_EXPORT_PATHS[k].tip ? `\n    Tip: ${FILE_EXPORT_PATHS[k].tip}` : '');
 
-  const conditionalLines = missingConditional
-    .map(k => `  - ${FILE_LABELS[k]} — ${FILE_DESCRIPTIONS[k]}\n    Tally: Gateway of Tally → ${TALLY_PATHS[k] ?? 'Display More Reports'} → Export → XML`)
-    .join('\n\n');
+  const conditionalLines = missingConditional.map(formatPath).join('\n\n');
   const optionalLines = missingOptional.length > 0
-    ? `\nOptional (if applicable):\n${missingOptional
-        .map(k => `  - ${FILE_LABELS[k]} — ${FILE_DESCRIPTIONS[k]}\n    Tally: Gateway of Tally → ${TALLY_PATHS[k] ?? 'Display More Reports'} → Export → XML`)
-        .join('\n\n')}`
+    ? `\nOptional (if applicable):\n${missingOptional.map(formatPath).join('\n\n')}`
     : '';
 
   const template = `Subject: Request for additional accounting data — ${companyName}

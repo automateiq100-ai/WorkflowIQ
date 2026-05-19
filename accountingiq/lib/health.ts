@@ -91,15 +91,17 @@ export function generateHealthSignals(
     });
   }
 
-  // ── Balances (Bug 1: preserve signs, flag anomalies) ──────────────────
+  // ── Balances ──────────────────
+  // bankBal comes from the BS parser as an unsigned magnitude — Tally's BS
+  // XML stores asset Dr-balances as negative, which we abs() upstream.  A
+  // genuine overdraft surfaces as a separate "Bank OD A/c" ledger on the
+  // liabilities side, classified via bank-od, not as a negative bankBal.
   if (bankBal !== 0) {
     signals.push({
       category: 'Balances',
       signal: 'Cash & Bank Balance',
       value: fmtINR(bankBal),
-      note: bankBal < 0
-        ? 'ANOMALY: Bank balance negative — possible overdraft or data error'
-        : 'Closing balance per Balance Sheet',
+      note: 'Closing balance per Balance Sheet',
     });
   }
 

@@ -39,93 +39,24 @@ export function generateFlags(
     }
   }
 
-  // Data-driven flags from dbStats
-  if (dbStats) {
-    // Note: duplicate-voucher-number reporting is handled by the C2 engine
-    // check (engine.ts), which surfaces both the count of distinct
-    // duplicated (type+vno) pairs and the total occurrences in one
-    // message — no separate flag-dup-vno needed.
+  // Data-driven dbStats findings (zero amount, missing party / vno,
+  // out-of-FY, cash > ₹10,000, wrong type, duplicate vouchers) are all
+  // surfaced by their corresponding engine checks in engine.ts:
+  //   C1 → missing voucher number   C4 → out-of-FY date
+  //   C2 → duplicate voucher number C5 → wrong voucher type
+  //   C3 → missing party name       C6 → zero / missing amount
+  //   G3 → cash > ₹10,000 (269ST)
+  // Re-emitting them as `flag-*` data flags here just produced duplicate
+  // entries in the Critical Flags panel with the same content under a
+  // non-standard ID, so they're all gone.  voucher-filters.ts keeps the
+  // `flag-*` handlers for backward compatibility with any persisted state.
 
-    if (dbStats.zeroAmt > 0) {
-      flags.push({
-        id: 'flag-zero-amt',
-        severity: 'medium',
-        title: 'Zero-Amount Vouchers',
-        detail: `${dbStats.zeroAmt} voucher(s) have zero or missing amounts.`,
-        count: dbStats.zeroAmt,
-      });
-    }
-
-    if (dbStats.missingParty > 0) {
-      flags.push({
-        id: 'flag-missing-party',
-        severity: 'medium',
-        title: 'Missing Party Names',
-        detail: `${dbStats.missingParty} sales/purchase voucher(s) missing party (customer/vendor) names.`,
-        count: dbStats.missingParty,
-      });
-    }
-
-    if (dbStats.outOfFY > 0) {
-      const months = Object.keys(dbStats.monthCounts ?? {}).sort();
-      const rangeNote = months.length >= 2
-        ? ` (data range: ${months[0]} to ${months[months.length - 1]})`
-        : '';
-      flags.push({
-        id: 'flag-out-of-fy',
-        severity: 'medium',
-        title: 'Vouchers Outside Financial Year',
-        detail: `${dbStats.outOfFY} voucher(s) have dates outside the detected financial year${rangeNote}.`,
-        count: dbStats.outOfFY,
-      });
-    }
-
-    if (dbStats.cashOver10k > 0) {
-      flags.push({
-        id: 'flag-cash-limit',
-        severity: 'high',
-        title: 'Cash Transactions Exceeding ₹10,000',
-        detail: `${dbStats.cashOver10k} cash transaction(s) exceed ₹10,000. Section 269ST compliance review required.`,
-        count: dbStats.cashOver10k,
-      });
-    }
-
-    if (dbStats.missingVno > 0) {
-      flags.push({
-        id: 'flag-missing-vno',
-        severity: 'medium',
-        title: 'Missing Voucher Numbers',
-        detail: `${dbStats.missingVno} voucher(s) have no voucher number assigned.`,
-        count: dbStats.missingVno,
-      });
-    }
-
-    if (dbStats.wrongType > 0) {
-      flags.push({
-        id: 'flag-wrong-type',
-        severity: 'low',
-        title: 'Unrecognised Voucher Types',
-        detail: `${dbStats.wrongType} voucher(s) have unrecognised or non-standard types.`,
-        count: dbStats.wrongType,
-      });
-    }
-  }
-
-  // Structural flags from parsedData
-  if (parsedData.suspenseCount && parsedData.suspenseCount > 0) {
-    const suspenseList = (parsedData.suspenseLedgers ?? [])
-      .map(s => `'${s.name}' (₹${Math.abs(s.amount).toLocaleString('en-IN', { maximumFractionDigits: 0 })})`)
-      .join(', ');
-    flags.push({
-      id: 'flag-suspense',
-      severity: 'critical',
-      title: 'Suspense Accounts with Non-Zero Balances',
-      detail: suspenseList
-        ? `${parsedData.suspenseCount} suspense/misc ledger(s) with non-zero balances: ${suspenseList}.`
-        : `${parsedData.suspenseCount} suspense / temporary account(s) have non-zero closing balances.`,
-      count: parsedData.suspenseCount,
-    });
-  }
+  // Structural flags from parsedData.
+  // (Suspense / Miscellaneous ledger detection lives in the B1 engine check
+  // — see engine.ts.  Surfacing it again here as `flag-suspense` produced
+  // a duplicate "Critical" entry with identical content, so it's gone.
+  // voucher-filters.ts keeps the 'flag-suspense' drill-down handler for
+  // backward compatibility with any persisted state.)
 
   if (parsedData.salesWrongGroup) {
     flags.push({

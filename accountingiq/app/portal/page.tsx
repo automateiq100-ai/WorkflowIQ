@@ -4,6 +4,14 @@ import { redirect } from 'next/navigation';
 import PortalShell from '../components/PortalShell';
 
 export default async function PortalPage() {
+  // Local dev bypass — skip auth + profile lookup, jump straight into
+  // AccountingIQ.  Mirrors the same flag in app/accountingiq/page.tsx so
+  // the entry redirect chain `/ → /portal → /accountingiq` works without
+  // Google OAuth.  Do NOT set DEV_BYPASS_AUTH in production.
+  if (process.env.DEV_BYPASS_AUTH === 'true') {
+    redirect('/accountingiq');
+  }
+
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 

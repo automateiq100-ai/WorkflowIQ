@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import React, { useState, useMemo } from 'react';
 import { useApp } from '@/lib/state';
@@ -9,206 +9,8 @@ import { splitDupKey } from '@/lib/voucher-filters';
 import { classifyVoucherType } from '@/lib/tally-voucher-types';
 import VoucherDrillDown from '@/app/components/VoucherDrillDown';
 import AgentFixView from '@/app/views/AgentFixView';
+import { parseBills, type Bill } from '@/lib/bills-parser';
 
-// ── Bill parser ────────────────────────────────────────────────────────────
-
-interface Bill {
-  party: string;
-  billRef: string;
-  amount: number;
-  dueDate: string;
-  overdue: boolean;
-  type: 'receivable' | 'payable';
-}
-
-/** Parse a bill date string like '1-Apr-2025' or '20250401' into a Date, or null. */
-function parseBillDate(s: string): Date | null {
-  if (!s) return null;
-  // Handle 'D-Mon-YYYY' or 'DD-Mon-YYYY'
-  const m1 = s.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/);
-  if (m1) {
-    const months: Record<string, number> = { Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11 };
-    const mo = months[m1[2]];
-    if (mo === undefined) return null;
-    return new Date(parseInt(m1[3]), mo, parseInt(m1[1]));
-  }
-  // Handle 'YYYYMMDD'
-  if (/^\d{8}$/.test(s)) {
-    return new Date(parseInt(s.slice(0,4)), parseInt(s.slice(4,6))-1, parseInt(s.slice(6,8)));
-  }
-  return null;
-}
-
-/** Extract text content from the first matching tag (case-insensitive). */
-function tagVal(inner: string, ...tags: string[]): string {
-  for (const tag of tags) {
-    const m = inner.match(new RegExp(`<${tag}[^>]*>\\s*([\\s\\S]*?)\\s*<\\/${tag}>`, 'i'));
-    if (m) return m[1].trim();
-  }
-  return '';
-}
-
-function parseBills(xml: string, type: 'receivable' | 'payable'): Bill[] {
-  const today = new Date();
-  today.setHours(0,0,0,0);
-  const bills: Bill[] = [];
-
-  /** Push a bill if it has at least a party name or bill reference. */
-  function pushBill(party: string, ref: string, amtRaw: string, dueStr: string, overdueRaw: string) {
-    const amount = parseFloat(amtRaw.replace(/,/g, '')) || 0;
-    if (!party && !ref && amount === 0) return;
-    const dueDt = parseBillDate(dueStr);
-    // <BILLOVERDUE> may be a Y/N flag, "1"/"0", or — in the Tally TDL Bills
-    // Receivable/Payable export — a count of days past due (e.g. "365").
-    // Any positive numeric value means the bill is overdue.
-    const overdueRawTrim = overdueRaw.trim();
-    const overdueDays = parseFloat(overdueRawTrim);
-    const overdue =
-      overdueRawTrim.toLowerCase() === 'yes' ||
-      overdueRawTrim === '1' ||
-      (Number.isFinite(overdueDays) && overdueDays > 0) ||
-      (dueDt ? dueDt < today : false);
-    bills.push({ party, billRef: ref, amount: Math.abs(amount), dueDate: dueStr, overdue, type });
-  }
-
-  // ── Format 1: DSPBILLDETAILS block (most common Tally display-report) ──
-  const fmt1Re = /<DSPBILLDETAILS[^>]*>([\s\S]*?)<\/DSPBILLDETAILS>/gi;
-  let m: RegExpExecArray | null;
-  while ((m = fmt1Re.exec(xml)) !== null) {
-    const i = m[1];
-    pushBill(
-      tagVal(i, 'DSPBILLPARTY', 'DSPPARTYNAME', 'DSPBILLLEDGERNAME'),
-      tagVal(i, 'DSPBILLREF', 'DSPBILLNAME', 'DSPBILLREFNAME'),
-      tagVal(i,
-        // Display-report format (Tally wraps amounts in <FOO><FOOA>…</FOOA></FOO>;
-        // tagVal matches both inner-A and outer tags so we list both variants).
-        'DSPBILLFINALAMTA', 'DSPBILLFINALAMT', 'DSPBILLFINAL',
-        'DSPBILLPENDAMTA',  'DSPBILLPENDAMT',
-        'DSPBILLAMTA',      'DSPBILLAMT',
-        'DSPBILLOSAMTA',    'DSPBILLOSAMT',
-        'DSPCLAMTA',        'DSPCLAMT',
-        'DSPCLDRAMTA',      'DSPCLCRAMTA',
-        'DSPCURRENTBAL',
-      ),
-      tagVal(i,
-        'DSPBILLDUEDATE', 'DSPBILLDUE',
-        'DSPBILLDATEA',   'DSPBILLDATE',
-      ),
-      tagVal(i,
-        'DSPBILLOVERDUEA', 'DSPBILLOVERDUE',
-        'DSPBILLOVRDUE',   'DSPBILLOVRDUEA',
-      ),
-    );
-  }
-
-  // ── Format 2: DSPBILLEDDETAILS block (alternate Tally version) ──
-  if (bills.length === 0) {
-    const fmt2Re = /<DSPBILLEDDETAILS[^>]*>([\s\S]*?)<\/DSPBILLEDDETAILS>/gi;
-    while ((m = fmt2Re.exec(xml)) !== null) {
-      const i = m[1];
-      pushBill(
-        tagVal(i, 'DSPBILLPARTY', 'DSPPARTYNAME', 'DSPBILLLEDGERNAME'),
-        tagVal(i, 'DSPBILLREF', 'DSPBILLNAME', 'DSPBILLREFNAME'),
-        tagVal(i,
-          // Display-report format (Tally wraps amounts in <FOO><FOOA>…</FOOA></FOO>;
-          // tagVal matches both inner-A and outer tags so we list both variants).
-          'DSPBILLFINALAMTA', 'DSPBILLFINALAMT', 'DSPBILLFINAL',
-          'DSPBILLPENDAMTA',  'DSPBILLPENDAMT',
-          'DSPBILLAMTA',      'DSPBILLAMT',
-          'DSPBILLOSAMTA',    'DSPBILLOSAMT',
-          'DSPCLAMTA',        'DSPCLAMT',
-          'DSPCLDRAMTA',      'DSPCLCRAMTA',
-          'DSPCURRENTBAL',
-        ),
-        tagVal(i,
-          'DSPBILLDUEDATE', 'DSPBILLDUE',
-          'DSPBILLDATEA',   'DSPBILLDATE',
-        ),
-        tagVal(i,
-          'DSPBILLOVERDUEA', 'DSPBILLOVERDUE',
-          'DSPBILLOVRDUE',   'DSPBILLOVRDUEA',
-        ),
-      );
-    }
-  }
-
-  // ── Format 3: DSPBILLDETS / DSPBILLSDETAILS block ──
-  if (bills.length === 0) {
-    const fmt3Re = /<DSPBILLS?DETAILS?[^>]*>([\s\S]*?)<\/DSPBILLS?DETAILS?>/gi;
-    while ((m = fmt3Re.exec(xml)) !== null) {
-      const i = m[1];
-      pushBill(
-        tagVal(i, 'DSPBILLPARTY', 'DSPPARTYNAME', 'DSPBILLLEDGERNAME'),
-        tagVal(i, 'DSPBILLREF', 'DSPBILLNAME', 'DSPBILLREFNAME'),
-        tagVal(i,
-          // Display-report format (Tally wraps amounts in <FOO><FOOA>…</FOOA></FOO>;
-          // tagVal matches both inner-A and outer tags so we list both variants).
-          'DSPBILLFINALAMTA', 'DSPBILLFINALAMT', 'DSPBILLFINAL',
-          'DSPBILLPENDAMTA',  'DSPBILLPENDAMT',
-          'DSPBILLAMTA',      'DSPBILLAMT',
-          'DSPBILLOSAMTA',    'DSPBILLOSAMT',
-          'DSPCLAMTA',        'DSPCLAMT',
-          'DSPCLDRAMTA',      'DSPCLCRAMTA',
-          'DSPCURRENTBAL',
-        ),
-        tagVal(i,
-          'DSPBILLDUEDATE', 'DSPBILLDUE',
-          'DSPBILLDATEA',   'DSPBILLDATE',
-        ),
-        tagVal(i,
-          'DSPBILLOVERDUEA', 'DSPBILLOVERDUE',
-          'DSPBILLOVRDUE',   'DSPBILLOVRDUEA',
-        ),
-      );
-    }
-  }
-
-  // ── Format 4: LEDGER > BILLALLOCATIONS (data export format) ──
-  if (bills.length === 0) {
-    const ledgerRe = /<LEDGER\b[^>]*NAME="([^"]*)"[^>]*>([\s\S]*?)<\/LEDGER>/gi;
-    while ((m = ledgerRe.exec(xml)) !== null) {
-      const partyName = m[1].trim();
-      const ledgerBody = m[2];
-      const allocRe = /<BILLALLOCATIONS[^>]*>([\s\S]*?)<\/BILLALLOCATIONS>/gi;
-      let am: RegExpExecArray | null;
-      while ((am = allocRe.exec(ledgerBody)) !== null) {
-        const i = am[1];
-        const ref = tagVal(i, 'NAME', 'BILLNAME');
-        const amtRaw = tagVal(i, 'AMOUNT', 'BILLAMOUNT');
-        const dueStr = tagVal(i, 'DUEDATE', 'BILLDATE');
-        if (ref || amtRaw) {
-          pushBill(partyName, ref, amtRaw, dueStr, '');
-        }
-      }
-    }
-  }
-
-  // ── Format 5: flat BILLFIXED structure ──
-  // Tally's Bills Receivable/Payable TDL export: each bill is a <BILLFIXED>
-  // header (party + ref + bill date) immediately followed by sibling tags
-  // <BILLCL> (signed closing balance — Cr/-ve for receivables), <BILLDUE>
-  // (due date), <BILLOVERDUE> (days past due), <BILLVCHAMOUNT> (voucher amt),
-  // etc.  The regex slurps from one BILLFIXED to the next so the chunk
-  // includes both the header and all siblings until the next bill starts.
-  if (bills.length === 0) {
-    const fmt5Re = /<BILLFIXED>([\s\S]*?)(?=<BILLFIXED>|<\/ENVELOPE>|$)/gi;
-    while ((m = fmt5Re.exec(xml)) !== null) {
-      const chunk = m[0];
-      pushBill(
-        tagVal(chunk, 'BILLPARTY'),
-        tagVal(chunk, 'BILLREF', 'BILLVCHNUMBER'),
-        // Prefer BILLCL (current outstanding) — accounts for partial settlements.
-        // Fall back to BILLVCHAMOUNT (original voucher amount) and the legacy
-        // BILLFINAL / BILLAMOUNT names some Tally versions still emit.
-        tagVal(chunk, 'BILLCL', 'BILLVCHAMOUNT', 'BILLFINAL', 'BILLAMOUNT'),
-        tagVal(chunk, 'BILLDUE', 'BILLDUEDATE', 'BILLDATE'),
-        tagVal(chunk, 'BILLOVERDUE'),
-      );
-    }
-  }
-
-  return bills;
-}
 
 function formatAmount(n: number): string {
   if (Math.abs(n) >= 1_00_00_000) return `₹${(n / 1_00_00_000).toFixed(2)}Cr`;
@@ -592,12 +394,14 @@ interface TBAggregate {
 function computeGroupAggregate(node: TBNode): TBAggregate {
   if (!node.isGroup || node.children.length === 0) {
     return {
-      openingDr: node.opening < 0 ? Math.abs(node.opening) : 0,
-      openingCr: node.opening > 0 ? node.opening            : 0,
+      // parseTBFull normalizes to canonical Dr-positive: positive=Dr,
+      // negative=Cr.  Bucketing reads off the sign directly.
+      openingDr: node.opening > 0 ? node.opening            : 0,
+      openingCr: node.opening < 0 ? Math.abs(node.opening) : 0,
       debit:     node.debitMov,
       credit:    node.creditMov,
-      closingDr: node.closing < 0 ? Math.abs(node.closing) : 0,
-      closingCr: node.closing > 0 ? node.closing            : 0,
+      closingDr: node.closing > 0 ? node.closing            : 0,
+      closingCr: node.closing < 0 ? Math.abs(node.closing) : 0,
     };
   }
   const acc: TBAggregate = { openingDr: 0, openingCr: 0, debit: 0, credit: 0, closingDr: 0, closingCr: 0 };
@@ -684,8 +488,9 @@ function TBTab({ tbRows, masterEntries, classMap }: {
   const grandOpeningCr = ledgerRows.reduce((s, r) => s + (r.opening > 0 ? r.opening           : 0), 0);
   const grandDebit     = ledgerRows.reduce((s, r) => s + r.debitMov,  0);
   const grandCredit    = ledgerRows.reduce((s, r) => s + r.creditMov, 0);
-  const grandTotalDr   = ledgerRows.reduce((s, r) => s + (r.closing < 0 ? Math.abs(r.closing) : 0), 0);
-  const grandTotalCr   = ledgerRows.reduce((s, r) => s + (r.closing > 0 ? r.closing           : 0), 0);
+  // Dr-positive canonical (see parseTBFull): closing > 0 = Dr, < 0 = Cr
+  const grandTotalDr   = ledgerRows.reduce((s, r) => s + (r.closing > 0 ? r.closing           : 0), 0);
+  const grandTotalCr   = ledgerRows.reduce((s, r) => s + (r.closing < 0 ? Math.abs(r.closing) : 0), 0);
 
   // Adaptive columns: only show Opening / Movements columns when Tally
   // returned non-zero data for them.  Some Tally exports (and some Tally
@@ -824,11 +629,12 @@ function TBTab({ tbRows, masterEntries, classMap }: {
                   clDr = a.closingDr; clCr = a.closingCr;
                 }
               } else {
-                if (row.opening < 0) opDr = Math.abs(row.opening);
-                else if (row.opening > 0) opCr = row.opening;
+                // Dr-positive canonical (parseTBFull normalization).
+                if (row.opening > 0) opDr = row.opening;
+                else if (row.opening < 0) opCr = Math.abs(row.opening);
                 dbt = row.debitMov; crd = row.creditMov;
-                if (row.closing < 0) clDr = Math.abs(row.closing);
-                else if (row.closing > 0) clCr = row.closing;
+                if (row.closing > 0) clDr = row.closing;
+                else if (row.closing < 0) clCr = Math.abs(row.closing);
               }
 
               const numCellStyle = (color: string): React.CSSProperties => ({
