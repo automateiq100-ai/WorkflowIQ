@@ -96,16 +96,22 @@ describe('parseBSheet — Bug 1 sign preservation', () => {
     expect(result.ca).toBe(500000);
   });
 
-  it('preserves negative Current Liabilities', () => {
+  it('normalises Current Liabilities to an unsigned magnitude', () => {
+    // parseBSheet returns balance-sheet positions (ca/cl/bankBal/debtorBal/
+    // creditorBal) as unsigned magnitudes ON PURPOSE: Tally's BS BSMAINAMT
+    // sign is unreliable across Tally builds, and every consumer wants the
+    // magnitude (|CA|/|CL| for ratios, positive figures for tiles).  Signed
+    // analysis lives in parseTrialBalance + the MIS layer, which abs() these
+    // fields anyway.  See the sign-convention note in parseBSheet.
     const xml = `
       <DSPDISPNAME>Current Liabilities</DSPDISPNAME>
       <BSAMT><BSMAINAMT>-300000</BSMAINAMT></BSAMT>
     `;
     const result = parseBSheet(xml);
-    expect(result.cl).toBe(-300000);
+    expect(result.cl).toBe(300000);
   });
 
-  it('preserves negative creditor balances', () => {
+  it('normalises creditor balances to an unsigned magnitude', () => {
     // Use BSMAINAMT which is the primary amount the parser extracts from BSAMT block
     const xml = `
       <DSPDISPNAME>Current Assets</DSPDISPNAME>
@@ -114,7 +120,7 @@ describe('parseBSheet — Bug 1 sign preservation', () => {
       <BSAMT><BSMAINAMT>-150000</BSMAINAMT></BSAMT>
     `;
     const result = parseBSheet(xml);
-    expect(result.creditorBal).toBe(-150000);
+    expect(result.creditorBal).toBe(150000);
   });
 
   it('extracts bsNetProfit from Profit & Loss A/c', () => {
@@ -512,9 +518,10 @@ describe('stemClean', () => {
     // stem('sales') = 'sal' (ends with 'es', length 5 > 4)
     // stem('accounts') = 'account' (ends with 's', length 8 > 3)
     expect(stemClean('Sales Accounts')).toBe('salaccount');
-    // stem('running') = 'runn' (ends with 'ing', length 7 > 5)
+    // stem('running') = 'run' (ends with 'ing' → 'runn', then the
+    //   doubled-consonant -ing rule drops the extra 'n' → 'run')
     // stem('expenses') = 'expens' (ends with 'es', length 8 > 4)
-    expect(stemClean('Running Expenses')).toBe('runnexpens');
+    expect(stemClean('Running Expenses')).toBe('runexpens');
   });
 });
 

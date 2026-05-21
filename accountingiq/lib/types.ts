@@ -161,6 +161,8 @@ export interface ChunkedStats {
   wrongType: number;
   missingParty: number;
   cashOver10k: number;
+  /** Sec 269ST: count of vouchers in single-party single-day cash receipts ≥ ₹2 lakh. */
+  cashReceiptOver2L: number;
   roundCount: number;
   /** Count of vouchers per `${type}${vno}` key.  Tally allows the
    *  same voucher number across different voucher types (Sales/001 and
@@ -224,7 +226,8 @@ export type VoucherFlag =
   | 'missingVno'
   | 'missingParty'   // trade-type voucher (sales/sr/pur/pr/receipt/payment) with no party
   | 'zeroAmt'
-  | 'cashOver10k'
+  | 'cashOver10k'        // Sec 40A(3): cash expenditure > ₹10k to one person in a day
+  | 'cashReceiptOver2L'  // Sec 269ST: cash receipts ≥ ₹2 lakh from one person in a day
   | 'outOfFY'
   | 'wrongType';     // Journal touching cash/bank, or Receipt/Payment with no cash/bank counterpart
 
@@ -320,10 +323,28 @@ export interface ParsedData {
   pfLedgerFound: boolean;
   salesLedgersNoRate: number;
   gstDiffPct: number;
+  /** Output-GST reconciliation working — populated by the E2b check; drives
+   *  the E2b "View working" drill-down (GSTBreakdown). */
+  gstWorking?: {
+    sales: number;          // taxable sales (GST-exclusive)
+    effectiveRate: number;  // recorded GST ÷ sales
+    headlineRate: number;   // nearest Indian slab (5/12/18/28%)
+    expectedGST: number;    // sales × headlineRate
+    recordedGST: number;    // Output GST actually charged this period
+    variance: number;       // |recorded − expected| ÷ expected
+    /** Where recordedGST came from: 'vouchers' = GST charged on sales-voucher
+     *  tax legs (period-correct); 'tb-closing' = accumulated TB payable balance
+     *  (fallback when no sales-voucher tax legs were found). */
+    source: 'vouchers' | 'tb-closing';
+  };
   /** Names and amounts of suspense/misc ledgers for richer notes (Bug 4) */
   suspenseLedgers: Array<{ name: string; amount: number }>;
   /** Near-duplicate ledger pair names for fail labels */
   dupPairDetails: Array<[string, string]>;
+  /** Sales ledgers with no GST rate configured in the master — populated by
+   *  the E2a check; surfaces in the E2a drill-down so the user sees exactly
+   *  which ledgers to fix in Tally. */
+  salesLedgersWithoutGst?: string[];
   /** Party ledgers whose name appears in BOTH debtor AND creditor categories
    *  — populated by the G1 check in engine.ts.  Surfaces in the G1 drill-down
    *  via LedgerPairDrillDown so the user can see exactly which parties are

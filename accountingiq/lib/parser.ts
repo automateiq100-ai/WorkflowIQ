@@ -260,7 +260,7 @@ export function findAmountNearText(xml: string, labels: RegExp[]): number {
  * threshold checks and counters where sign doesn't matter:
  *   - per-voucher amount display
  *   - high-value flag (`> ₹1L`)
- *   - cash-over-₹10k flag (Sec 269ST)
+ *   - cash-over-₹10k flag (Sec 40A(3))
  *   - zero-amount flag
  *   - round-number detection (`% 1000 === 0`)
  *
@@ -1704,7 +1704,7 @@ export function parseDayBook(xml: string, fyStart: Date, fyEnd: Date): ChunkedSt
     totalVouchers: 0, missingVno: 0, narrated: 0,
     totalJournals: 0, highValueCount: 0, highValueNarrated: 0,
     zeroAmt: 0, wrongType: 0, missingParty: 0,
-    cashOver10k: 0, roundCount: 0, dupVnoMap: {},
+    cashOver10k: 0, cashReceiptOver2L: 0, roundCount: 0, dupVnoMap: {},
     monthCounts: {}, dateSet: [], custMap: {}, vendMap: {},
     totalDebit: 0, totalCredit: 0, salesVoucherTotal: 0,
     purchVoucherTotal: 0, cashBankNetMovement: 0, receiptTotal: 0, paymentTotal: 0, contraTotal: 0,
@@ -1818,7 +1818,7 @@ export function processVoucher(
     stats.journalNetAmt += amt;
   }
 
-  // Cash >₹10k threshold (s.269ST compliance) — fires on any voucher whose
+  // Cash >₹10k threshold (s.40A(3) compliance) — fires on any voucher whose
   // type *name* contains "cash" (Tally's "Cash Payment", "Cash Receipt").
   // Kept on raw substring because it's a heuristic about ledger choice,
   // not voucher semantics.

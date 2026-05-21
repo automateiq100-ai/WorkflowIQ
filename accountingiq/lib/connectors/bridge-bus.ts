@@ -16,6 +16,8 @@ interface PendingJob {
   resolve: (xml: string) => void;
   reject: (err: Error) => void;
   enqueuedAt: number;
+  pickupTimer?: ReturnType<typeof setTimeout>;
+  execTimer?: ReturnType<typeof setTimeout>;
 }
 
 interface BridgeQueue {
@@ -32,7 +34,24 @@ interface BridgeQueue {
 const QUEUES: Map<string, BridgeQueue> =
   ((globalThis as unknown as { __aiq_bridge_queues?: Map<string, BridgeQueue> }).__aiq_bridge_queues ??=
     new Map<string, BridgeQueue>());
-const JOB_TIMEOUT_MS = 60_000;
+
+// Two-phase timeout.  The original single 60s budget conflated "the bridge
+// never picked this up" (offline/disconnected) with "Tally is taking a long
+// time to generate a big report" — and 60s is far too short for the heavy
+// reports (master = full chart of accounts, daybook = every voucher,
+// bills/payables = bill-by-bill).  Those legitimately need a few minutes.
+//
+//   • PICKUP  — how long we wait for the bridge to dequeue the job.  If the
+//     bridge is running it grabs jobs within milliseconds (it long-polls), so
+//     30s is generous; exceeding it means the bridge is offline.
+//   • EXEC    — how long Tally gets to actually produce the report once the
+//     bridge has picked it up.  Starts ONLY at pickup, so a job that waits
+//     behind earlier ones in the queue doesn't burn its clock while idle.
+//
+// Both are overridable via env so a user on a slow machine / huge company can
+// extend them without a code change.
+const PICKUP_TIMEOUT_MS = parseInt(process.env.BRIDGE_PICKUP_TIMEOUT_MS ?? '30000', 10);
+const EXEC_TIMEOUT_MS = parseInt(process.env.BRIDGE_EXEC_TIMEOUT_MS ?? '180000', 10);
 
 function ensure(bridgeId: string): BridgeQueue {
   let q = QUEUES.get(bridgeId);
@@ -47,29 +66,55 @@ function newJobId(): string {
   return `j_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** Start the execution timer once the bridge has actually picked the job up.
+ *  Clears the pickup deadline.  Called from both pickup paths: a direct
+ *  hand-off in dispatchJob (a poller was already waiting) and a dequeue in
+ *  pollNextJob (the bridge polled after the job was queued). */
+function startExec(p: PendingJob): void {
+  if (p.pickupTimer) { clearTimeout(p.pickupTimer); p.pickupTimer = undefined; }
+  if (p.execTimer) return; // already running — don't restart on a re-poll
+  p.execTimer = setTimeout(() => {
+    p.reject(new Error(
+      `Bridge job timed out — Tally took longer than ${Math.round(EXEC_TIMEOUT_MS / 1000)}s to `
+      + 'generate this report. Large reports (All Masters, Day Book) can be slow; '
+      + 'set BRIDGE_EXEC_TIMEOUT_MS higher or pull a shorter period.',
+    ));
+  }, EXEC_TIMEOUT_MS);
+}
+
 export function dispatchJob(bridgeId: string, job: BridgeJob): Promise<string> {
   const q = ensure(bridgeId);
   return new Promise<string>((resolve, reject) => {
     const pending: PendingJob = { id: newJobId(), job, resolve, reject, enqueuedAt: Date.now() };
 
-    const timer = setTimeout(() => {
+    // cleanup runs on EITHER success or failure: tear down both timers and
+    // make sure the job isn't lingering in any queue.
+    const cleanup = () => {
+      if (pending.pickupTimer) clearTimeout(pending.pickupTimer);
+      if (pending.execTimer) clearTimeout(pending.execTimer);
       q.inflight.delete(pending.id);
       q.pending = q.pending.filter((p) => p.id !== pending.id);
-      reject(new Error('Bridge job timed out'));
-    }, JOB_TIMEOUT_MS);
+    };
+    pending.resolve = (xml: string) => { cleanup(); resolve(xml); };
+    pending.reject = (err: Error) => { cleanup(); reject(err); };
 
-    const wrappedResolve = (xml: string) => { clearTimeout(timer); resolve(xml); };
-    const wrappedReject = (err: Error) => { clearTimeout(timer); reject(err); };
-    pending.resolve = wrappedResolve;
-    pending.reject = wrappedReject;
+    // Phase 1: the bridge must dequeue this within PICKUP_TIMEOUT_MS, else
+    // it's almost certainly offline.
+    pending.pickupTimer = setTimeout(() => {
+      pending.reject(new Error(
+        `Tally bridge did not pick up the job within ${Math.round(PICKUP_TIMEOUT_MS / 1000)}s — `
+        + 'is the AccountingIQ bridge running and connected?',
+      ));
+    }, PICKUP_TIMEOUT_MS);
 
     // Hand directly to a waiting poller if any, else queue.
     const poller = q.pollers.shift();
     if (poller) {
+      startExec(pending);                 // phase 2 begins now (picked up)
       q.inflight.set(pending.id, pending);
       poller(pending);
     } else {
-      q.pending.push(pending);
+      q.pending.push(pending);            // still phase 1 (awaiting pickup)
     }
   });
 }
@@ -79,6 +124,7 @@ export function pollNextJob(bridgeId: string, waitMs = 25_000): Promise<{ id: st
   const q = ensure(bridgeId);
   const next = q.pending.shift();
   if (next) {
+    startExec(next);                      // picked up from the queue → phase 2
     q.inflight.set(next.id, next);
     return Promise.resolve({ id: next.id, job: next.job });
   }

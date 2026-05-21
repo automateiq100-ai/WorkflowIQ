@@ -48,10 +48,18 @@ function expensesOf(p: Period): number | null {
   return e == null ? null : Math.abs(e);
 }
 
-/** Net profit — prefers BS-derived value, falls back to P&L. */
+/** Net profit for the PERIOD (P&L Income − Expenses).
+ *
+ *  We must NOT use `bsNetProfit` here.  That is the Balance Sheet "Profit &
+ *  Loss A/c" ACCUMULATED balance — prior years' retained earnings + the
+ *  current period — so for an established / multi-year company it dwarfs the
+ *  period result.  Using it here made gross profit clamp UP to it (gpOf floors
+ *  GP at PAT), producing a gross profit that EXCEEDED revenue.  `plNetProfit`
+ *  is the hierarchy-walked period figure the engine derives (same number the
+ *  Data view shows); fall back to the regex-based `netProfit` (also period). */
 function netProfitOf(p: Period): number | null {
-  const bs = num(p.parsedData.bsNetProfit);
-  if (bs != null) return bs;
+  const pl = num(p.parsedData.plNetProfit);
+  if (pl != null) return pl;
   return num(p.parsedData.netProfit);
 }
 
@@ -573,7 +581,6 @@ const D1_METRICS: MetricDef[] = [
       const indirectExp = abs(ctx.current.parsedData.expenses)
         - abs(ctx.current.parsedData.costOfMaterials)
         - abs(ctx.current.parsedData.directExpenses);
-      const bsSourced = ctx.current.parsedData.bsNetProfit != null;
       return computedResult(this.id, {
         numeric: pat, unit: 'INR',
         text: `₹${pat.toFixed(0)}  ·  ${margin != null ? (margin * 100).toFixed(1) : '—'}%`,
@@ -585,7 +592,7 @@ const D1_METRICS: MetricDef[] = [
           { label: '− COGS (Opening + Purchases − Closing + Direct Exp)', value: -cogsOf(ctx.current), unit: 'INR' },
           { label: 'Gross Profit', value: gp, unit: 'INR' },
           { label: '− Indirect Expenses (period)', value: -Math.max(0, indirectExp), unit: 'INR' },
-          { label: bsSourced ? 'Net Profit (PAT, from BS P&L A/c)' : 'Net Profit (PAT, P&L derived)', value: pat, unit: 'INR', badge: 'NET' },
+          { label: 'Net Profit (PAT, period P&L)', value: pat, unit: 'INR', badge: 'NET' },
           { label: 'PAT margin %', value: margin != null ? margin * 100 : 0, unit: 'pct' },
         ],
       }, { formula: this.formula, source: 'P&L.xml + BS.xml' });

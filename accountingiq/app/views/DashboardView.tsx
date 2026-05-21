@@ -9,6 +9,7 @@ import { getDrillDown, hasDrillDown } from '@/lib/voucher-filters';
 import ScoreRing from '@/app/components/ScoreRing';
 import VoucherDrillDown from '@/app/components/VoucherDrillDown';
 import H4Breakdown from '@/app/components/H4Breakdown';
+import GSTBreakdown from '@/app/components/GSTBreakdown';
 import LedgerPairDrillDown from '@/app/components/LedgerPairDrillDown';
 import type { DimKey, Check, ParsedData, ChunkedStats, AnomalyFlag } from '@/lib/types';
 import { useEffect, useState } from 'react';
@@ -172,10 +173,14 @@ export default function DashboardView() {
       sub: currentRatio !== null ? (currentRatio >= 1.5 ? 'Good liquidity' : currentRatio >= 1 ? 'Adequate' : 'Risk') : 'Needs BS',
       color: currentRatio !== null ? (currentRatio >= 1.5 ? 'var(--green)' : currentRatio >= 1 ? 'var(--amber)' : 'var(--red)') : 'var(--text3)',
     },
-    // Bug 1: Show signed Debtors with ANOMALY pill if negative
-    { label: 'Debtors',       value: debtorBal !== 0 ? fmtINR(debtorBal) : '—', sub: 'Trade receivables',  color: debtorBal < 0 ? 'var(--red)' : 'var(--blue)', anomaly: debtorBal < 0 },
-    // Bug 1: Show signed Creditors with ANOMALY pill if positive (Dr balance)
-    { label: 'Creditors',     value: creditorBal !== 0 ? fmtINR(creditorBal): '—', sub: 'Trade payables',    color: creditorBal > 0 ? 'var(--red)' : 'var(--purple)', anomaly: creditorBal > 0 },
+    // parseBSheet returns debtorBal/creditorBal as unsigned magnitudes (see
+    // its sign-convention note), so the old sign-based ANOMALY pills are
+    // meaningless here — debtorBal<0 never fired and creditorBal>0 fired on
+    // every company (creditors always shown red). Show plain magnitudes;
+    // genuine Dr/Cr-flip anomalies are surfaced via generateFlags from the
+    // signed Trial Balance, not from these tiles.
+    { label: 'Debtors',       value: debtorBal !== 0 ? fmtINR(debtorBal) : '—', sub: 'Trade receivables',  color: 'var(--blue)' },
+    { label: 'Creditors',     value: creditorBal !== 0 ? fmtINR(creditorBal): '—', sub: 'Trade payables',    color: 'var(--purple)' },
     { label: 'Files',         value: `${filesLoaded}`, sub: `of ${TOTAL_FILE_COUNT} uploaded`, color: 'var(--text1)' },
   ];
 
@@ -497,6 +502,9 @@ export default function DashboardView() {
           onClose={() => setDrillFlag(null)}
         />
       )}
+      {drillFlag && drillFlag.id === 'E2b' && parsedData.gstWorking && (
+        <GSTBreakdown working={parsedData.gstWorking} onClose={() => setDrillFlag(null)} />
+      )}
       {drillFlag && (drillFlag.id === 'B2' || drillFlag.id === 'G1' || drillFlag.id === 'G2') && (() => {
         // Ledger-pair drill-downs share one modal; pair source depends
         // on which check is being drilled (see ChecklistView for canonical
@@ -514,7 +522,7 @@ export default function DashboardView() {
           />
         );
       })()}
-      {drillFlag && drillFlag.id !== 'H4' && drillFlag.id !== 'B2' && drillFlag.id !== 'G1' && drillFlag.id !== 'G2' && (() => {
+      {drillFlag && drillFlag.id !== 'H4' && drillFlag.id !== 'E2b' && drillFlag.id !== 'B2' && drillFlag.id !== 'G1' && drillFlag.id !== 'G2' && (() => {
         const drill = getDrillDown(drillFlag.id, drillFlag.title, dbStatsRef, parsedData);
         if (!drill) return null;
         return (

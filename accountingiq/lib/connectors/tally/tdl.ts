@@ -23,11 +23,38 @@ function escapeXml(s: string): string {
 
 interface ExportArgs {
   reportName: string;       // Tally REPORT id, e.g. "Trial Balance"
-  company: string;          // Tally company name as Tally knows it
+  company?: string;         // Tally company name; OMITTED when empty (see currentCompanyVar)
   period: ReportPeriod;
   /** Per-report extra <STATICVARIABLES> entries.  Used to flip Tally's F12-style
    *  toggles (e.g. Trial Balance: "Show Opening Balance" / "Show Transactions"). */
   extraStaticVars?: string;
+}
+
+/**
+ * Build the optional `<SVCURRENTCOMPANY>` static-variable line.
+ *
+ * IMPORTANT — we deliberately OMIT this for the normal export path.
+ *
+ * Tally Prime crashes with a c0000005 memory-access violation (which kills
+ * its XML server, after which every subsequent request gets ECONNREFUSED)
+ * when asked to resolve SVCURRENTCOMPANY for a company whose LOADED name
+ * carries multi-year "- (from <date>)" annotations, e.g.
+ *   "NARNKAR & CO - (from 1-Apr-2020) - (from 1-Apr-21) - (from 1-Apr-22)".
+ * Both the full annotated name AND the bare "NARNKAR & CO" fail to resolve
+ * ("Could not set 'SVCurrentCompany' to '…'"), and the failed resolution is
+ * what trips the crash.
+ *
+ * Omitting the variable makes Tally export from the currently-open company —
+ * exactly the one the user is looking at in the Gateway — sidestepping the
+ * crash-prone resolution path entirely.  This mirrors how the working
+ * "List of Companies" request already behaves (it never sends the variable).
+ *
+ * A non-empty `company` is only emitted if a caller explicitly opts in
+ * (e.g. a future multi-company batch path); the default callers pass none.
+ */
+function currentCompanyVar(company?: string): string {
+  if (!company || !company.trim()) return '';
+  return `\n        <SVCURRENTCOMPANY>${escapeXml(company)}</SVCURRENTCOMPANY>`;
 }
 
 function exportEnvelope({ reportName, company, period, extraStaticVars = '' }: ExportArgs): string {
@@ -42,8 +69,7 @@ function exportEnvelope({ reportName, company, period, extraStaticVars = '' }: E
   </HEADER>
   <BODY>
     <DESC>
-      <STATICVARIABLES>
-        <SVCURRENTCOMPANY>${escapeXml(company)}</SVCURRENTCOMPANY>
+      <STATICVARIABLES>${currentCompanyVar(company)}
         <SVFROMDATE TYPE="Date">${from}</SVFROMDATE>
         <SVTODATE TYPE="Date">${to}</SVTODATE>
         <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
@@ -181,7 +207,7 @@ const REPORT_IDS: Partial<Record<ReportKind, string>> = {
  * PARTYLEDGERNAME, AMOUNT, ALLLEDGERENTRIES.LIST), so the existing
  * parseDayBook regex works unchanged.
  */
-function buildDayBookCollectionRequest(company: string, period: ReportPeriod): string {
+function buildDayBookCollectionRequest(company: string | undefined, period: ReportPeriod): string {
   const from = toTallyDate(period.start);
   const to = toTallyDate(period.end);
   // Tally's Voucher collection is already scoped to [SVFROMDATE, SVTODATE]
@@ -198,8 +224,7 @@ function buildDayBookCollectionRequest(company: string, period: ReportPeriod): s
   </HEADER>
   <BODY>
     <DESC>
-      <STATICVARIABLES>
-        <SVCURRENTCOMPANY>${escapeXml(company)}</SVCURRENTCOMPANY>
+      <STATICVARIABLES>${currentCompanyVar(company)}
         <SVFROMDATE TYPE="Date">${from}</SVFROMDATE>
         <SVTODATE TYPE="Date">${to}</SVTODATE>
         <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
@@ -275,7 +300,7 @@ function buildDayBookCollectionRequest(company: string, period: ReportPeriod): s
  *  `<DSPACCNAME>` / `<DSPCLAMTA>` blocks the trial balance parser
  *  already understands.  Drill-downs into per-ledger detail happen
  *  client-side via the parsed `Parent` field. */
-function buildFixedAssetsCollectionRequest(company: string, period: ReportPeriod): string {
+function buildFixedAssetsCollectionRequest(company: string | undefined, period: ReportPeriod): string {
   return exportEnvelope({
     reportName: 'Group Summary',
     company,
@@ -292,7 +317,7 @@ function buildFixedAssetsCollectionRequest(company: string, period: ReportPeriod
   });
 }
 
-function buildTrialBalanceCollectionRequest(company: string, period: ReportPeriod): string {
+function buildTrialBalanceCollectionRequest(company: string | undefined, period: ReportPeriod): string {
   const from = toTallyDate(period.start);
   const to = toTallyDate(period.end);
   return `<ENVELOPE>
@@ -304,8 +329,7 @@ function buildTrialBalanceCollectionRequest(company: string, period: ReportPerio
   </HEADER>
   <BODY>
     <DESC>
-      <STATICVARIABLES>
-        <SVCURRENTCOMPANY>${escapeXml(company)}</SVCURRENTCOMPANY>
+      <STATICVARIABLES>${currentCompanyVar(company)}
         <SVFROMDATE TYPE="Date">${from}</SVFROMDATE>
         <SVTODATE TYPE="Date">${to}</SVTODATE>
         <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
@@ -345,7 +369,7 @@ export class ReportNotAvailableError extends Error {
 
 export function buildReportRequest(
   kind: ReportKind,
-  company: string,
+  company: string | undefined,
   period: ReportPeriod,
 ): string {
   // Day Book in Tally is a single-day report; route it through a custom
@@ -413,7 +437,7 @@ export function buildListCompaniesRequest(): string {
 </ENVELOPE>`;
 }
 
-export function buildVoucherImportRequest(company: string, draft: VoucherDraft): string {
+export function buildVoucherImportRequest(company: string | undefined, draft: VoucherDraft): string {
   const lines = draft.lines
     .map((l) => {
       // Tally voucher import sign convention: ISDEEMEDPOSITIVE=No → amount is Cr.
@@ -437,8 +461,7 @@ export function buildVoucherImportRequest(company: string, draft: VoucherDraft):
   </HEADER>
   <BODY>
     <DESC>
-      <STATICVARIABLES>
-        <SVCURRENTCOMPANY>${escapeXml(company)}</SVCURRENTCOMPANY>
+      <STATICVARIABLES>${currentCompanyVar(company)}
       </STATICVARIABLES>
     </DESC>
     <DATA>

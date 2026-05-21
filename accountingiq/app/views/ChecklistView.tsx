@@ -11,6 +11,7 @@ import { getDrillDown, hasDrillDown, isDrillableCheck } from '@/lib/voucher-filt
 import PushToTallyButton from '@/app/components/PushToTallyButton';
 import VoucherDrillDown from '@/app/components/VoucherDrillDown';
 import H4Breakdown from '@/app/components/H4Breakdown';
+import GSTBreakdown from '@/app/components/GSTBreakdown';
 import LedgerPairDrillDown from '@/app/components/LedgerPairDrillDown';
 import InsightBackup from '@/app/components/InsightBackup';
 
@@ -300,7 +301,10 @@ export default function ChecklistView() {
           onClose={() => setDrillFlag(null)}
         />
       )}
-      {drillFlag && drillFlag.id !== 'H4' && drillFlag.id !== 'B2' && (() => {
+      {drillFlag && drillFlag.id === 'E2b' && parsedData.gstWorking && (
+        <GSTBreakdown working={parsedData.gstWorking} onClose={() => setDrillFlag(null)} />
+      )}
+      {drillFlag && drillFlag.id !== 'H4' && drillFlag.id !== 'E2b' && drillFlag.id !== 'B2' && (() => {
         const drill = getDrillDown(drillFlag.id, drillFlag.title, dbStats, parsedData);
         if (!drill) return null;
         return (
@@ -368,7 +372,22 @@ export default function ChecklistView() {
           />
         );
       })()}
-      {drillCheck && drillCheck.id !== 'H4' && drillCheck.id !== 'B2' && drillCheck.id !== 'G1' && drillCheck.id !== 'G2' && (() => {
+      {drillCheck && drillCheck.id === 'E2b' && (() => {
+        if (!parsedData.gstWorking) {
+          return (
+            <ReuploadHintModal
+              title={drillCheck.failLabel ?? drillCheck.name}
+              checkId={drillCheck.id}
+              onClose={() => setDrillCheck(null)}
+              dispatch={dispatch}
+            />
+          );
+        }
+        return (
+          <GSTBreakdown working={parsedData.gstWorking} onClose={() => setDrillCheck(null)} />
+        );
+      })()}
+      {drillCheck && drillCheck.id !== 'H4' && drillCheck.id !== 'E2b' && drillCheck.id !== 'B2' && drillCheck.id !== 'G1' && drillCheck.id !== 'G2' && (() => {
         const drill = getDrillDown(
           drillCheck.id,
           drillCheck.failLabel ?? drillCheck.name,

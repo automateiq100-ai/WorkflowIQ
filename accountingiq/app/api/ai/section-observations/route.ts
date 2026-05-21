@@ -47,7 +47,7 @@ CORE RULES:
 2. Stay SPECIFIC to the section provided — don't drift across sections.
    (E.g. on Balance Sheet don't talk about marketing spend; on Working Capital
    don't talk about EBITDA.)
-3. Use Indian SMB context — GST input credit, MSME 45-day rule, Section 269ST,
+3. Use Indian SMB context — GST input credit, MSME 45-day rule, Section 40A(3) (cash expense >₹10k/day disallowed), Section 269ST (cash receipts ≥₹2L barred),
    DPDPA, GSTR-2B, where relevant.
 4. NEVER suggest specific journal entries with rupee amounts.
 5. No preamble like "Here are observations" — go straight to the points.

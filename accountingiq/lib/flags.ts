@@ -45,7 +45,7 @@ export function generateFlags(
   //   C1 → missing voucher number   C4 → out-of-FY date
   //   C2 → duplicate voucher number C5 → wrong voucher type
   //   C3 → missing party name       C6 → zero / missing amount
-  //   G3 → cash > ₹10,000 (269ST)
+  //   G3 → cash > ₹10,000 (40A(3))
   // Re-emitting them as `flag-*` data flags here just produced duplicate
   // entries in the Critical Flags panel with the same content under a
   // non-standard ID, so they're all gone.  voucher-filters.ts keeps the

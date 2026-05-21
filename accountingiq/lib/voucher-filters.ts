@@ -8,6 +8,7 @@
 // per-voucher marker because duplicate detection needs the whole map.
 
 import type { ChunkedStats, ParsedData, Voucher, VoucherFlag } from './types';
+import { classifyVoucherType } from './tally-voucher-types';
 
 // ── dupVnoMap key helpers ──────────────────────────────────────────────────
 // Duplicate detection keys on `${type}${vno}` (delimiter is U+0001, a
@@ -54,6 +55,7 @@ const FLAG_ID_TO_TAG: Record<string, VoucherFlag> = {
   C5: 'wrongType',
   C6: 'zeroAmt',
   G3: 'cashOver10k',
+  G5: 'cashReceiptOver2L',
   // Data-flag ids (see lib/flags.ts).
   'flag-missing-vno':   'missingVno',
   'flag-missing-party': 'missingParty',
@@ -67,8 +69,13 @@ const FLAG_ID_TO_TAG: Record<string, VoucherFlag> = {
  *  rather than from a parser-set tag.  Each predicate runs over the full
  *  voucher list to surface the rows that triggered the finding. */
 const VOUCHER_PREDICATE_DRILLDOWNS: Record<string, (v: Voucher) => boolean> = {
+  // F3 — narration coverage: the vouchers WITHOUT a narration (the ones
+  // dragging the coverage % down).
+  F3: v => !v.narration?.trim(),
   // F4 — high-value entries (> ₹1,00,000) without narration.
   F4: v => Math.abs(v.amount) > 100_000 && !v.narration?.trim(),
+  // F5 — journal vouchers (the proportion the check flags as excessive).
+  F5: v => classifyVoucherType(v.type).semantic === 'journal',
   // G4 — round-number entries (multiple of 1,000).  Mirrors the parser's
   // counter (`amt > 0 && amt % 1000 === 0`) so the drill-down rows agree
   // with the count surfaced on the check note.
@@ -99,6 +106,7 @@ function ledgersAsVouchers(rows: Array<{ name: string; amount: number }>): Vouch
 const LEDGER_FLAG_IDS = new Set([
   'B1',           // suspense / miscellaneous balances
   'B2',           // near-duplicate ledger pairs (uses dupPairDetails)
+  'E2a',          // sales ledgers missing a GST rate (uses salesLedgersWithoutGst)
   'G1',           // party split across debtor + creditor (uses partySplitPairs)
   'G2',           // same expense split across ledger groups (uses dupPairDetails)
   'flag-suspense', // legacy data-flag id, kept for backward compat
@@ -108,6 +116,7 @@ const LEDGER_FLAG_IDS = new Set([
  *  breakdown panel instead of the VoucherDrillDown modal. */
 const CUSTOM_BREAKDOWN_FLAG_IDS = new Set([
   'H4',           // Cash + Bank reconciliation (DB voucher flow ↔ TB balances)
+  'E2b',          // Output GST reconciliation working (GSTBreakdown)
 ]);
 
 /** Returns true when a drill-down link should render for this flag id. */
@@ -123,6 +132,9 @@ export function hasDrillDown(
     }
     if (flagId === 'B2') {
       return (parsedData?.dupPairDetails?.length ?? 0) > 0;
+    }
+    if (flagId === 'E2a') {
+      return (parsedData?.salesLedgersWithoutGst?.length ?? 0) > 0;
     }
     if (flagId === 'G1') {
       return (parsedData?.partySplitPairs?.length ?? 0) > 0;
@@ -140,6 +152,10 @@ export function hasDrillDown(
   // cash/bank ledgers + DayBook receipt/payment/contra totals, so we only
   // need one of them to be non-empty for the click to be useful.
   if (CUSTOM_BREAKDOWN_FLAG_IDS.has(flagId)) {
+    if (flagId === 'E2b') {
+      // GST working needs a non-zero taxable-sales base to be meaningful.
+      return (parsedData?.gstWorking?.sales ?? 0) > 0;
+    }
     const hasTBLedgers = (parsedData?.tbLedgers?.length ?? 0) > 0;
     const hasVouchers = (dbStats?.vouchers?.length ?? 0) > 0;
     return hasTBLedgers || hasVouchers;
@@ -165,6 +181,15 @@ export function isDrillableCheck(flagId: string): boolean {
   return flagId in FLAG_ID_TO_TAG;
 }
 
+/** Label for the drill-down link, by flag id.  Voucher-list findings read
+ *  "View affected vouchers"; custom breakdowns (H4 reconciliation, E2b GST
+ *  working) and ledger-level findings read "View working" — clicking those
+ *  opens a computation/ledger panel, not a voucher list. */
+export function drillLabel(flagId: string): string {
+  if (CUSTOM_BREAKDOWN_FLAG_IDS.has(flagId) || LEDGER_FLAG_IDS.has(flagId)) return 'View working →';
+  return 'View affected vouchers →';
+}
+
 /** Compute the drill-down for a given flag id.  Returns null when the flag
  *  isn't a per-voucher finding or dbStats has no vouchers. */
 export function getDrillDown(
@@ -173,11 +198,24 @@ export function getDrillDown(
   dbStats: ChunkedStats | null,
   parsedData?: Partial<ParsedData>,
 ): DrillDown | null {
+  // Custom-breakdown flags (H4, E2b) render their own dedicated panel — the
+  // view picks the component by flag id — so the default voucher list is N/A.
+  if (CUSTOM_BREAKDOWN_FLAG_IDS.has(flagId)) return null;
+
   // Suspense / miscellaneous ledgers — ledger-level finding.
   if (flagId === 'B1' || flagId === 'flag-suspense') {
     const rows = parsedData?.suspenseLedgers ?? [];
     if (rows.length === 0) return null;
     return { title, vouchers: ledgersAsVouchers(rows) };
+  }
+
+  // E2a — sales ledgers missing a GST rate.  Ledger-level finding: list the
+  // ledger names so the user knows exactly which masters to fix in Tally.
+  // (Amount is N/A here, so it renders as ₹0 — the names are the point.)
+  if (flagId === 'E2a') {
+    const names = parsedData?.salesLedgersWithoutGst ?? [];
+    if (names.length === 0) return null;
+    return { title, vouchers: ledgersAsVouchers(names.map(name => ({ name, amount: 0 }))) };
   }
 
   // B2 near-duplicate ledger pairs are rendered by a dedicated

@@ -1,6 +1,10 @@
 // Long-poll loop: pull next job from cloud, hand to Tally, post result back.
 
 import { postToTally } from './tally.mjs';
+import zlib from 'node:zlib';
+import { promisify } from 'node:util';
+
+const gzipAsync = promisify(zlib.gzip);
 
 const POLL_TIMEOUT_MS = 30_000;
 const RECONNECT_DELAY_MS = 3_000;
@@ -50,10 +54,29 @@ async function pollNext(cloudUrl, token) {
 }
 
 async function postResult(cloudUrl, token, body) {
-  const r = await fetch(`${cloudUrl}/api/tally/bridge-result`, {
+  // Ship the report XML as the RAW request body with jobId/error in the query
+  // string, GZIP-compressed.  JSON-wrapping a multi-MB report (All Masters,
+  // Day Book) inflated it ~30% via escaping and forced a giant JSON.parse on
+  // the cloud — which returned HTTP 400 on the heaviest reports.  Tally XML is
+  // extremely repetitive, so gzip shrinks it ~10:1: a 5 MB report goes out as
+  // ~500 KB, well under anything that was failing, and transfers faster.
+  const params = new URLSearchParams({ jobId: body.jobId });
+  if (body.error) params.set('error', String(body.error).slice(0, 500));
+
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    'Content-Type': 'application/xml; charset=utf-8',
+  };
+  let payload = '';
+  if (!body.error && body.xml) {
+    payload = await gzipAsync(Buffer.from(body.xml, 'utf8'));
+    headers['Content-Encoding'] = 'gzip';
+  }
+
+  const r = await fetch(`${cloudUrl}/api/tally/bridge-result?${params.toString()}`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    headers,
+    body: payload,
   });
   if (r.status === 401) throw new UnauthorizedError();
   if (!r.ok) throw new Error(`bridge-result HTTP ${r.status}`);
