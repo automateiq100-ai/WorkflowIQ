@@ -135,13 +135,22 @@ function StrictStatementTable({
   const totalIncome    = statement.nodes.filter(n => n.amount > 0).reduce((s, n) => s + n.amount, 0);
   const totalExpenses  = statement.nodes.filter(n => n.amount < 0).reduce((s, n) => s + Math.abs(n.amount), 0);
 
-  // Prefer BS-sourced net profit (Profit & Loss A/c line) when available and non-zero
-  const displayProfit  = (bsNetProfit != null && bsNetProfit !== 0) ? bsNetProfit : computedProfit;
+  // "Net Profit for the period" MUST reconcile with the Total Income / Total
+  // Expenses shown beside it — i.e. income − expenses for THIS period.
+  //
+  // We deliberately do NOT use the Balance Sheet "Profit & Loss A/c" figure
+  // here.  That BS line is the ACCUMULATED / carried-forward balance (prior
+  // years' retained earnings + the current period), so for any established
+  // company or sub-year period it differs wildly from the period's result —
+  // e.g. ₹14 Cr accumulated on the BS vs a ₹0.57 Cr loss for the month.
+  // Showing the BS figure made the headline contradict the totals above it.
+  const displayProfit  = computedProfit;
   const isProfit       = displayProfit >= 0;
   const profitColor    = isProfit ? 'var(--green)' : 'var(--red)';
   const profitBg       = isProfit ? 'rgba(76,175,121,0.08)' : 'rgba(242,107,91,0.08)';
 
-  // Show a reconciliation note if BS figure differs materially from computed
+  // Informational note: surface the BS accumulated figure when it differs, so
+  // the user understands why the BS P&L A/c line isn't the period result.
   const bsDiffers = bsNetProfit != null && bsNetProfit !== 0 &&
     Math.abs(bsNetProfit - computedProfit) > 1;
 
@@ -164,11 +173,11 @@ function StrictStatementTable({
       {bsDiffers && (
         <div className="px-4 py-2 rounded-lg text-xs flex items-center gap-2"
           style={{ background: 'rgba(239,170,30,0.10)', color: 'var(--amber)', border: '1px solid rgba(239,170,30,0.25)' }}>
-          <span>⚠</span>
+          <span>ⓘ</span>
           <span>
-            P&amp;L computed profit <strong>{formatAmount(Math.abs(computedProfit))}</strong> differs
-            from Balance Sheet P&amp;L A/c <strong>{formatAmount(Math.abs(bsNetProfit!))}</strong>.
-            Displaying BS figure.
+            Net result for the period (Income − Expenses) is <strong>{formatAmount(Math.abs(computedProfit))}</strong>.
+            The Balance Sheet &ldquo;Profit &amp; Loss A/c&rdquo; shows <strong>{formatAmount(Math.abs(bsNetProfit!))}</strong> —
+            that&rsquo;s the accumulated balance carried forward (prior periods + this one), not this period&rsquo;s result.
           </span>
         </div>
       )}
@@ -801,10 +810,14 @@ function PLTab({ pd, classMap }: { pd: Record<string, unknown>; classMap?: Class
   const otherIncome    = (pd.otherIncome as number) ?? 0;
   const costOfMaterials = (pd.costOfMaterials as number) ?? 0;
   const expenses       = (pd.expenses as number) ?? 0;
-  const netProfit      = (pd.netProfit as number) ?? 0;
   const totalIncome    = directRevenue + otherIncome;
   // totalExpenses from parser already includes cost of materials + indirect expenses
   const totalExpenses  = expenses || (costOfMaterials + (pd.indirectExpenses as number ?? 0));
+  // "Net Profit for the period" = Income − Expenses, so the headline always
+  // reconciles with the totals shown above it.  (We avoid pd.netProfit here:
+  // it prefers the Balance Sheet's accumulated P&L A/c balance, which is not
+  // the period result — see StrictStatementTable for the full rationale.)
+  const netProfit      = totalIncome - totalExpenses;
 
   // Map sections from XML to schedule groups
   const salesSections  = plSections.filter(s => s.name.toLowerCase().includes('sales') && !s.name.toLowerCase().includes('cost of sales'));
@@ -883,7 +896,7 @@ function PLTab({ pd, classMap }: { pd: Record<string, unknown>; classMap?: Class
                 {netProfit >= 0 ? 'Net Profit' : 'Net Loss'} for the period
               </td>
               <td className="px-6 py-3 text-right font-mono font-bold" style={{ color: netProfit >= 0 ? 'var(--green)' : 'var(--red)', fontSize: '1rem' }}>
-                {formatAmount(Math.abs(netProfit || (totalIncome - totalExpenses)))}
+                {formatAmount(Math.abs(netProfit))}
               </td>
             </tr>
           </tbody>
@@ -1204,11 +1217,18 @@ function DayBookTab({ stats }: { stats: ChunkedStats | null }) {
       predicate: v => classifyVoucherType(v.type).semantic === 'journal',
     },
     {
-      label: 'Cash Transactions >₹10k',
+      label: 'Cash Payments >₹10k (40A(3))',
       value: stats.cashOver10k.toLocaleString('en-IN'),
       color: stats.cashOver10k > 0 ? 'var(--amber)' : 'var(--green)',
-      drillTitle: 'Cash transactions over ₹10,000',
+      drillTitle: 'Cash payments over ₹10,000 (Section 40A(3))',
       predicate: v => v.flags?.includes('cashOver10k') ?? false,
+    },
+    {
+      label: 'Cash Receipts ≥₹2L (269ST)',
+      value: stats.cashReceiptOver2L.toLocaleString('en-IN'),
+      color: stats.cashReceiptOver2L > 0 ? 'var(--red)' : 'var(--green)',
+      drillTitle: 'Cash receipts of ₹2 lakh or more (Section 269ST)',
+      predicate: v => v.flags?.includes('cashReceiptOver2L') ?? false,
     },
     {
       label: 'Round Amount Vouchers',
@@ -1453,6 +1473,35 @@ export default function DataView() {
   const { state, dispatch } = useApp();
   const { parsedData, results, files, analysed } = state;
   const [activeTab, setActiveTab] = useState<Tab>('tb');
+  const [exporting, setExporting] = useState(false);
+
+  // Export the parsed data tabs (TB / P&L / BS / Bills / DayBook + financial
+  // summary) to a multi-sheet .xlsx — same builder the sidebar uses, plus a
+  // Bills sheet so the workbook mirrors every tab in this view.
+  async function handleExportExcel() {
+    if (!results) return;
+    setExporting(true);
+    try {
+      const { exportToExcel } = await import('@/lib/excel');
+      exportToExcel({
+        results,
+        parsedData,
+        dbStats: files.daybook?.chunkedStats ?? null,
+        companyName: state.currentCompany?.name ?? 'Data',
+        periodLabel: results.runAt
+          ? new Date(results.runAt).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })
+          : 'Export',
+        sourceXml: {
+          pandl: files.pandl?.content,
+          bsheet: files.bsheet?.content,
+          bills: files.bills?.content,
+          payables: files.payables?.content,
+        },
+      });
+    } finally {
+      setExporting(false);
+    }
+  }
 
   const failedCheckIds = useMemo(() => {
     if (!results) return new Set<string>();
@@ -1530,11 +1579,22 @@ export default function DataView() {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="px-6 py-4 shrink-0" style={{ borderBottom: '1px solid var(--border)' }}>
-        <h1 className="text-lg font-semibold" style={{ color: 'var(--text1)' }}>Data View</h1>
-        <p className="text-xs mt-0.5" style={{ color: 'var(--text3)' }}>
-          Explore parsed Tally data in tabular form. {tbRows.length} accounts loaded.
-        </p>
+      <div className="px-6 py-4 shrink-0 flex items-start justify-between gap-4" style={{ borderBottom: '1px solid var(--border)' }}>
+        <div className="min-w-0">
+          <h1 className="text-lg font-semibold" style={{ color: 'var(--text1)' }}>Data View</h1>
+          <p className="text-xs mt-0.5" style={{ color: 'var(--text3)' }}>
+            Explore parsed Tally data in tabular form. {tbRows.length} accounts loaded.
+          </p>
+        </div>
+        <button
+          onClick={handleExportExcel}
+          disabled={exporting}
+          className="text-xs px-3 py-2 rounded-lg font-semibold shrink-0 disabled:opacity-50 flex items-center gap-1.5"
+          style={{ background: 'var(--teal)', color: '#000' }}
+          title="Download Trial Balance, P&L, Balance Sheet, Bills and DayBook stats as an Excel workbook"
+        >
+          {exporting ? 'Exporting…' : '↓ Export to Excel'}
+        </button>
       </div>
 
       {/* Tabs */}

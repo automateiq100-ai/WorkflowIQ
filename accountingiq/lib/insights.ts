@@ -170,11 +170,11 @@ export function generateInsights(
     insights.push({
       id: 'G3-cash',
       urgency: 'high',
-      cat: 'Compliance — Section 269ST',
-      finding: 'Cash receipts/payments exceeding ₹10,000 detected.',
-      implication: 'Section 269ST of Income Tax Act prohibits cash transactions ≥ ₹2 lakh in one day. Amounts over ₹10k are flagged for review.',
-      action: 'Review flagged cash vouchers. Transactions over ₹2 lakh in cash are illegal and attract penalty equal to the amount.',
-      copyText: 'Cash transactions exceeding ₹10,000 detected — Section 269ST review required.',
+      cat: 'Compliance — Section 40A(3)',
+      finding: 'Cash transactions exceeding ₹10,000 detected.',
+      implication: 'Section 40A(3) of the Income Tax Act disallows business expenditure paid in cash above ₹10,000 in a day to a single person (₹35,000 for transport operators) — the expense is added back to taxable income. (Separately, Section 269ST bars cash RECEIPTS of ₹2 lakh or more.)',
+      action: 'Review flagged cash vouchers. For cash payments of expenses over ₹10,000, route them through bank to keep the deduction; if a bank payment was actually made, amend the voucher.',
+      copyText: 'Cash transactions exceeding ₹10,000 detected — Section 40A(3) review required.',
       checkId: 'G3',
     });
   }

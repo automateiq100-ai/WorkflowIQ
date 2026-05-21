@@ -15,8 +15,8 @@ describe('Tally TDL templates', () => {
         <HEADER>
           <VERSION>1</VERSION>
           <TALLYREQUEST>Export</TALLYREQUEST>
-          <TYPE>Data</TYPE>
-          <ID>Trial Balance</ID>
+          <TYPE>Collection</TYPE>
+          <ID>WIQTrialBalance</ID>
         </HEADER>
         <BODY>
           <DESC>
@@ -25,8 +25,19 @@ describe('Tally TDL templates', () => {
               <SVFROMDATE TYPE="Date">20250401</SVFROMDATE>
               <SVTODATE TYPE="Date">20260331</SVTODATE>
               <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
-              <EXPLODEFLAG>Yes</EXPLODEFLAG>
             </STATICVARIABLES>
+            <TDL>
+              <TDLMESSAGE>
+                <COLLECTION NAME="WIQTrialBalance" ISMODIFY="No">
+                  <TYPE>Ledger</TYPE>
+                  <BELONGSTO>Yes</BELONGSTO>
+                  <FETCH>NAME</FETCH>
+                  <FETCH>PARENT</FETCH>
+                  <FETCH>OPENINGBALANCE</FETCH>
+                  <FETCH>CLOSINGBALANCE</FETCH>
+                </COLLECTION>
+              </TDLMESSAGE>
+            </TDL>
           </DESC>
         </BODY>
       </ENVELOPE>"

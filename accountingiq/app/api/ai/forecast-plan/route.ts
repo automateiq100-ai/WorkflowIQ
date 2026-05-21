@@ -70,7 +70,7 @@ CORE RULES:
    leverage existing data, not require massive new setup.
 6. Be realistic.  If revenue grew at 4% historically, don't propose 30%.
    Suggest 6–8%.  If gross margin is 25%, don't propose 50%.
-7. Use Indian SMB context — GST input credit, Section 269ST cash limits,
+7. Use Indian SMB context — GST input credit, cash limits (Section 40A(3): cash expense >₹10k/day disallowed; Section 269ST: cash receipts ≥₹2L barred),
    MSME 45-day rule, DPDPA, vendor advances, etc.
 
 Also produce:

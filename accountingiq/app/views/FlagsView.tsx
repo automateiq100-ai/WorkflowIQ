@@ -3,9 +3,10 @@
 import { useState } from 'react';
 import { useApp } from '@/lib/state';
 import { generateFlags } from '@/lib/flags';
-import { getDrillDown, hasDrillDown } from '@/lib/voucher-filters';
+import { getDrillDown, hasDrillDown, drillLabel } from '@/lib/voucher-filters';
 import VoucherDrillDown from '@/app/components/VoucherDrillDown';
 import H4Breakdown from '@/app/components/H4Breakdown';
+import GSTBreakdown from '@/app/components/GSTBreakdown';
 import LedgerPairDrillDown from '@/app/components/LedgerPairDrillDown';
 import type { AnomalyFlag } from '@/lib/types';
 
@@ -127,6 +128,9 @@ export default function FlagsView() {
           onClose={() => setDrillFlag(null)}
         />
       )}
+      {drillFlag && drillFlag.id === 'E2b' && parsedData.gstWorking && (
+        <GSTBreakdown working={parsedData.gstWorking} onClose={() => setDrillFlag(null)} />
+      )}
       {drillFlag && (drillFlag.id === 'B2' || drillFlag.id === 'G1' || drillFlag.id === 'G2') && (() => {
         // B2 / G1 / G2 all use LedgerPairDrillDown but read from
         // different parsedData fields — see ChecklistView for the
@@ -144,7 +148,7 @@ export default function FlagsView() {
           />
         );
       })()}
-      {drillFlag && drillFlag.id !== 'H4' && drillFlag.id !== 'B2' && drillFlag.id !== 'G1' && drillFlag.id !== 'G2' && (() => {
+      {drillFlag && drillFlag.id !== 'H4' && drillFlag.id !== 'E2b' && drillFlag.id !== 'B2' && drillFlag.id !== 'G1' && drillFlag.id !== 'G2' && (() => {
         const drill = getDrillDown(drillFlag.id, drillFlag.title, dbStats, parsedData);
         if (!drill) return null;
         return (
@@ -183,7 +187,7 @@ function FlagRow({
         </div>
         {drillable && (
           <div className="text-xs mt-1" style={{ color: 'var(--teal)' }}>
-            View affected vouchers →
+            {drillLabel(flag.id)}
           </div>
         )}
       </div>

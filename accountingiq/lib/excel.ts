@@ -8,6 +8,7 @@ import type { AnalysisResults, ParsedData, ChunkedStats, Check, TBLedger, Parsed
 import { DIM_LABELS, DIM_WEIGHTS, getGrade } from './constants';
 import { decodeEntities, parseAmt, xmlText } from './parser';
 import { splitDupKey } from './voucher-filters';
+import { parseBills, billDaysOverdue, agingBucketOf, type Bill } from './bills-parser';
 
 // ── Formatting helpers ────────────────────────────────────────────────────
 
@@ -265,6 +266,44 @@ function buildTrialBalanceSheet(tbLedgers: TBLedger[]): XLSX.WorkSheet {
   return ws;
 }
 
+function buildBillsSheet(
+  billsXml: string | null | undefined,
+  payablesXml: string | null | undefined,
+): XLSX.WorkSheet | null {
+  const bills: Bill[] = [];
+  if (billsXml) bills.push(...parseBills(billsXml, 'receivable'));
+  if (payablesXml) bills.push(...parseBills(payablesXml, 'payable'));
+  if (bills.length === 0) return null;
+  bills.sort((a, b) => b.amount - a.amount);
+
+  const rows: (string | number)[][] = [
+    ['Bills — Receivables & Payables'],
+    [],
+    ['Party', 'Bill Reference', 'Type', 'Due Date', 'Amount (₹)', 'Days Overdue', 'Aging Bucket'],
+  ];
+  let recvTotal = 0, payTotal = 0;
+  for (const b of bills) {
+    const days = billDaysOverdue(b);
+    rows.push([
+      b.party,
+      b.billRef,
+      b.type === 'receivable' ? 'Receivable' : 'Payable',
+      b.dueDate || '—',
+      fmtAmt(b.amount),
+      days != null ? days : '—',
+      agingBucketOf(days),
+    ]);
+    if (b.type === 'receivable') recvTotal += b.amount; else payTotal += b.amount;
+  }
+  rows.push([]);
+  rows.push(['Total Receivables', '', '', '', recvTotal, '', '']);
+  rows.push(['Total Payables', '', '', '', payTotal, '', '']);
+
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols'] = colWidths([40, 20, 12, 14, 18, 14, 14]);
+  return ws;
+}
+
 function buildFinancialSheet(pd: Partial<ParsedData>): XLSX.WorkSheet {
   const rows: (string | number | null)[][] = [
     ['Financial Summary'],
@@ -407,6 +446,8 @@ export function exportToExcel(params: {
   sourceXml?: {
     pandl?: string | null;
     bsheet?: string | null;
+    bills?: string | null;
+    payables?: string | null;
   };
 }): void {
   const { results, parsedData, dbStats, companyName, periodLabel, sourceXml } = params;
@@ -445,6 +486,12 @@ export function exportToExcel(params: {
   // Sheet 5: DayBook Stats (if available)
   if (dbStats) {
     XLSX.utils.book_append_sheet(wb, buildDayBookSheet(dbStats), 'DayBook Stats');
+  }
+
+  // Sheet 6: Bills (Receivables & Payables) — mirrors the Data view's Bills tab
+  const billsWs = buildBillsSheet(sourceXml?.bills, sourceXml?.payables);
+  if (billsWs) {
+    XLSX.utils.book_append_sheet(wb, billsWs, 'Bills');
   }
 
   // Generate filename

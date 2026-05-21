@@ -375,7 +375,7 @@ function buildVoucherAnalysis(dbStats: ChunkedStats | null): string {
     </div>
     <div class="kpi-grid">
       <div class="kpi-card"><div class="kpi-label">Missing Party</div><div class="kpi-value ${dbStats.missingParty > 0 ? 'kpi-negative' : ''}">${dbStats.missingParty}</div></div>
-      <div class="kpi-card"><div class="kpi-label">Cash &gt;₹10k (269ST)</div><div class="kpi-value ${dbStats.cashOver10k > 0 ? 'kpi-negative' : ''}">${dbStats.cashOver10k}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Cash &gt;₹10k (40A(3))</div><div class="kpi-value ${dbStats.cashOver10k > 0 ? 'kpi-negative' : ''}">${dbStats.cashOver10k}</div></div>
       <div class="kpi-card"><div class="kpi-label">Round-Number Entries</div><div class="kpi-value">${dbStats.roundCount}</div></div>
       <div class="kpi-card"><div class="kpi-label">Wrong Voucher Types</div><div class="kpi-value ${dbStats.wrongType > 0 ? 'kpi-negative' : ''}">${dbStats.wrongType}</div></div>
       <div class="kpi-card"><div class="kpi-label">Out-of-FY Entries</div><div class="kpi-value ${dbStats.outOfFY > 0 ? 'kpi-negative' : ''}">${dbStats.outOfFY}</div></div>

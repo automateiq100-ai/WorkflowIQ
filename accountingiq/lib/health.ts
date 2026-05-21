@@ -55,14 +55,17 @@ export function generateHealthSignals(
     }
   }
 
-  // ── Liquidity (Bug 1: preserve signs, handle negative CA) ──────────────
+  // ── Liquidity ──────────────────────────────────────────────────────────
+  // parseBSheet returns ca/cl as unsigned magnitudes (see its sign-convention
+  // note), so sign-based anomaly tests on these fields are dead and were
+  // removed; genuine sign anomalies are detected from the signed Trial
+  // Balance ledgers, not from these magnitudes.
   if (ca !== 0 || cl !== 0) {
     signals.push({
       category: 'Liquidity',
       signal: 'Current Assets',
       value: fmtINR(ca),
-      // Bug 1: flag anomalous negative CA
-      note: ca < 0 ? 'ANOMALY: Current Assets negative — structurally impossible, check Tally setup' : 'From Balance Sheet',
+      note: 'From Balance Sheet',
     });
     signals.push({
       category: 'Liquidity',
@@ -110,9 +113,7 @@ export function generateHealthSignals(
       category: 'Balances',
       signal: 'Trade Receivables (Debtors)',
       value: fmtINR(debtorBal),
-      note: debtorBal < 0
-        ? 'ANOMALY: Debtors negative — customer overpayment or Dr/Cr flip'
-        : revenue > 0 ? `${pct(debtorBal, revenue)} of revenue — monitor for overdue` : 'From Balance Sheet',
+      note: revenue > 0 ? `${pct(debtorBal, revenue)} of revenue — monitor for overdue` : 'From Balance Sheet',
     });
   }
 
@@ -121,9 +122,7 @@ export function generateHealthSignals(
       category: 'Balances',
       signal: 'Trade Payables (Creditors)',
       value: fmtINR(creditorBal),
-      note: creditorBal > 0
-        ? 'ANOMALY: Creditors positive (Dr balance) — possible overpayment or misposting'
-        : 'Outstanding supplier balances',
+      note: 'Outstanding supplier balances',
     });
   }
 

@@ -38,7 +38,7 @@ CORE RULES:
 3. Group findings by root cause, not by check ID. If B1 (suspense) + B3 (no capital)
    + D-failures cluster together, that's one cluster called "Incomplete opening setup",
    not three.
-4. Use Indian accounting context: GST (CGST/SGST/IGST), TDS, Schedule III, Section 269ST,
+4. Use Indian accounting context: GST (CGST/SGST/IGST), TDS, Schedule III, Section 40A(3) (cash expense >₹10k/day disallowed), Section 269ST (cash receipts ≥₹2L barred),
    DPDPA 2023, GSTR-2B matching, ITC. Don't explain these acronyms unless a check's
    failure hinges on them.
 5. Action items are sorted by leverage = (impact weight × number of checks resolved)

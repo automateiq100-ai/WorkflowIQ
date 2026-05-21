@@ -7,6 +7,7 @@ import { DIM_LABELS } from '@/lib/constants';
 import { getDrillDown, hasDrillDown } from '@/lib/voucher-filters';
 import VoucherDrillDown from '@/app/components/VoucherDrillDown';
 import H4Breakdown from '@/app/components/H4Breakdown';
+import GSTBreakdown from '@/app/components/GSTBreakdown';
 import LedgerPairDrillDown from '@/app/components/LedgerPairDrillDown';
 import type { Urgency, Insight, DimKey, AnomalyFlag } from '@/lib/types';
 
@@ -144,6 +145,9 @@ export default function InsightsView() {
           onClose={() => setDrillFlag(null)}
         />
       )}
+      {drillFlag && drillFlag.id === 'E2b' && parsedData.gstWorking && (
+        <GSTBreakdown working={parsedData.gstWorking} onClose={() => setDrillFlag(null)} />
+      )}
       {drillFlag && (drillFlag.id === 'B2' || drillFlag.id === 'G1' || drillFlag.id === 'G2') && (() => {
         // All three render through LedgerPairDrillDown but pull from
         // different parsedData fields — keep the routing in lockstep
@@ -161,7 +165,7 @@ export default function InsightsView() {
           />
         );
       })()}
-      {drillFlag && drillFlag.id !== 'H4' && drillFlag.id !== 'B2' && drillFlag.id !== 'G1' && drillFlag.id !== 'G2' && (() => {
+      {drillFlag && drillFlag.id !== 'H4' && drillFlag.id !== 'E2b' && drillFlag.id !== 'B2' && drillFlag.id !== 'G1' && drillFlag.id !== 'G2' && (() => {
         const drill = getDrillDown(drillFlag.id, drillFlag.title, dbStats, parsedData);
         if (!drill) return null;
         return (

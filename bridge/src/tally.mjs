@@ -6,6 +6,13 @@ import http from 'node:http';
 
 const TALLY_HOST = '127.0.0.1';
 const TALLY_PORT = parseInt(process.env.TALLY_PORT ?? '9000', 10);
+// Bound how long we'll wait on Tally for a single report.  Without this the
+// request blocks forever on a slow/hung Tally, stalling the whole (serial)
+// relay loop and starving every later report.  Kept just under the cloud's
+// execution budget (BRIDGE_EXEC_TIMEOUT_MS, default 180s) so the bridge gives
+// up first and posts a clear error the cloud can deliver — instead of the
+// cloud timing out with a generic message and discarding a late result.
+const TALLY_TIMEOUT_MS = parseInt(process.env.TALLY_TIMEOUT_MS ?? '170000', 10);
 
 export function postToTally(xml) {
   // Diagnostic: outgoing payload — lets us verify SVCURRENTCOMPANY + date range
@@ -43,6 +50,15 @@ export function postToTally(xml) {
         res.on('error', reject);
       },
     );
+    // Idle-timeout the socket: if Tally sends nothing for TALLY_TIMEOUT_MS,
+    // tear the request down so the relay loop can move on to the next job.
+    req.setTimeout(TALLY_TIMEOUT_MS, () => {
+      req.destroy(new Error(
+        `Tally did not respond within ${Math.round(TALLY_TIMEOUT_MS / 1000)}s — the report may be `
+        + 'too large for this period, or Tally is busy / waiting on a dialog. '
+        + 'Try a shorter period, or set TALLY_TIMEOUT_MS higher.',
+      ));
+    });
     req.on('error', reject);
     req.write(xml, 'utf8');
     req.end();

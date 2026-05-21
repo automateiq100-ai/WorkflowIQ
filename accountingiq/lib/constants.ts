@@ -208,5 +208,6 @@ export function getGrade(score: number) {
 }
 
 export const HIGH_VALUE_THRESHOLD = 100_000;  // ₹1 lakh
-export const CASH_LIMIT = 10_000;             // Section 269ST
+export const CASH_LIMIT = 10_000;             // Section 40A(3) — cash expenditure disallowance (per person, per day)
+export const CASH_RECEIPT_LIMIT = 200_000;    // Section 269ST — cash receipts of ₹2 lakh or more barred (per person, per day)
 export const CHUNK_SIZE = 32 * 1024 * 1024;  // 32 MB

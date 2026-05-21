@@ -28,7 +28,7 @@ export function parseDAYBOOK_chunked(
     totalVouchers: 0, missingVno: 0, narrated: 0,
     totalJournals: 0, highValueCount: 0, highValueNarrated: 0,
     zeroAmt: 0, wrongType: 0, missingParty: 0,
-    cashOver10k: 0, roundCount: 0, dupVnoMap: {},
+    cashOver10k: 0, cashReceiptOver2L: 0, roundCount: 0, dupVnoMap: {},
     monthCounts: {}, dateSet: [], custMap: {}, vendMap: {},
     totalDebit: 0, totalCredit: 0, salesVoucherTotal: 0,
     purchVoucherTotal: 0, cashBankNetMovement: 0, receiptTotal: 0, paymentTotal: 0, contraTotal: 0,

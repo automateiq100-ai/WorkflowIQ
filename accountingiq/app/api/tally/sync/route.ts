@@ -89,9 +89,27 @@ export async function POST(req: Request) {
   const clientSession = toClientSession(session);
 
   const results: Record<string, { ok: true; xml: string } | { ok: false; error: string }> = {};
+
+  /** Recognise the family of errors that mean "Tally's XML server is no
+   *  longer answering" — typically because Tally crashed (c0000005) or the
+   *  user closed it.  Once we see one, hammering the remaining reports just
+   *  produces a wall of identical ECONNREFUSED lines, so we stop early. */
+  const isServerDown = (msg: string): boolean =>
+    /ECONNREFUSED|socket hang up|ECONNRESET|EPIPE|connect ETIMEDOUT|fetch failed/i.test(msg);
+  const SERVER_DOWN_HINT =
+    'Tally Prime stopped responding on port 9000 — it likely crashed or was closed. '
+    + 'Restart Tally Prime, ensure exactly ONE company is loaded, confirm '
+    + 'F1 → Settings → Connectivity → "Client/Server configuration" is set to '
+    + 'Server with port 9000, then try Pull again.';
+  let serverDown = false;
+
   // Fetch sequentially — Tally's XML server is single-threaded per request and
   // running 6 concurrent exports against the user's desktop hammers them.
   for (const kind of kinds) {
+    if (serverDown) {
+      results[kind] = { ok: false, error: SERVER_DOWN_HINT };
+      continue;
+    }
     try {
       const r = await connector.fetchReport(clientSession, kind, period);
       // Tally returns 200 OK with an error envelope inside the XML when a
@@ -121,7 +139,10 @@ export async function POST(req: Request) {
       });
       console.log(`[tally-sync] ${kind} ok len=${r.xml.length} period=${period.start}..${period.end}`);
     } catch (err) {
-      const msg = (err as Error).message;
+      const rawMsg = (err as Error).message;
+      const down = isServerDown(rawMsg);
+      const msg = down ? SERVER_DOWN_HINT : rawMsg;
+      if (down) serverDown = true;   // trip the breaker — skip remaining kinds
       results[kind] = { ok: false, error: msg };
       recordLastSync(userId, bridgeId, kind, {
         xml: '',
@@ -130,7 +151,7 @@ export async function POST(req: Request) {
         ok: false,
         error: msg,
       });
-      console.log(`[tally-sync] ${kind} ERR ${msg}`);
+      console.log(`[tally-sync] ${kind} ERR ${rawMsg}${down ? ' (server down — tripping breaker)' : ''}`);
     }
   }
 

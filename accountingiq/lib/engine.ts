@@ -2,8 +2,9 @@
 
 import type {
   AppState, Check, CheckStatus, DimKey, AnalysisResults, ParsedData, ChunkedStats, CompanyProfile,
+  FinancialNode, Voucher,
 } from './types';
-import { DIM_WEIGHTS } from './constants';
+import { DIM_WEIGHTS, CASH_LIMIT, CASH_RECEIPT_LIMIT } from './constants';
 import {
   parseTrialBalance, parseTBFull,
   parsePandL, parseBSheet, parseGrpSum, parseDayBook, parseTallyDate,
@@ -15,6 +16,39 @@ import { classifyVoucherType } from './tally-voucher-types';
 import { recordClassificationSummary } from './telemetry';
 import { buildH4Context, computeDBCashBankFlow, computeTBCashBankNet } from './h4-flow';
 import { computeGSTVariance } from './gst-variance';
+
+// ── Balance-Sheet metric derivation from the hierarchical statement ─────────
+// The dashboard / ratios used to read ca, cl, debtorBal, creditorBal from the
+// regex `parseBSheet`, which pulls each group TOTAL from that group's own
+// header amount.  Many real Tally BS exports leave the header blank and show
+// the total only via child rows — so Current Assets came back ~0 and the
+// current ratio collapsed to a nonsensical 0.01.  These helpers re-derive the
+// magnitudes from the SAME hierarchical statement the Data view renders
+// (parseBSheetStatement), which sums children, so the dashboard matches
+// Data → Balance Sheet by construction.
+
+/** A BS group's true magnitude: its own signed amount when the header carries
+ *  one, otherwise the sum of its descendants (blank header → total is in the
+ *  child rows).  Never double-counts: a header with its own amount wins. */
+function bsGroupMagnitude(node: FinancialNode): number {
+  if (Math.abs(node.amount) > 0) return Math.abs(node.amount);
+  return node.children.reduce((s, c) => s + bsGroupMagnitude(c), 0);
+}
+
+/** Largest-magnitude node whose name matches `re`, searched anywhere in the
+ *  hierarchy (debtors/creditors nest under Current Assets/Liabilities).
+ *  Returns 0 when not found, so callers can fall back to the regex value. */
+function bsMagByName(nodes: FinancialNode[], re: RegExp): number {
+  let best = 0;
+  const walk = (ns: FinancialNode[]) => {
+    for (const n of ns) {
+      if (re.test(n.name)) best = Math.max(best, bsGroupMagnitude(n));
+      walk(n.children);
+    }
+  };
+  walk(nodes);
+  return best;
+}
 
 // FY dates — default to current Indian FY
 function currentFY(): { start: Date; end: Date } {
@@ -350,33 +384,81 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     dbStats.wrongType = newWrongType;
   }
 
-  // Cash-transactions-over-₹10k rescan — master-aware replacement for
-  // the parse-time substring approximation.  The parser flags vouchers
-  // whose TYPE NAME contains "cash" (matches "Cash Payment", "Cash
-  // Receipt" voucher types but misses any standard Payment/Receipt
-  // voucher that happens to touch a cash ledger via its entries).
-  // We classify each leg via the master and look for the 'cash'
-  // category instead, so a Payment voucher with a "Cash-in-Hand" leg
-  // correctly counts toward s.40A(3) compliance.
+  // Master-aware cash-compliance rescan — separates the two distinct cash
+  // limits the parse-time substring heuristic conflated:
+  //   • Section 40A(3): cash EXPENDITURE (cash paid OUT) over ₹10,000 to one
+  //     person in one day is disallowed as a deduction.
+  //   • Section 269ST: cash RECEIPTS (cash taken IN) of ₹2,00,000 or more from
+  //     one person in one day is barred (penalty 100% u/s 271DA).
+  // We classify each leg via the master; a cash-category leg that is CREDITED
+  // (dr === false) is cash going OUT (a payment), a DEBITED cash leg is cash
+  // coming IN (a receipt).  We then aggregate per (person, day) — 40A(3) and
+  // 269ST are both daily-per-person limits — so split payments/receipts that
+  // dodge the per-voucher threshold are still caught.
   if (dbStats?.vouchers?.length && masterMap.size > 0) {
     for (const v of dbStats.vouchers) {
-      if (v.flags?.includes('cashOver10k')) {
-        v.flags = v.flags.filter(f => f !== 'cashOver10k');
+      if (v.flags?.length) {
+        v.flags = v.flags.filter(f => f !== 'cashOver10k' && f !== 'cashReceiptOver2L');
         if (v.flags.length === 0) delete v.flags;
       }
     }
-    let newCashOver10k = 0;
-    for (const v of dbStats.vouchers) {
-      if (v.amount <= 10000 || !v.legs?.length) continue;
-      const touchesCash = v.legs.some(leg => {
-        return classifyLedger(leg.name, masterMap, overrides, bsHierarchy).category === 'cash';
-      });
-      if (!touchesCash) continue;
-      if (!v.flags) v.flags = [];
-      v.flags.push('cashOver10k');
-      newCashOver10k++;
-    }
-    dbStats.cashOver10k = newCashOver10k;
+    const isCash = (name: string) =>
+      classifyLedger(name, masterMap, overrides, bsHierarchy).category === 'cash';
+    // Net cash legs on a voucher: amount paid out (Cr cash) and taken in (Dr cash).
+    const cashFlow = (v: Voucher): { out: number; in: number } => {
+      let out = 0, inn = 0;
+      for (const leg of v.legs ?? []) {
+        if (!isCash(leg.name)) continue;
+        const amt = Math.abs(leg.amt);
+        if (leg.dr) inn += amt; else out += amt;
+      }
+      return { out, in: inn };
+    };
+    // "Person" key for daily aggregation: the counterparty.  Prefer the
+    // voucher party; fall back to the joined non-cash ledger names so split
+    // payments to the same payee on the same day still aggregate.
+    const personKey = (v: Voucher): string => {
+      const p = (v.party ?? '').trim().toLowerCase();
+      if (p) return p;
+      const others = (v.legs ?? [])
+        .filter(leg => !isCash(leg.name))
+        .map(leg => leg.name.toLowerCase().trim())
+        .sort();
+      return others.join('|') || '(unknown)';
+    };
+
+    // Aggregate per (date, person) for a given direction, then flag every
+    // contributing voucher when the day's total breaches `limit`.
+    const flagOverLimit = (
+      dir: 'out' | 'in',
+      limit: number,
+      atOrAbove: boolean,
+      flag: 'cashOver10k' | 'cashReceiptOver2L',
+    ): number => {
+      const groups = new Map<string, Voucher[]>();
+      const totals = new Map<string, number>();
+      for (const v of dbStats.vouchers) {
+        const amt = cashFlow(v)[dir];
+        if (amt <= 0) continue;
+        const key = `${v.date}::${personKey(v)}`;
+        let arr = groups.get(key);
+        if (!arr) { arr = []; groups.set(key, arr); }
+        arr.push(v);
+        totals.set(key, (totals.get(key) ?? 0) + amt);
+      }
+      let count = 0;
+      for (const [key, total] of totals) {
+        if (atOrAbove ? total < limit : total <= limit) continue;
+        for (const v of groups.get(key)!) {
+          (v.flags ??= []).push(flag);
+          count++;
+        }
+      }
+      return count;
+    };
+
+    dbStats.cashOver10k       = flagOverLimit('out', CASH_LIMIT,         false, 'cashOver10k');
+    dbStats.cashReceiptOver2L = flagOverLimit('in',  CASH_RECEIPT_LIMIT, true,  'cashReceiptOver2L');
   }
 
   // Assemble parsedData
@@ -403,9 +485,40 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     ?? plResult?.netProfit
     ?? null;
 
-  // Bug 2 fix: prefer bsNetProfit from Balance Sheet over P&L-derived netProfit
-  if (bsResult?.bsNetProfit != null && bsResult.bsNetProfit !== 0) {
-    parsedData.netProfit = bsResult.bsNetProfit;
+  // Net profit for the PERIOD = P&L income − expenses (what Tally shows as
+  // "Nett Profit/Loss" for the period).  Use the hierarchy-walked P&L total
+  // (same figure the Data view shows) when available.
+  //
+  // We deliberately do NOT use the Balance Sheet "Profit & Loss A/c" figure
+  // (bsNetProfit) as the headline net profit.  That BS line is the ACCUMULATED
+  // carried-forward balance — prior years' retained earnings + the current
+  // period — so for any established or multi-year company, or any sub-FY pull,
+  // it is NOT the period result (e.g. ₹14.07 Cr accumulated on the BS vs a
+  // ₹0.57 Cr loss for the month).  Surfacing it as "Net Profit" on the
+  // dashboard / MIS contradicted the P&L totals.  bsNetProfit is still kept
+  // separately (parsedData.bsNetProfit + plNetProfit) for the D2 /
+  // cross-statement reconciliation check.
+  if (parsedData.plNetProfit != null) {
+    parsedData.netProfit = parsedData.plNetProfit;
+  }
+
+  // ── Single source of truth for Balance-Sheet metrics ─────────────────────
+  // Re-derive ca / cl / debtorBal / creditorBal from the hierarchical BS
+  // statement (the SAME structure Data → Balance Sheet renders) so the
+  // dashboard, current ratio and downstream checks match what the user sees in
+  // the Data section.  The regex parseBSheet reads group totals off blank
+  // headers and produced ~0 Current Assets (→ 0.01 current ratio).  Only
+  // override when the statement actually yields the group, else keep the regex
+  // value as a fallback.
+  if (bsheetStatement?.nodes?.length) {
+    const caS   = bsMagByName(bsheetStatement.nodes, /current\s*assets?/i);
+    const clS   = bsMagByName(bsheetStatement.nodes, /current\s*liabilit/i);
+    const debS  = bsMagByName(bsheetStatement.nodes, /sundry\s*debtors?|trade\s*receivable|account\s*receivable/i);
+    const credS = bsMagByName(bsheetStatement.nodes, /sundry\s*creditors?|trade\s*payable|account\s*payable/i);
+    if (caS   > 0) parsedData.ca          = caS;
+    if (clS   > 0) parsedData.cl          = clS;
+    if (debS  > 0) parsedData.debtorBal   = debS;
+    if (credS > 0) parsedData.creditorBal = credS;
   }
 
   // Closing-stock fallback — when the BS parser missed it (custom-named
@@ -494,6 +607,7 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
   const wrongType       = dbStats?.wrongType         ?? 0;
   const missingParty    = dbStats?.missingParty      ?? 0;
   const cashOver10k     = dbStats?.cashOver10k       ?? 0;
+  const cashReceiptOver2L = dbStats?.cashReceiptOver2L ?? 0;
   const roundCount      = dbStats?.roundCount        ?? 0;
   const dupVnoMap       = dbStats?.dupVnoMap         ?? {};
   const monthCounts     = dbStats?.monthCounts       ?? {};
@@ -781,31 +895,70 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
   // hierarchy carries paise, so a sub-₹100 gap is the rounding floor.
   const plNetRaw  = pandlStatement?.totals.net ?? plResult?.netProfit;
   const bsNetRaw  = bsResult?.bsNetProfit;
-  c('D2', 'D', 'P&L net profit = BS Profit & Loss A/c',
+  // The BS "Profit & Loss A/c" line is the ACCUMULATED balance:
+  //   Profit & Loss A/c = Opening Balance (prior years) + Current Period.
+  // The P&L statement's net profit is just THIS period, so it must reconcile
+  // with the "Current Period" sub-line, NOT the accumulated total.  When Tally
+  // explodes the BS (we send EXPLODEFLAG=Yes) it emits that sub-line, so pull
+  // it from the hierarchical statement.  Only fall back to the accumulated
+  // total for first-year books that carry no opening P&L (total = period).
+  const bsCurrentPL = bsheetStatement?.nodes?.length
+    ? bsMagByName(bsheetStatement.nodes, /current\s*period/i)
+    : 0;
+  const usingCurrentPeriod = bsCurrentPL > 0;
+  const bsReconcile = usingCurrentPeriod ? bsCurrentPL : bsNetRaw;
+  // Compare magnitudes — the P&L statement and the BS use opposite display
+  // sign conventions for a loss, so a signed compare produced false mismatches.
+  const reconDiff = (plNetRaw != null && bsReconcile != null)
+    ? Math.abs(plNetRaw) - Math.abs(bsReconcile) : null;
+  c('D2', 'D', 'P&L net profit = BS current-period Profit & Loss',
     !hasPL || !hasBS ? missing(8, 'Requires P&L and Balance Sheet')
-    : bsNetRaw == null ? uncertain(8, 'BS "Profit & Loss A/c" line not detected — cannot compare')
+    : bsReconcile == null ? uncertain(8, 'BS "Profit & Loss A/c" line not detected — cannot compare')
     : plNetRaw == null ? uncertain(8, 'P&L net profit not extracted — cannot compare')
-    : Math.abs(plNetRaw - bsNetRaw) < 100
-        ? pass(8, 8, `Net profit ₹${fmt(plNetRaw)} reconciles between P&L and BS`)
-        : fail(8, `Net profit mismatch: P&L ₹${fmt(plNetRaw)} vs BS ₹${fmt(bsNetRaw)} (diff ₹${fmt(plNetRaw - bsNetRaw)})`),
+    : !usingCurrentPeriod && bsNetRaw != null && reconDiff != null && Math.abs(reconDiff) >= 100
+        // BS gives only the accumulated balance (no exploded current-period
+        // line) and it differs from the period P&L — EXPECTED for a company
+        // with prior-year retained earnings.  Tally's BS export simply doesn't
+        // carry the current-period P&L line, so this cross-check can't be run
+        // here for a multi-year company.  Mark Not Applicable (not "needs
+        // data" — the user can't supply what Tally doesn't export) so it
+        // doesn't nag or count against the score.
+        ? na(`Not applicable: Tally's BS export shows only the accumulated "Profit & Loss A/c" balance (₹${fmt(bsNetRaw)} = prior years + this period), not the current-period line, so it can't be reconciled against the period P&L (₹${fmt(plNetRaw)}). The period figure is taken from the P&L statement and used throughout.`)
+    : reconDiff != null && Math.abs(reconDiff) < 100
+        ? pass(8, 8, `Period net ${plNetRaw < 0 ? 'loss' : 'profit'} ₹${fmt(Math.abs(plNetRaw))} reconciles with BS ${usingCurrentPeriod ? 'Current Period' : 'Profit & Loss A/c'}`)
+        : fail(8, `Period net profit mismatch: P&L ₹${fmt(plNetRaw)} vs BS ${usingCurrentPeriod ? 'Current Period' : 'P&L A/c'} ₹${fmt(bsReconcile)} (diff ₹${fmt(reconDiff ?? 0)})`),
     'P&L net profit does not match Balance Sheet');
 
   // D3 — Balance Sheet equation: Assets = Liabilities + Equity.  Reads
   // off parseBSheetStatement totals (Cr-positive convention: positive
   // amounts in the hierarchy = liab+equity side, negative = asset side).
-  // The two sides of a balanced BS export should match within rounding;
-  // anything wider points at unposted journal entries or parser gaps.
+  //
+  // IMPORTANT: Tally's BS XML export OMITS the on-screen "Difference in
+  // opening balances" balancing line.  So a company whose opening balances
+  // don't fully tie (very common after splitting company data across financial
+  // years — e.g. "NARNKAR & CO - (from 1-Apr-20) - (from 1-Apr-21) …") shows a
+  // residual gap here equal to exactly that line: Assets exceed Liab+Equity by
+  // the un-exported difference.  Tally itself displays the BS balanced, so this
+  // is NOT a broken equation — it's an opening-balance reconciliation item.
+  // We treat a small relative residual as that (partial, with guidance, no
+  // critical flag) and reserve an outright failure for a LARGE gap, which
+  // points at a genuinely unposted entry or a parser gap.
   const bsTotals = bsheetStatement?.totals;
   const bsAssets = bsTotals?.debit  ?? 0;   // Dr side = total assets
   const bsLiabEq = bsTotals?.credit ?? 0;   // Cr side = liab + equity
   const bsBalDiff = bsAssets - bsLiabEq;
+  const bsSideMax = Math.max(Math.abs(bsAssets), Math.abs(bsLiabEq));
+  const bsRelDiff = bsSideMax > 0 ? Math.abs(bsBalDiff) / bsSideMax : 0;
   c('D3', 'D', 'Balance Sheet balances (Assets = Liab + Cap)',
     !hasBS ? missing(8, 'Balance Sheet not uploaded')
     : !bsTotals || (bsAssets === 0 && bsLiabEq === 0)
         ? uncertain(8, 'BS structure not parsed — cannot verify equation')
     : Math.abs(bsBalDiff) < 100
         ? pass(8, 8, `BS balances: Assets ₹${fmt(bsAssets)} = Liab + Equity ₹${fmt(bsLiabEq)}`)
-        : fail(8, `BS does NOT balance: Assets ₹${fmt(bsAssets)} vs Liab + Equity ₹${fmt(bsLiabEq)} — out of balance by ₹${fmt(bsBalDiff)}`),
+    : bsRelDiff < 0.02
+        // Minor residual = Tally's "Difference in opening balances" (not exported in the XML).
+        ? partial(6, 8, `BS balances in Tally; opening balances carry a "Difference in opening balances" of ₹${fmt(bsBalDiff)} (${(bsRelDiff * 100).toFixed(2)}% of assets) that Tally auto-balances on screen but does not export to XML. Review opening-balance entries — common after splitting company data across financial years.`)
+        : fail(8, `BS does NOT balance: Assets ₹${fmt(bsAssets)} vs Liab + Equity ₹${fmt(bsLiabEq)} — out of balance by ₹${fmt(bsBalDiff)} (${(bsRelDiff * 100).toFixed(1)}% of assets). Likely an unposted entry or a missing group.`),
     'Balance Sheet equation broken — Assets ≠ Liabilities + Equity');
 
   // D4 (TB Dr total ≈ BS total assets) was removed — TB and BS represent
@@ -877,6 +1030,8 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
       if (!hasRate && !exempt) salesLedgersWithoutGst.push(l.name);
     }
   }
+  // Persist for the E2a drill-down (which sales ledgers are missing a rate).
+  parsedData.salesLedgersWithoutGst = salesLedgersWithoutGst;
   c('E2a', 'E', 'All sales ledgers have GST rate specified',
     !gstApplicable ? na('Not applicable')
     : !hasTB ? uncertain(4, 'Requires Trial Balance')
@@ -894,15 +1049,84 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
   // taken from P&L revenue (GST-exclusive taxable value) when available,
   // else from the TB sales aggregate.  See lib/gst-variance.ts for the
   // assumption + snap-to-slab logic.
-  const gstVariance = computeGSTVariance(revenue || tbSales, outputGSTAmt);
+  // ── Period output GST — the correct basis for E2b ────────────────────────
+  // The GST CHARGED on sales this period comes from the sales / sales-return
+  // voucher tax legs: a Cr to a GST ledger inside a sales voucher is output
+  // GST charged; a Dr inside a credit note (sales return) reverses it.  THIS
+  // is what should equal sales × rate.  The TB "GST payable" CLOSING balance
+  // (outputGSTAmt) is instead the accumulated net liability carried forward
+  // across periods — wrong for a period comparison (it gave a 76% effective
+  // "rate" for a multi-year company).  Fall back to it only when the daybook
+  // has no sales-voucher tax legs to read.
+  // One pass over the daybook computes BOTH period output GST (sales side) and
+  // period input GST / ITC (purchase side) from the tax legs:
+  //   • Sales / sales-return  → output GST: Cr charges, Dr (credit note) reverses.
+  //   • Purchase / purch-return → input ITC: Dr claims,  Cr (debit note) reverses.
+  //
+  // Identifying a GST TAX leg matters: a bare /gst/ name match wrongly catches
+  // the SALES ledger itself (e.g. "GST Sales", "Sales IGST 18%") or a party
+  // named with "GST" — counting the taxable value as tax.  So a leg counts only
+  // when (a) its name is a GST acronym (cgst/sgst/igst/utgst/gst — excludes
+  // TDS/PF) AND (b) the master classifies it as a duties/tax ledger (which
+  // tags "GST Sales" as sales, not tax).  Falls back to a name-only guard when
+  // no master is loaded.
+  const GST_NAME_RE = /\b(?:c|s|i|ut)?gst\b/i;
+  const isGstLeg = (name: string): boolean => {
+    if (!GST_NAME_RE.test(name)) return false;
+    const cat = classifyLedger(name, masterMap, overrides, bsHierarchy).category;
+    if (cat === 'duties-output' || cat === 'duties-input') return true;
+    if (cat === 'unknown') return !/sale|purchas|income|revenue|expense|debtor|creditor|party/i.test(name);
+    return false; // classified as sales / debtor / income / etc. → not a tax leg
+  };
+  let periodOutputGST = 0, periodInputGST = 0;
+  let sawSalesGstLeg = false, sawPurchGstLeg = false;
+  for (const v of dbStats?.vouchers ?? []) {
+    const sem = classifyVoucherType(v.type).semantic;
+    const isSale  = sem === 'sales'    || sem === 'sales-return';
+    const isPurch = sem === 'purchase' || sem === 'purchase-return';
+    if (!isSale && !isPurch) continue;
+    for (const leg of v.legs ?? []) {
+      if (!isGstLeg(leg.name)) continue;
+      if (isSale) {
+        sawSalesGstLeg = true;
+        periodOutputGST += leg.dr ? -leg.amt : leg.amt;  // Cr (sale) charges, Dr (return) reverses
+      } else {
+        sawPurchGstLeg = true;
+        periodInputGST += leg.dr ? leg.amt : -leg.amt;   // Dr (purchase) claims, Cr (return) reverses
+      }
+    }
+  }
+  const gstSource: 'vouchers' | 'tb-closing' = sawSalesGstLeg ? 'vouchers' : 'tb-closing';
+  const recordedGST = sawSalesGstLeg ? periodOutputGST : outputGSTAmt;
+  const inputGstSource: 'vouchers' | 'tb-closing' = sawPurchGstLeg ? 'vouchers' : 'tb-closing';
+  const recordedInputGST = sawPurchGstLeg ? periodInputGST : inputITCAmt;
+  const gstVariance = computeGSTVariance(revenue || tbSales, recordedGST);
   const gstVarPct = gstVariance.variance;
+  // Persist the working for the E2b "View working" drill-down (GSTBreakdown).
+  parsedData.gstWorking = {
+    sales: gstVariance.sales,
+    effectiveRate: gstVariance.effectiveRate,
+    headlineRate: gstVariance.headlineRate,
+    expectedGST: gstVariance.expectedGST,
+    recordedGST,
+    variance: gstVariance.variance,
+    source: gstSource,
+  };
+  // Guard the FALLBACK (accumulated TB balance) only: an effective rate above
+  // the 28% ceiling means that balance isn't this period's output GST, so we
+  // can't reconcile.  With the period-voucher basis the rate is real, so the
+  // normal pass/partial/fail verdict applies.
+  const gstRateImpossible = gstSource === 'tb-closing' && gstVariance.effectiveRate > 0.30;
+  const gstSrcNote = gstSource === 'vouchers' ? ' (from sales vouchers)' : ' (TB closing balance)';
   c('E2b', 'E', 'Output GST amount matches computed amount',
     !gstRegular ? na('Not applicable (non-regular taxpayer)')
     : !hasTB ? uncertain(4, 'Requires Trial Balance')
     : gstVariance.sales <= 0 ? uncertain(4, 'Sales not detected — cannot compute expected GST')
-    : gstVarPct < 0.05 ? pass(4, 4, `GST variance: ${(gstVarPct*100).toFixed(1)}% (effective ${(gstVariance.effectiveRate*100).toFixed(1)}% vs nearest slab ${(gstVariance.headlineRate*100).toFixed(0)}%)`)
-    : gstVarPct < 0.15 ? partial(2, 4, `GST variance: ${(gstVarPct*100).toFixed(1)}% (>5%, expected ₹${fmt(gstVariance.expectedGST)} at ${(gstVariance.headlineRate*100).toFixed(0)}%, recorded ₹${fmt(outputGSTAmt)})`)
-    : fail(4, `GST variance: ${(gstVarPct*100).toFixed(1)}% — exceeds 15% threshold (expected ₹${fmt(gstVariance.expectedGST)} at ${(gstVariance.headlineRate*100).toFixed(0)}%, recorded ₹${fmt(outputGSTAmt)})`),
+    : gstRateImpossible
+        ? na(`Can't reconcile: recorded output GST ₹${fmt(recordedGST)} implies a ${(gstVariance.effectiveRate*100).toFixed(0)}% effective rate — above the 28% GST ceiling. The daybook had no sales-voucher tax legs, so this is the ACCUMULATED closing balance of the GST-payable ledgers (carried forward across periods), not the GST charged on sales this period. Pull the Day Book with sales-voucher tax legs to verify against expected ₹${fmt(gstVariance.expectedGST)}.`)
+    : gstVarPct < 0.05 ? pass(4, 4, `GST variance: ${(gstVarPct*100).toFixed(1)}% — output GST ₹${fmt(recordedGST)}${gstSrcNote} ≈ expected ₹${fmt(gstVariance.expectedGST)} at ${(gstVariance.headlineRate*100).toFixed(0)}%`)
+    : gstVarPct < 0.15 ? partial(2, 4, `GST variance: ${(gstVarPct*100).toFixed(1)}% (>5%, expected ₹${fmt(gstVariance.expectedGST)} at ${(gstVariance.headlineRate*100).toFixed(0)}%, recorded ₹${fmt(recordedGST)}${gstSrcNote})`)
+    : fail(4, `GST variance: ${(gstVarPct*100).toFixed(1)}% — exceeds 15% threshold (expected ₹${fmt(gstVariance.expectedGST)} at ${(gstVariance.headlineRate*100).toFixed(0)}%, recorded ₹${fmt(recordedGST)}${gstSrcNote})`),
     'Output GST amount does not match computed total');
 
   c('E3', 'E', 'Input ITC ledgers exist',
@@ -912,12 +1136,22 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
     : fail(3, 'No Input ITC/CGST/SGST/IGST ledger found'),
     'No Input ITC ledger found');
 
+  // E4 — Input ITC vs Output GST.  Uses the PERIOD figures (input ITC claimed
+  // on purchase-voucher tax legs vs output GST charged on sales-voucher tax
+  // legs) when the daybook has them, else the accumulated TB closing balances.
+  // ITC exceeding output GST in a period is only a SOFT signal: it's routinely
+  // legitimate (capital purchases, inventory build-up, exports / inverted-duty
+  // structures put a business in a net-credit position), so a breach is a
+  // partial "review" rather than an outright failure.
+  const inputSrcNote = inputGstSource === 'vouchers' ? ' (from purchase vouchers)' : ' (TB closing balance)';
+  const outSrcNote   = gstSource      === 'vouchers' ? ' (from sales vouchers)'    : ' (TB closing balance)';
   c('E4', 'E', 'Input ITC does not exceed Output GST',
     !gstApplicable ? na('Not applicable')
     : !hasTB ? uncertain(3, 'Requires Trial Balance')
-    : outputGSTAmt === 0 ? uncertain(3, 'Output GST not found')
-    : inputITCAmt <= outputGSTAmt ? pass(3, 3, `ITC ₹${fmt(inputITCAmt)} ≤ Output GST ₹${fmt(outputGSTAmt)}`)
-    : fail(3, `ITC ₹${fmt(inputITCAmt)} exceeds Output GST ₹${fmt(outputGSTAmt)}`),
+    : recordedGST === 0 ? uncertain(3, 'Output GST not found — cannot compare')
+    : recordedInputGST <= recordedGST
+        ? pass(3, 3, `Input ITC ₹${fmt(recordedInputGST)}${inputSrcNote} ≤ Output GST ₹${fmt(recordedGST)}${outSrcNote}`)
+    : partial(1, 3, `Input ITC ₹${fmt(recordedInputGST)}${inputSrcNote} exceeds Output GST ₹${fmt(recordedGST)}${outSrcNote} — review. Often legitimate (capital purchases, inventory build-up, exports / inverted-duty) but verify no ITC is claimed on ineligible or fake purchases.`),
     'Input ITC exceeds Output GST');
 
   c('E5', 'E', 'TDS Payable ledger exists',
@@ -1270,14 +1504,26 @@ export function analyseFiles(state: AppState): { results: AnalysisResults; parse
   // Mirror to parsedData for the G2 drill-down (LedgerPairDrillDown).
   parsedData.expenseSplitPairs = expenseSplitPairs;
 
-  // Section 269ST is a statutory compliance check — bumped to max=5 so a
-  // failure derives to 'high' severity (was max=2 → 'low'), matching how
-  // the legacy `flag-cash-limit` surfaced the same finding.
+  // Section 40A(3) — cash EXPENDITURE over ₹10,000 in a day to a single
+  // person is disallowed as a deduction (₹35,000 for transport operators).
+  // (NOT Section 269ST — that bars cash RECEIPTS of ₹2,00,000 or more.)
+  // Statutory compliance check — max=5 so a failure derives to 'high'
+  // severity, matching how the legacy `flag-cash-limit` surfaced it.
   c('G3', 'G', 'Cash not used for entries > ₹10,000',
     !hasDaybook ? uncertain(5, 'Requires DayBook')
     : cashOver10k === 0 ? pass(5, 5, 'No cash entries above ₹10,000')
-    : fail(5, `${cashOver10k} cash entries exceed ₹10,000 (Section 269ST)`),
+    : fail(5, `${cashOver10k} cash entries exceed ₹10,000 (Section 40A(3) — cash expenditure disallowance)`),
     'Cash entries exceeding ₹10,000');
+
+  // Section 269ST — receiving ₹2,00,000 or more in cash from one person in a
+  // day (or per transaction / event) is prohibited; penalty u/s 271DA equals
+  // 100% of the amount received.  (Distinct from 40A(3) above, which is about
+  // cash PAYMENTS over ₹10,000.)  max=5 → a failure derives to 'high'.
+  c('G5', 'G', 'No cash receipts ≥ ₹2 lakh (Section 269ST)',
+    !hasDaybook ? uncertain(5, 'Requires DayBook')
+    : cashReceiptOver2L === 0 ? pass(5, 5, 'No single-party cash receipts of ₹2 lakh or more in a day')
+    : fail(5, `${cashReceiptOver2L} cash receipt voucher(s) total ₹2 lakh or more from one party in a day (Section 269ST — prohibited; penalty = 100% of the amount u/s 271DA)`),
+    'Cash receipts of ₹2 lakh or more (Section 269ST)');
 
   c('G4', 'G', 'Round-number entries below 20% of total',
     !hasDaybook ? uncertain(2, 'Requires DayBook')

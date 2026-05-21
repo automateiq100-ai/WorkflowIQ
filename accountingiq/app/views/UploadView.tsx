@@ -45,6 +45,23 @@ function currentFYDates() {
   return { start: new Date(year, 3, 1), end: new Date(year + 1, 2, 31) };
 }
 
+/**
+ * Format a LOCAL Date as YYYY-MM-DD without a timezone shift.
+ *
+ * `Date.toISOString()` converts to UTC first, so a date built from local
+ * components — e.g. `new Date(2026, 2, 1)` (1-Mar-2026 local midnight) — comes
+ * back as "2026-02-28" in any timezone east of UTC (IST is +5:30).  That
+ * silently shifted every Tally pull / saved period back by a day (and across
+ * month boundaries: 1-Jan → 31-Dec of the prior year).  Reading the local
+ * Y/M/D components keeps the date the user actually selected.
+ */
+function toLocalISODate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -298,7 +315,7 @@ function UploadScreen({
 
   function getPeriodForDB(): { period_type: string; period_start: string | null; period_end: string | null } {
     const expected = getExpectedRange();
-    const toISO = (d: Date) => d.toISOString().slice(0, 10);
+    const toISO = toLocalISODate;
     return {
       period_type:  periodType,
       period_start: expected ? toISO(expected.start) : null,
@@ -464,8 +481,8 @@ function UploadScreen({
     dispatch({ type: 'UPLOAD_PROGRESS', message: 'Pulling reports from Tally…' });
     try {
       const period = {
-        start: expected.start.toISOString().slice(0, 10),
-        end:   expected.end.toISOString().slice(0, 10),
+        start: toLocalISODate(expected.start),
+        end:   toLocalISODate(expected.end),
       };
       // Capture user's INTENT — what range they asked Tally for.  Drives
       // sparse-books detection downstream (e.g. H8 distinguishes "user
@@ -537,8 +554,8 @@ function UploadScreen({
       dispatch({
         type: 'REQUESTED_PERIOD_SET',
         period: {
-          start: expected.start.toISOString().slice(0, 10),
-          end:   expected.end.toISOString().slice(0, 10),
+          start: toLocalISODate(expected.start),
+          end:   toLocalISODate(expected.end),
           type:  periodType,
         },
       });
