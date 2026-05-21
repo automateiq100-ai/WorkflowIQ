@@ -1,0 +1,14 @@
+{
+  "name": "accountingiq-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local helper that bridges AccountingIQ cloud to a user's Tally Prime XML gateway.",
+  "bin": "src/main.mjs",
+  "scripts": {
+    "start": "node src/main.mjs",
+    "pair": "node src/pair.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
